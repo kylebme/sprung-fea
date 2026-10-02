@@ -1,0 +1,7 @@
+{
+  "name": "bettersim", "version": "0.1.0", "private": true, "type": "module", "description": "A friendly, open-source mechanical FEA workspace", "license": "GPL-3.0-or-later", "main": "electron/main.cjs",
+  "scripts": {"dev":"node scripts/dev.mjs", "build":"tsc -b && vite build", "start":"electron .", "test":"node --test tests/*.test.mjs", "test:engine":".venv/bin/python -m unittest discover -s tests -p 'test_*.py'", "package:mac":"npm run build && electron-builder --mac dir", "dist:mac":"npm run build && electron-builder --mac dmg"},
+  "dependencies": {"react":"^19.1.0", "react-dom":"^19.1.0", "three":"^0.180.0", "lucide-react":"^0.468.0", "express":"^5.1.0", "multer":"^2.0.2"},
+  "devDependencies": {"@types/react":"^19.1.0", "@types/react-dom":"^19.1.0", "@types/three":"^0.180.0", "typescript":"^5.9.2", "vite":"^7.1.7", "@vitejs/plugin-react":"^5.0.3", "electron":"^38.2.0", "electron-builder":"^26.0.12", "@playwright/test":"^1.55.1"},
+  "build": {"appId":"org.bettersim.app", "productName":"BetterSim", "directories":{"output":"release"}, "files":["dist/**/*","electron/**/*","engine/**/*","server/**/*","package.json","LICENSE","THIRD_PARTY_NOTICES.md"], "extraResources":[{"from":".venv","to":"python","filter":["**/*"]},{"from":"samples","to":"samples"}],"mac":{"category":"public.app-category.productivity","target":["dir","dmg"]}}
+}

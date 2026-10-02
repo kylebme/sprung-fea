@@ -1,0 +1,9 @@
+node_modules/
+dist/
+release/
+.venv/
+.bettersim/
+__pycache__/
+*.pyc
+output/
+.DS_Store
