@@ -10,3 +10,5 @@ output/
 
 runtime/
 *.tsbuildinfo
+
+.cad-venv/

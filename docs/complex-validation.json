@@ -1,0 +1,98 @@
+[
+  {
+    "part": "bearing-block",
+    "faces": 23,
+    "support": [
+      5
+    ],
+    "load": [
+      14
+    ],
+    "vector": [
+      500,
+      0,
+      0
+    ],
+    "coarseElements": 15993,
+    "fineElements": 22493,
+    "minQuality": 0.20393823490586727,
+    "coarseMovement": 0.00013790204605403062,
+    "fineMovement": 0.00013783954741511208,
+    "movementChangePercent": 0.04532103816216049,
+    "coarsePeakStress": 1.2435089280838465,
+    "finePeakStress": 1.41121528297674,
+    "forceBalanceError": 4.368565622046036e-08
+  },
+  {
+    "part": "ribbed-bracket",
+    "faces": 26,
+    "support": [
+      3
+    ],
+    "load": [
+      19
+    ],
+    "vector": [
+      300,
+      0,
+      0
+    ],
+    "coarseElements": 20951,
+    "fineElements": 28776,
+    "minQuality": 0.03649631987412634,
+    "coarseMovement": 0.009237902702618216,
+    "fineMovement": 0.009274506740591586,
+    "movementChangePercent": 0.39623753520370286,
+    "coarsePeakStress": 6.030965399923769,
+    "finePeakStress": 7.257173958022984,
+    "forceBalanceError": 1.6213367629504006e-07
+  },
+  {
+    "part": "pocketed-housing",
+    "faces": 35,
+    "support": [
+      5
+    ],
+    "load": [
+      2
+    ],
+    "vector": [
+      0,
+      0,
+      -500
+    ],
+    "coarseElements": 43772,
+    "fineElements": 55641,
+    "minQuality": 0.19734657398532002,
+    "coarseMovement": 0.00021776889429554118,
+    "fineMovement": 0.0002177892403640267,
+    "movementChangePercent": 0.009342963581349117,
+    "coarsePeakStress": 0.9930508302990388,
+    "finePeakStress": 0.9973933804294773,
+    "forceBalanceError": 1.9477535592900066e-08
+  },
+  {
+    "part": "tube-elbow",
+    "faces": 10,
+    "support": [
+      6
+    ],
+    "load": [
+      7
+    ],
+    "vector": [
+      0,
+      0,
+      -100
+    ],
+    "coarseElements": 3388,
+    "fineElements": 5130,
+    "minQuality": 0.25924710329361694,
+    "coarseMovement": 0.03497960003559933,
+    "fineMovement": 0.035051001935348026,
+    "movementChangePercent": 0.2041244030121403,
+    "coarsePeakStress": 11.035184626347354,
+    "finePeakStress": 11.332128559755665,
+    "forceBalanceError": 2.464130982768167e-07
+  }
+]

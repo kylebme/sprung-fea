@@ -3,6 +3,7 @@ import os, sys, subprocess, shutil, importlib.util, re
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 runtime=root/'runtime';runtime.mkdir(exist_ok=True)
+subprocess.run([sys.executable,str(root/'scripts/collect-licenses.py')],check=True)
 lib=root/'.venv/lib/libgmsh.4.15.dylib'
 if not lib.exists():
     import gmsh

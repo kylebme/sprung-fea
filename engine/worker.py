@@ -53,7 +53,14 @@ def surface_data(quadratic=False):
                         tris.extend(node_index[int(n[i])] for i in sub)
                 else:
                     raise ValueError('Unsupported surface element. Expected triangular faces.')
-        faces.append({'id': tag, 'name': f'Face {tag}', 'type': gmsh.model.getType(2, tag),
+        # Anchor annotations on an actual surface point, including curved faces.
+        center=np.asarray(gmsh.model.occ.getCenterOfMass(2,tag))
+        triangles=np.asarray(tris).reshape(-1,3)
+        centroids=coords[triangles].mean(axis=1)
+        anchor=centroids[np.argmin(np.linalg.norm(centroids-center,axis=1))]
+        closest,param=gmsh.model.getClosestPoint(2,tag,anchor)
+        normal=gmsh.model.getNormal(tag,param)
+        faces.append({'anchor':closest.tolist(),'normal':normal.tolist(),'id': tag, 'name': f'Face {tag}', 'type': gmsh.model.getType(2, tag),
                       'area': gmsh.model.occ.getMass(2, tag), 'center': list(gmsh.model.occ.getCenterOfMass(2, tag)), 'indices': tris})
     return {'positions': coords.flatten().tolist(), 'nodeIds': [int(t) for t in tags], 'faces': faces}
 
@@ -322,7 +329,11 @@ def solve(folder, study):
     fixed=write_deck(folder,study,mesh)
     emit('solving','CalculiX is solving the elastic response')
     start=time.monotonic()
-    env=dict(os.environ, OMP_NUM_THREADS='2', CCX_NPROC_RESULTS='2')
+    # The native SPOOLES MT build can produce nondeterministic factorization.
+    # Pin every CCX/BLAS stage to one thread for reproducible results.
+    env={k:v for k,v in os.environ.items() if not k.startswith('CCX_NPROC')}
+    env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS='1',OPENBLAS_NUM_THREADS='1',
+               CCX_NPROC_RESULTS='1',CCX_NPROC_STIFFNESS='1',CCX_NPROC_EQUATION_SOLVER='1')
     process=subprocess.run([find_ccx(),'-i','analysis'],cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,env=env,timeout=240)
     (folder/'solver.log').write_text(process.stdout)
     if process.returncode != 0 or '*ERROR' in process.stdout or not (folder/'analysis.frd').exists():
@@ -343,7 +354,10 @@ def solve(folder, study):
     # CCX RF includes applied loads: subtract them to obtain support reactions.
     for n,a in fixed: reactions[a]+=fields.get('FORC',{}).get(n,[0,0,0])[a]-applied.get(str(n),[0,0,0])[a]
     total_load=np.sum(list(applied.values()),axis=0) if applied else np.zeros(3)
-    balance=np.linalg.norm(reactions+total_load)/max(np.linalg.norm(total_load),1e-9)
+    # Resultants can cancel for pressure around a bore. Normalize by the
+    # larger of the resultant and absolute equivalent nodal loading.
+    load_scale=max(np.linalg.norm(total_load),sum(np.linalg.norm(v) for v in applied.values()),1e-9)
+    balance=np.linalg.norm(reactions+total_load)/load_scale
     geo=json.loads((folder/'geometry.json').read_text())
     max_stress=max(stress); max_move=max(movement)
     yield_strength=study['material'].get('yield')

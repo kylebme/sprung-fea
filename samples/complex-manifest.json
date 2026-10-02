@@ -1,0 +1,59 @@
+[
+  {
+    "name": "bearing-block",
+    "features": [
+      "central bearing bore",
+      "four counterbores",
+      "rounded corners"
+    ],
+    "volume": 66670.29269990783,
+    "dimensions": [
+      80.0,
+      60.0,
+      16.0
+    ]
+  },
+  {
+    "name": "ribbed-bracket",
+    "features": [
+      "two triangular ribs",
+      "rounded base",
+      "six mounting holes"
+    ],
+    "volume": 74176.74351968922,
+    "dimensions": [
+      90.0,
+      60.0,
+      63.0
+    ]
+  },
+  {
+    "name": "pocketed-housing",
+    "features": [
+      "rounded deep pocket",
+      "intersecting side bores",
+      "four counterbores",
+      "thin walls"
+    ],
+    "volume": 81207.75264241325,
+    "dimensions": [
+      80.0,
+      60.0,
+      32.0
+    ]
+  },
+  {
+    "name": "tube-elbow",
+    "features": [
+      "toroidal inner and outer walls",
+      "90-degree bend",
+      "annular end collars"
+    ],
+    "volume": 16570.093282042006,
+    "dimensions": [
+      61.0,
+      61.0,
+      32.0
+    ]
+  }
+]

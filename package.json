@@ -12,9 +12,15 @@
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
     "test:engine": ".venv/bin/python -m unittest discover -s tests -p 'test_*.py'",
-    "package:mac": "npm run build && npm run bundle:engine && electron-builder --mac dir",
-    "dist:mac": "npm run build && npm run bundle:engine && electron-builder --mac dmg",
-    "bundle:engine": ".venv/bin/python scripts/bundle-runtime.py"
+    "package:mac": "npm run build && npm run bundle:engine && electron-builder --mac dir && node scripts/sign-mac.mjs",
+    "dist:mac": "npm run package:mac && electron-builder --prepackaged release/mac-arm64/BetterSim.app --mac dmg",
+    "bundle:engine": ".venv/bin/python scripts/bundle-runtime.py",
+    "test:e2e": "playwright test",
+    "test:all": "npm run test:engine && npm test && npm run test:e2e",
+    "setup": "node scripts/setup.mjs",
+    "dev:desktop": "node scripts/dev.mjs --electron",
+    "test:desktop": "node tests/desktop.mjs",
+    "format": "prettier --write src server electron scripts/*.mjs tests/*.mjs tests/*.ts *.ts *.json index.html"
   },
   "dependencies": {
     "@fontsource/dm-sans": "^5.3.0",
@@ -34,6 +40,7 @@
     "@vitejs/plugin-react": "^5.0.3",
     "electron": "^44.5.1",
     "electron-builder": "^26.0.12",
+    "prettier": "^3.9.9",
     "typescript": "^5.9.2",
     "vite": "^7.1.7"
   },
@@ -50,7 +57,8 @@
       "server/**/*",
       "package.json",
       "LICENSE",
-      "THIRD_PARTY_NOTICES.md"
+      "THIRD_PARTY_NOTICES.md",
+      "licenses/**/*"
     ],
     "extraResources": [
       {
@@ -67,7 +75,9 @@
       "target": [
         "dir",
         "dmg"
-      ]
+      ],
+      "icon": "assets/icon.icns",
+      "identity": null
     },
     "asarUnpack": [
       "engine/**/*",

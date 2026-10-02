@@ -20,6 +20,30 @@ class Pipeline(unittest.TestCase):
         cls.mesh=worker.mesh_part(cls.folder,study())
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
+    def test_step_length_units_are_converted_to_mm(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)
+            source=(ROOT/'samples/beam.step').read_text()
+            self.assertIn('SI_UNIT(.MILLI.,.METRE.)',source)
+            (folder/'part.step').write_text(source.replace('SI_UNIT(.MILLI.,.METRE.)','SI_UNIT($,.METRE.)'))
+            geo=worker.import_part(folder)
+            np.testing.assert_allclose(geo['dimensions'],[100000,20000,10000],rtol=1e-6)
+    def test_repeat_solves_are_reproducible(self):
+        first=worker.solve(self.folder,study())
+        for _ in range(8):
+            again=worker.solve(self.folder,study())
+            np.testing.assert_allclose(again['movement'],first['movement'],rtol=1e-10,atol=1e-12)
+            np.testing.assert_allclose(again['stress'],first['stress'],rtol=1e-10,atol=1e-12)
+    def test_loads_on_supported_nodes_report_real_reactions(self):
+        s=study({'kind':'force','faces':[1],'vector':[0,0,-100]})
+        result=worker.solve(self.folder,s)
+        self.assertAlmostEqual(result['summary']['reactions'][2],100,delta=.001)
+        self.assertLess(result['summary']['maxMovement'],1e-10)
+    def test_overlapping_pressures_add(self):
+        s=study({'kind':'pressure','faces':[2],'magnitude':2})
+        s['loads'].append({'kind':'pressure','faces':[2],'magnitude':3})
+        result=worker.solve(self.folder,s)
+        self.assertAlmostEqual(result['summary']['reactions'][0],1000,delta=.02)
     def test_step_face_identity_survives_remeshing(self):
         self.assertEqual([f['id'] for f in self.geo['faces']],[f['id'] for f in self.mesh['surface']['faces']])
         np.testing.assert_allclose(self.geo['dimensions'],[100,20,10],atol=1e-5)
