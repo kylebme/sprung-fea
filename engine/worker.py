@@ -197,6 +197,31 @@ def triangle_weights(points):
     return out
 
 
+def triangle_vector_weights(points, outward):
+    out=np.zeros((6,3))
+    for r,s,w in QUAD:
+        t=1-r-s
+        N=np.array([t*(2*t-1),r*(2*r-1),s*(2*s-1),4*t*r,4*r*s,4*s*t])
+        dr=np.array([1-4*t,4*r-1,0,4*(t-r),4*s,-4*s])
+        ds=np.array([1-4*t,0,4*s-1,-4*r,4*r,4*(t-s)])
+        normal=np.cross(dr@points,ds@points)
+        if np.dot(normal,outward)<0: normal=-normal
+        out += w*N[:,None]*normal
+    return out
+
+
+def tetra_weights(points):
+    out=np.zeros(10);dlam=np.array([[-1,-1,-1],[1,0,0],[0,1,0],[0,0,1]])
+    for k in range(4):
+        lam=np.full(4,.1381966011250105);lam[k]=.5854101966249685
+        N=list(lam*(2*lam-1));dN=list((4*lam-1)[:,None]*dlam)
+        for i,j in [(0,1),(1,2),(2,0),(0,3),(2,3),(1,3)]:
+            N.append(4*lam[i]*lam[j]);dN.append(4*(lam[i]*dlam[j]+lam[j]*dlam[i]))
+        jac=np.asarray(dN).T@points
+        out += np.asarray(N)*abs(np.linalg.det(jac))/24
+    return out
+
+
 def write_deck(folder, study, mesh):
     nodes, fixed = validate(study,mesh)
     m=study['material']
@@ -206,7 +231,7 @@ def write_deck(folder, study, mesh):
     # Gmsh and Abaqus/CalculiX use opposite order for the last two midside nodes.
     order=[0,1,2,3,4,5,6,7,9,8]
     lines += [f'{eid}, '+', '.join(str(c[i]) for i in order) for eid,c in zip(mesh['elementIds'],mesh['elements'])]
-    lines += ['*MATERIAL, NAME=MAT','*ELASTIC',f"{m['young']}, {m['poisson']}", '*DENSITY',str(m['density']*1e-12),'*SOLID SECTION, ELSET=PART, MATERIAL=MAT','*BOUNDARY']
+    lines += ['*MATERIAL, NAME=MAT','*ELASTIC',f"{m['young']:.12g}, {m['poisson']:.12g}", '*DENSITY',f"{m['density']*1e-12:.12g}",'*SOLID SECTION, ELSET=PART, MATERIAL=MAT','*BOUNDARY']
     lines += [f'{n}, {a+1}, {a+1}, 0' for n,a in sorted(fixed)]
     lines += ['*NSET, NSET=HELD']
     held=sorted(set(n for n,_ in fixed))
@@ -214,21 +239,28 @@ def write_deck(folder, study, mesh):
     lines += ['*STEP','*STATIC']
     cload={}
     dload=[]
+    applied={}
+    pressures={}
+    gravity=np.zeros(3)
+    def add_applied(n,vector):
+        applied[n]=applied.get(n,np.zeros(3))+vector
     # CCX tetrahedral pressure faces: 123, 142, 243, 341.
     face_map={}
     tet_faces=[(0,1,2),(0,3,1),(1,3,2),(2,3,0)]
     for eid,c in zip(mesh['elementIds'],mesh['elements']):
-        for num,ids in enumerate(tet_faces,1): face_map[tuple(sorted(c[i] for i in ids))]=(eid,num)
+        for num,ids in enumerate(tet_faces,1): face_map[tuple(sorted(c[i] for i in ids))]=(eid,num,np.mean([nodes[int(n)] for n in c[:4]],axis=0))
     for l in study['loads']:
         if l['kind']=='gravity':
-            v=np.asarray(l['vector'],float)*1000
-            mag=float(np.linalg.norm(v))
-            if mag: dload.append(f"PART, GRAV, {mag}, "+', '.join(str(x) for x in v/mag))
+            gravity+=np.asarray(l['vector'],float)*1000
         elif l['kind']=='pressure':
             for f in l['faces']:
                 for tri in mesh['faces'][str(f)]['triangles']:
-                    eid,face=face_map[tuple(sorted(tri[:3]))]
-                    dload.append(f"{eid}, P{face}, {l['magnitude']}")
+                    eid,face,center=face_map[tuple(sorted(tri[:3]))]
+                    pressures[(eid,face)]=pressures.get((eid,face),0)+float(l['magnitude'])
+                    points=np.array([nodes[n] for n in tri])
+                    outward=points[:3].mean(axis=0)-center
+                    forces=-float(l['magnitude'])*triangle_vector_weights(points,outward)
+                    for n,f in zip(tri,forces): add_applied(n,f)
         else:
             weights={}
             for f in l['faces']:
@@ -239,6 +271,16 @@ def write_deck(folder, study, mesh):
             if area<=0: raise ValueError('The loaded face has no usable area.')
             for n,w in weights.items():
                 for a,v in enumerate(l['vector']): cload[(n,a)]=cload.get((n,a),0)+float(v)*w/area
+    for (n,a),v in cload.items():
+        vec=np.zeros(3);vec[a]=v;add_applied(n,vec)
+    mag=float(np.linalg.norm(gravity))
+    if mag:
+        dload.append(f"PART, GRAV, {mag:.12g}, "+', '.join(f'{x:.12g}' for x in gravity/mag))
+        for c in mesh['elements']:
+            weights=tetra_weights(np.array([nodes[n] for n in c]))
+            for n,w in zip(c,weights): add_applied(n,w*m['density']*1e-12*gravity)
+    dload += [f'{eid}, P{face}, {pressure:.12g}' for (eid,face),pressure in pressures.items()]
+    (folder/'applied.json').write_text(json.dumps({n:v.tolist() for n,v in applied.items()}))
     if cload:
         lines+=['*CLOAD']+[f'{n}, {a+1}, {v:.12g}' for (n,a),v in sorted(cload.items()) if abs(v)>1e-14]
     if dload: lines+=['*DLOAD']+dload
@@ -297,7 +339,11 @@ def solve(folder, study):
         stress.append(math.sqrt(max(0,((xx-yy)**2+(yy-zz)**2+(zz-xx)**2)/2+3*(xy*xy+yz*yz+zx*zx))))
     movement=np.linalg.norm(displacements,axis=1).tolist()
     reactions=np.zeros(3)
-    for n,a in fixed: reactions[a]+=fields.get('FORC',{}).get(n,[0,0,0])[a]
+    applied=json.loads((folder/'applied.json').read_text())
+    # CCX RF includes applied loads: subtract them to obtain support reactions.
+    for n,a in fixed: reactions[a]+=fields.get('FORC',{}).get(n,[0,0,0])[a]-applied.get(str(n),[0,0,0])[a]
+    total_load=np.sum(list(applied.values()),axis=0) if applied else np.zeros(3)
+    balance=np.linalg.norm(reactions+total_load)/max(np.linalg.norm(total_load),1e-9)
     geo=json.loads((folder/'geometry.json').read_text())
     max_stress=max(stress); max_move=max(movement)
     yield_strength=study['material'].get('yield')
@@ -306,7 +352,7 @@ def solve(folder, study):
     if max_move>.05*min(geo['dimensions']): warnings.append('Movement is large relative to the smallest part dimension. A small-deformation analysis may not be appropriate.')
     result={'displacements':displacements,'stress':stress,'movement':movement,'summary':{'maxStress':max_stress,'maxMovement':max_move,
             'minSafety':yield_strength/max_stress if yield_strength and max_stress else None,'reactions':reactions.tolist(),
-            'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))], 'seconds':time.monotonic()-start},
+            'appliedForce':total_load.tolist(),'forceBalanceError':float(balance),'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))], 'seconds':time.monotonic()-start},
             'warnings':warnings,'solver':'CalculiX','meshSize':mesh['size'], 'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']}
     (folder/'result.json').write_text(json.dumps(result))
     return result
