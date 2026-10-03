@@ -35,6 +35,16 @@ def size_settings(size):
     gmsh.model.mesh.setSize(gmsh.model.getEntities(0), size)
 
 
+def preview_settings(dims):
+    # Display triangulation for setup only; analysis meshes use size_settings.
+    # Curved faces get about 36 segments per full turn; flat faces stay coarse.
+    gmsh.option.setNumber('Mesh.MeshSizeMax', max(dims) / 50)
+    gmsh.option.setNumber('Mesh.MeshSizeMin', max(dims) / 300)
+    gmsh.option.setNumber('Mesh.MeshSizeFromCurvature', 36)
+    gmsh.option.setNumber('Mesh.MeshSizeExtendFromBoundary', 0)
+    gmsh.option.setNumber('Mesh.Algorithm', 6)
+
+
 def surface_data(quadratic=False):
     tags, coords, _ = gmsh.model.mesh.getNodes()
     coords = np.asarray(coords).reshape(-1, 3)
@@ -71,7 +81,7 @@ def import_part(folder):
     bbox = gmsh.model.getBoundingBox(*solid)
     dims = [bbox[i+3]-bbox[i] for i in range(3)]
     default = max(min(dims) / 2.5, max(dims) / 60)
-    size_settings(max(min(dims)/2, max(dims)/45))
+    preview_settings(dims)
     gmsh.model.mesh.generate(2)
     geometry = surface_data()
     geometry.update({'bounds': list(bbox), 'dimensions': dims, 'volume': gmsh.model.occ.getMass(*solid),

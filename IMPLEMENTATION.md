@@ -75,7 +75,7 @@ Face selections reference CAD entities rather than rendering triangles or mesh n
 
 ### STEP import
 
-The service stores the uploaded STEP in a document directory and launches an import worker. OpenCASCADE converts STEP length units to millimetres. The worker requires exactly one solid with positive volume, creates a triangulated surface preview, and records dimensions, volume, face metadata, and the source hash.
+The service stores the uploaded STEP in a document directory and launches an import worker. OpenCASCADE converts STEP length units to millimetres. The worker requires exactly one solid with positive volume, creates a triangulated surface preview for setup, and records dimensions, volume, face metadata, and the source hash. The preview uses its own sizing, independent of the analysis mesh: about 36 segments per full turn on curved faces, element sizes between 1/300 and 1/50 of the longest dimension, and coarser triangles on flat faces. The sample parts produce roughly 3,000–60,000 display triangles.
 
 Surface annotations use anchors on the actual CAD surfaces, including curved faces. The initial mesh recommendation is the larger of the smallest part dimension divided by 2.5 and the largest dimension divided by 60. This is a starting heuristic, not a convergence criterion.
 
