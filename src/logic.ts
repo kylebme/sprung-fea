@@ -9,6 +9,42 @@ import type {
   Support,
 } from "./types";
 
+/** Fills settings that older projects lack with the values they implied. */
+export function normalizeStudy(study: Study): Study {
+  return {
+    ...study,
+    analysis: study.analysis ?? "static",
+    solver: study.solver ?? "spooles",
+  };
+}
+
+/**
+ * Results in the current schema. Results saved before schema 2 are linear
+ * static: one frame, with checks rebuilt from the summary.
+ */
+export function normalizeResult(info: ResultInfo): ResultInfo {
+  if (info.version >= 2) return info;
+  const s = info.summary;
+  return {
+    ...info,
+    version: 2,
+    analysis: "static",
+    frames: [{ label: "Static load", value: null, unit: "" }],
+    charts: [],
+    checks: s.appliedForce
+      ? [
+          { label: "Applied force X, Y, Z", values: s.appliedForce, unit: "N" },
+          { label: "Reaction X, Y, Z", values: s.reactions || [], unit: "N" },
+          {
+            label: "Force balance error",
+            values: [(s.forceBalanceError || 0) * 100],
+            unit: "%",
+          },
+        ]
+      : [],
+  };
+}
+
 export function fmt(n: number, digits = 3) {
   return !Number.isFinite(n)
     ? "—"
@@ -144,7 +180,12 @@ export function restoreResults(
 ): Omit<SavedResults, "hash" | "study"> | null {
   if (!saved || typeof saved !== "object") return null;
   const s = saved as Partial<SavedResults>;
-  if (s.hash !== hash || !sameValue(s.study, study)) return null;
+  if (
+    s.hash !== hash ||
+    !s.study ||
+    !sameValue(normalizeStudy(s.study), normalizeStudy(study))
+  )
+    return null;
   if (
     typeof s.view !== "string" ||
     !s.mesh?.elementCount ||
@@ -152,7 +193,7 @@ export function restoreResults(
     !Array.isArray(s.result.warnings)
   )
     return null;
-  return { mesh: s.mesh, result: s.result, view: s.view };
+  return { mesh: s.mesh, result: normalizeResult(s.result), view: s.view };
 }
 
 /** Next focus position for arrow-key navigation in a vertical list. */

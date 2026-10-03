@@ -98,18 +98,17 @@ export function Console({
                 label="Mesh"
                 value={`${fmt(result.elementCount)} C3D10 · ${fmt(result.nodeCount)} nodes · ${fmt(result.meshSize, 3)} mm`}
               />
-              <CheckRow
-                label="Applied force X, Y, Z"
-                value={s.appliedForce.map((v) => fmt(v, 2)).join(", ") + " N"}
-              />
-              <CheckRow
-                label="Reaction X, Y, Z"
-                value={s.reactions.map((v) => fmt(v, 2)).join(", ") + " N"}
-              />
-              <CheckRow
-                label="Force balance error"
-                value={fmt(s.forceBalanceError * 100, 4) + "%"}
-              />
+              {result.checks.map((c) => (
+                <CheckRow
+                  key={c.label}
+                  label={c.label}
+                  value={
+                    c.values
+                      .map((v) => fmt(v, c.unit === "%" ? 4 : 2))
+                      .join(", ") + (c.unit === "%" ? "%" : " " + c.unit)
+                  }
+                />
+              ))}
               <CheckRow label="Solve time" value={fmt(s.seconds, 2) + " s"} />
               {result.warnings.map((w) => (
                 <div key={w} className="check-row">

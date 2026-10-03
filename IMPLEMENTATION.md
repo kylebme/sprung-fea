@@ -49,11 +49,15 @@ flowchart LR
 | [electron/preload.cjs](electron/preload.cjs) | Minimal bridge for platform information and file saving |
 | [server/index.mjs](server/index.mjs) | File intake, document storage, worker execution, job lifecycle, project serialization, and artifact downloads |
 | [server/validation.mjs](server/validation.mjs) | Incoming study schema and value validation |
-| [engine/worker.py](engine/worker.py) | CAD import, mesh generation, physical setup validation, deck generation, solver execution, and FRD decoding |
+| [engine/worker.py](engine/worker.py) | Worker entry point: the JSON protocol and command dispatch |
+| [engine/cad.py](engine/cad.py) | STEP import, mesh generation, CAD face mappings, and the binary view file |
+| [engine/model.py](engine/model.py) | Solver-independent physics: setup validation, rigid-motion check, and equivalent loads (forces, pressures, remote loads, moments, bearing loads, body loads) |
+| [engine/calculix.py](engine/calculix.py) | CalculiX adapter: deck syntax, execution and thread control, log checks, and FRD decoding into frames |
+| [engine/analyses.py](engine/analyses.py) | Analysis types: each validates a study, writes its solver step, and builds the common result schema |
 | [scripts/bundle-runtime.py](scripts/bundle-runtime.py) | Frozen engine generation and relocation of native solver dependencies |
 | [scripts/sign-mac.mjs](scripts/sign-mac.mjs) | Ad-hoc application signing and signature verification |
 
-The study model avoids CalculiX deck syntax. This provides a useful boundary for future solver adapters, but there is no general adapter registry yet: import, meshing, and the CalculiX integration currently live together in `engine/worker.py`.
+The study model avoids CalculiX deck syntax. The engine keeps three boundaries: `model.py` turns a study into solver-independent quantities (validated supports, equivalent nodal forces, element-face pressures, body accelerations); `calculix.py` is the only module that knows deck syntax, solver execution and output formats; and `analyses.py` registers analysis types, each with `validate`, `deck` and `results`. Adding a solver means another adapter with the same three duties; adding an analysis type means another registry entry.
 
 ## 3. Domain and units
 
@@ -64,9 +68,9 @@ The study model avoids CalculiX deck syntax. This provides a useful boundary for
 | Material | Name, elastic modulus, Poisson ratio, density, and optional yield strength |
 | Support | Stable condition ID, name, selected face IDs, and three blocked/free translation flags |
 | Load | Stable condition ID, name, kind, selected faces, vector components, and pressure magnitude |
-| Study | Material, supports, loads, mesh size, and detail preset |
+| Study | Analysis type, material, supports, loads, mesh size, detail preset, and equation solver |
 | Mesh | Nodes, quadratic tetrahedra, CAD face-to-node/triangle mappings, element count, size, and minimum quality |
-| Result | Nodal displacement, movement, equivalent stress, extrema, reactions, applied resultant, equilibrium residual, warnings, and solver/mesh metadata |
+| Result | Schema version, analysis type, frames, nodal fields per frame, analysis summary, check rows, charts, warnings, and solver/mesh metadata |
 
 The interface uses **mm, N, and MPa**. Material density is entered in **kg/m³**, and gravity in **m/s²**. The solver deck uses the consistent **mm–N–tonne–s** system: density is multiplied by `1e-12`, and acceleration by `1000`.
 
@@ -116,7 +120,21 @@ The study chooses the linear equation solver, written to the deck as `*STATIC, S
 
 PARDISO and PaStiX are not offered: the bundled CalculiX build does not link them. CalculiX returns the last conjugate-gradient iterate without an error when it stops short of its tolerance, so the worker reads the final residual and limit from the log and rejects an unconverged solve. Iterative results match the direct solver within about 10⁻⁴ of peak displacement and 0.1% of peak stress on the test beam, and equilibrium closes to about 0.1% (incomplete Cholesky uses a looser CalculiX tolerance). The result records the solver and iteration count, shown in the console's Checks tab. Studies saved before solver choice use SPOOLES. Threads are a per-machine preference, not part of the study, because they do not change results: **Auto** (default) uses the performance cores (all logical cores where the platform does not distinguish them), **1** uses a single thread, and **All** uses every logical core. The renderer stores the choice locally and sends it with each mesh or solve request (`?threads=N`, validated against the core count reported by `GET /api/health`). The worker applies it to Gmsh meshing and to CalculiX stiffness assembly, SPOOLES factorization and stress recovery (`CCX_NPROC_STIFFNESS`, `CCX_NPROC_EQUATION_SOLVER`, `CCX_NPROC_RESULTS`). OpenMP stays at one thread (`OMP_NUM_THREADS=1`, `NUMBER_OF_CPUS=1`): in repeated identical solves, CalculiX's own thread controls at up to 8 threads gave bit-identical displacement, stress and nodal forces, but OpenMP above one thread combined with any of them made stress and reactions vary between runs, once reporting an 866 N reaction for a 1000 N load. Earlier versions pinned every stage to one thread because of that interaction. CalculiX's iterative solvers iterate on one thread regardless. Gmsh meshes can differ slightly between runs with more than one thread; with one thread they are repeatable. The result records the thread count, shown in the Checks tab.
 
-The worker retains the input deck, mesh, FRD output, DAT output, and solver log. It reads displacement, stress, and nodal force fields from FRD and rejects incomplete displacement or stress results. Equivalent stress is calculated from the averaged nodal stress tensor; movement is the displacement-vector magnitude.
+The worker retains the input deck, mesh, FRD output, DAT output, and solver log. The FRD reader returns every result frame (consecutive blocks with the same step number and value: one load step, mode, increment, or frequency) and rejects incomplete fields.
+
+Every analysis produces the same result schema (version 2):
+
+| Field | Meaning |
+|---|---|
+| `analysis` | Analysis type of the study that produced it |
+| `frames` | One entry per frame: label, value and unit (for example a mode's frequency in Hz) |
+| `fields` | Nodal arrays stored for each frame in `view.bin` (`displacement`, `vonMises`, …); frame *k* > 0 stores `name@k` |
+| `summary` | Analysis-specific numbers; always includes `seconds` |
+| `checks` | Rows for the console's Checks tab: label, values, unit |
+| `charts` | X–Y series for plots, such as a response curve |
+| `warnings` | Plain-language limits of the result |
+
+Results saved before schema 2 are read as one linear static frame, with checks rebuilt from the summary. Equivalent stress is calculated from the averaged nodal stress tensor; movement is the displacement-vector magnitude.
 
 Support reactions subtract equivalent applied loads from the constrained components of CalculiX RF output. The force-balance residual is divided by the larger of the applied resultant magnitude and the sum of equivalent nodal load magnitudes, with a small numerical floor. This handles pressure cases whose resultant cancels around a bore.
 
@@ -146,7 +164,7 @@ The service binds to `127.0.0.1`: port 4318 during normal browser development an
 | `GET /api/jobs/:id` | Poll job status, stage, message, result, or error |
 | `DELETE /api/jobs/:id` | Cancel a running job |
 | `POST /api/documents/:id/mesh` | Generate a mesh for the submitted study |
-| `POST /api/documents/:id/solve` | Mesh and solve the submitted study |
+| `POST /api/documents/:id/solve` | Mesh and solve the submitted study with its analysis type |
 | `GET /api/documents/:id/view` | Binary mesh and nodal results for the viewer (`view.bin`, layout in [vtk-wasm.md](docs/vtk-wasm.md)) |
 | `POST /api/documents/:id/save` | Serialize the embedded STEP and study |
 | `POST /api/open` | Validate and import a portable project |

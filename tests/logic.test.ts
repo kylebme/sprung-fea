@@ -49,3 +49,41 @@ test("saved results are restored only for the same geometry and study", () => {
   assert.equal(restoreResults(older, "abc", s), null);
   assert.equal(restoreResults(undefined, "abc", s), null);
 });
+
+test("projects from before analysis types restore as linear static", () => {
+  // A 0.1 project: no analysis or solver in the study, and a result without
+  // frames or checks.
+  const saved = {
+    hash: "abc",
+    study: study(2),
+    mesh: { size: 2, nodeCount: 2, elementCount: 1, minQuality: 0.5 },
+    result: {
+      summary: {
+        seconds: 1,
+        appliedForce: [0, 0, -100],
+        reactions: [0, 0, 100],
+        forceBalanceError: 1e-9,
+      },
+      warnings: [],
+    },
+    view: "QlNJTVZJRVc=",
+  };
+  const current = {
+    ...study(2),
+    analysis: "static" as const,
+    solver: "spooles" as const,
+  };
+  const restored = restoreResults(saved, "abc", current)!;
+  assert.equal(restored.result.analysis, "static");
+  assert.equal(restored.result.version, 2);
+  assert.equal(restored.result.frames.length, 1);
+  assert.deepEqual(
+    restored.result.checks.map((c) => c.label),
+    ["Applied force X, Y, Z", "Reaction X, Y, Z", "Force balance error"],
+  );
+  // A different analysis type is a different study.
+  assert.equal(
+    restoreResults(saved, "abc", { ...current, analysis: "other" as any }),
+    null,
+  );
+});

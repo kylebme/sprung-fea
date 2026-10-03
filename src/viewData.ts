@@ -3,9 +3,17 @@
 import type { Surface } from "./types";
 
 /**
+ * Nodal results of one frame (a load step, mode, increment or frequency):
+ * `displacement` (three components per node) and scalar fields such as
+ * `vonMises` or `temperature`, one value per node.
+ */
+export type Frame = Record<string, Float64Array>;
+
+/**
  * Indices refer to `points`. Tetrahedra are ten-node quadratic cells in VTK
  * order. Boundary triangles carry the CAD face they belong to. Results are
- * present after a solve.
+ * present after a solve: `frames` holds every frame, and `displacement` and
+ * `fields` the displayed one (see atFrame).
  */
 export type ViewData = {
   /** The engine's bytes, kept so a project can embed them unchanged. */
@@ -15,8 +23,11 @@ export type ViewData = {
   triangles: Int32Array;
   triangleFaces: Int32Array;
   tets: Int32Array | null;
+  frames: Frame[];
+  frame: number;
   displacement: Float64Array | null;
-  vonMises: Float64Array | null;
+  /** Scalar fields of the displayed frame, by engine name. */
+  fields: Record<string, Float64Array>;
 };
 
 /** Values at a point of the part, in its undeformed position. */
@@ -24,8 +35,26 @@ export type Probe = {
   point: number[];
   /** Mesh node tag when the probe sits exactly on a node. */
   node: number | null;
-  stress: number;
-  displacement: number[];
+  /** Scalar fields at the point, by engine name. */
+  values: Record<string, number>;
+  displacement: number[] | null;
+};
+
+export type Plot = "stress" | "movement" | "safety" | "temperature" | "plastic";
+/**
+ * A plot shows one scalar per node: an engine field, or a quantity derived
+ * from them (displacement magnitude, yield margin). Ranges start at zero
+ * except where `signed` is set.
+ */
+export const PLOT_SOURCES: Record<
+  Plot,
+  { field: string; derived?: boolean; signed?: boolean }
+> = {
+  stress: { field: "vonMises" },
+  movement: { field: "displacement", derived: true },
+  safety: { field: "vonMises", derived: true },
+  temperature: { field: "temperature", signed: true },
+  plastic: { field: "peeq" },
 };
 
 const MAGIC = "BSIMVIEW";
@@ -62,19 +91,38 @@ export function decodeView(buffer: ArrayBuffer): ViewData {
     arrays[name] = new Type(buffer, offset, count);
     offset += Math.ceil((count * Type.BYTES_PER_ELEMENT) / 8) * 8;
   }
-  const view: ViewData = {
-    buffer,
-    nodeIds: arrays.nodeIds as Int32Array,
-    points: arrays.points as Float64Array,
-    triangles: arrays.triangles as Int32Array,
-    triangleFaces: arrays.triangleFaces as Int32Array,
-    tets: (arrays.tets as Int32Array) || null,
-    displacement: (arrays.displacement as Float64Array) || null,
-    vonMises: (arrays.vonMises as Float64Array) || null,
-  };
+  // Result arrays: frame 0 is unsuffixed, frame k stores `name@k`.
+  const frames: Frame[] = [];
+  for (const [name, data] of Object.entries(arrays)) {
+    const [field, index] = name.split("@");
+    if (MESH.includes(field)) continue;
+    if (!(data instanceof Float64Array))
+      throw Error("The view file is truncated or malformed.");
+    const k = index === undefined ? 0 : Number(index);
+    if (!Number.isInteger(k) || k < 0 || k > 100000)
+      throw Error("The view file is truncated or malformed.");
+    (frames[k] ??= {})[field] = data;
+  }
+  const view = atFrame(
+    {
+      buffer,
+      nodeIds: arrays.nodeIds as Int32Array,
+      points: arrays.points as Float64Array,
+      triangles: arrays.triangles as Int32Array,
+      triangleFaces: arrays.triangleFaces as Int32Array,
+      tets: (arrays.tets as Int32Array) || null,
+      frames: Array.from(frames, (f) => f || {}),
+      frame: 0,
+      displacement: null,
+      fields: {},
+    },
+    0,
+  );
   validate(view);
   return view;
 }
+
+const MESH = ["nodeIds", "points", "tets", "triangles", "triangleFaces"];
 
 function validate(v: ViewData) {
   const n = v.nodeIds?.length;
@@ -87,11 +135,75 @@ function validate(v: ViewData) {
     v.triangleFaces?.length !== v.triangles.length / 3 ||
     !inRange(v.triangles) ||
     (v.tets && (v.tets.length % 10 || !inRange(v.tets))) ||
-    (v.displacement && v.displacement.length !== n * 3) ||
-    (v.vonMises && v.vonMises.length !== n) ||
-    !v.displacement !== !v.vonMises
+    v.frames.some(
+      (f) =>
+        !Object.keys(f).length ||
+        Object.entries(f).some(
+          ([name, a]) => a.length !== (name === "displacement" ? n * 3 : n),
+        ),
+    )
   )
     throw Error("The view file has inconsistent array sizes.");
+}
+
+/** The view showing frame `k`; geometry arrays are shared, not copied. */
+export function atFrame(view: ViewData, k: number): ViewData {
+  const frame = view.frames[k];
+  if (!frame) return { ...view, frame: 0, displacement: null, fields: {} };
+  const { displacement, ...fields } = frame;
+  return { ...view, frame: k, displacement: displacement || null, fields };
+}
+
+export const hasResults = (view: ViewData | null) =>
+  !!view && view.frames.length > 0;
+
+/** Plots this frame can show. The yield margin needs a yield strength. */
+export function availablePlots(view: ViewData, yieldStrength: number | null) {
+  return (Object.keys(PLOT_SOURCES) as Plot[]).filter((p) => {
+    const source = PLOT_SOURCES[p].field;
+    const present =
+      source === "displacement" ? !!view.displacement : !!view.fields[source];
+    return present && (p !== "safety" || !!yieldStrength);
+  });
+}
+
+/** One value per node for a plot of the displayed frame. */
+export function plotValues(
+  view: ViewData,
+  plot: Plot,
+  yieldStrength: number | null = null,
+  marginCap = Infinity,
+): Float64Array {
+  if (plot === "movement") return movement(view);
+  if (plot === "safety") return margin(view, yieldStrength || 0, marginCap);
+  return view.fields[PLOT_SOURCES[plot].field];
+}
+
+/**
+ * Color-scale limits: zero to the maximum, or the true range for signed
+ * quantities such as temperature; the yield margin uses its own cap.
+ */
+export function plotRange(
+  view: ViewData,
+  plot: Plot,
+  yieldStrength: number | null,
+  marginCap: number,
+) {
+  if (plot === "safety") return { min: 0, max: marginCap };
+  const r = range(plotValues(view, plot, yieldStrength, marginCap));
+  if (PLOT_SOURCES[plot].signed)
+    return r.max > r.min ? r : { min: r.min - 1, max: r.max + 1 };
+  return { min: 0, max: r.max || 1 };
+}
+
+/** The node with the extreme value: lowest margin, highest otherwise. */
+export function peak(view: ViewData, plot: Plot, yieldStrength: number | null) {
+  const values = plotValues(view, plot, yieldStrength);
+  let best = 0;
+  const low = plot === "safety";
+  for (let i = 1; i < values.length; i++)
+    if (low ? values[i] < values[best] : values[i] > values[best]) best = i;
+  return { value: values[best], node: view.nodeIds[best] };
 }
 
 /** The setup triangulation, before any analysis mesh exists. */
@@ -105,14 +217,17 @@ export function geometryView(surface: Surface): ViewData {
       surface.faces.flatMap((f) => Array(f.indices.length / 3).fill(f.id)),
     ),
     tets: null,
+    frames: [],
+    frame: 0,
     displacement: null,
-    vonMises: null,
+    fields: {},
   };
 }
 
 /** Displacement magnitude at each node. */
 export function movement(view: ViewData) {
-  const d = view.displacement!;
+  const d = view.displacement;
+  if (!d) return new Float64Array(view.nodeIds.length);
   const out = new Float64Array(d.length / 3);
   for (let i = 0; i < out.length; i++)
     out[i] = Math.hypot(d[i * 3], d[i * 3 + 1], d[i * 3 + 2]);
@@ -121,7 +236,7 @@ export function movement(view: ViewData) {
 
 /** Yield margin at each node, capped at the top of the color scale. */
 export function margin(view: ViewData, yieldStrength: number, cap: number) {
-  return view.vonMises!.map((s) =>
+  return view.fields.vonMises.map((s) =>
     s > 0 ? Math.min(cap, yieldStrength / s) : cap,
   );
 }
@@ -139,33 +254,48 @@ export function range(values: ArrayLike<number>) {
 /** Exact nodal values for a node tag, or null if the mesh lacks it. */
 export function nodeProbe(view: ViewData, node: number): Probe | null {
   const i = view.nodeIds.indexOf(node);
-  if (i < 0 || !view.vonMises || !view.displacement) return null;
+  if (i < 0 || !hasResults(view)) return null;
   return {
     point: Array.from(view.points.subarray(i * 3, i * 3 + 3)),
     node,
-    stress: view.vonMises[i],
-    displacement: Array.from(view.displacement.subarray(i * 3, i * 3 + 3)),
+    values: Object.fromEntries(
+      Object.entries(view.fields).map(([k, a]) => [k, a[i]]),
+    ),
+    displacement: view.displacement
+      ? Array.from(view.displacement.subarray(i * 3, i * 3 + 3))
+      : null,
   };
 }
 
-/** Nodes on the part surface with their results, as CSV text. */
+/** CSV column names and units of engine fields. */
+const CSV_COLUMNS: Record<string, string> = {
+  vonMises: "von_mises_MPa",
+  temperature: "temperature_C",
+  peeq: "plastic_strain",
+};
+
+/** Nodes on the part surface with the displayed frame's results, as CSV. */
 export function surfaceCsv(view: ViewData) {
+  const names = Object.keys(view.fields);
+  const d = view.displacement;
   const lines = [
-    "surface_node,x_mm,y_mm,z_mm,ux_mm,uy_mm,uz_mm,displacement_mm,von_mises_MPa",
+    [
+      "surface_node,x_mm,y_mm,z_mm",
+      ...(d ? ["ux_mm,uy_mm,uz_mm,displacement_mm"] : []),
+      ...names.map((n) => CSV_COLUMNS[n] || n),
+    ].join(","),
   ];
   const used = new Uint8Array(view.nodeIds.length);
   for (const i of view.triangles) used[i] = 1;
-  const d = view.displacement!;
   used.forEach((on, i) => {
     if (!on) return;
-    const u = d.subarray(i * 3, i * 3 + 3);
+    const u = d ? Array.from(d.subarray(i * 3, i * 3 + 3)) : [];
     lines.push(
       [
         view.nodeIds[i],
         ...view.points.subarray(i * 3, i * 3 + 3),
-        ...u,
-        Math.hypot(...u),
-        view.vonMises![i],
+        ...(d ? [...u, Math.hypot(...u)] : []),
+        ...names.map((n) => view.fields[n][i]),
       ].join(","),
     );
   });
@@ -182,4 +312,18 @@ export function toBase64(buffer: ArrayBuffer) {
 
 export function fromBase64(text: string) {
   return Uint8Array.from(atob(text), (c) => c.charCodeAt(0)).buffer;
+}
+
+/** A plot's value at a probe, or null where the probe lacks it. */
+export function probeValue(
+  probe: Probe,
+  plot: Plot,
+  yieldStrength: number | null,
+): number | null {
+  if (plot === "movement")
+    return probe.displacement ? Math.hypot(...probe.displacement) : null;
+  const stress = probe.values.vonMises;
+  if (plot === "safety")
+    return yieldStrength && stress > 0 ? yieldStrength / stress : null;
+  return probe.values[PLOT_SOURCES[plot].field] ?? null;
 }

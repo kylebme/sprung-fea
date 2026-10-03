@@ -3,7 +3,7 @@
 // converts pointer input into camera moves and picks.
 import { loadAsync, type StandaloneSession } from "@kitware/vtk-wasm";
 import type { ViewData, Probe } from "./viewData";
-import { margin, movement, range } from "./viewData";
+import { hasResults, margin, movement, plotRange } from "./viewData";
 import type { Face, Filters, Plot, Study } from "./types";
 
 export type Theme = "light" | "dark";
@@ -79,12 +79,25 @@ const COLORS = {
 const AXES = ["#e5484d", "#3dae6b", "#3f74e0"];
 const VIEW_ANGLE = 35;
 const VTK_QUADRATIC_TETRA = 24;
-/** Fields shared by the surface and volume, plus the arrays filters color by. */
+/**
+ * Point arrays shared by the surface and volume, named after the engine
+ * field. Derived plots get their own arrays; filters color by these names.
+ */
 const FIELD: Record<Plot, string> = {
-  stress: "Stress",
-  movement: "Displacement",
+  stress: "vonMises",
+  movement: "Movement",
   safety: "Margin",
+  temperature: "temperature",
+  plastic: "peeq",
 };
+/** Arrays that are geometry or derived, not engine fields, when probing. */
+const NOT_PROBED = new Set([
+  "vtkValidPointMask",
+  "Position",
+  "Vector",
+  "Movement",
+  "Margin",
+]);
 
 const rgb = (hex: string) =>
   [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
@@ -371,8 +384,15 @@ export class Scene {
     const changed = (...keys: (keyof SceneState)[]) =>
       keys.some((k) => prev[k] !== next[k]);
     this.state = next;
+    const prevView = prev.view;
+    const geometry =
+      !prevView ||
+      prevView.points !== next.view.points ||
+      prevView.triangles !== next.view.triangles ||
+      prevView.tets !== next.view.tets;
     const model = changed("view");
-    if (model) this.setModel(next);
+    if (geometry) this.setModel(next);
+    else if (model) this.setFields(next.view);
     if (model || changed("deformation")) this.deform();
     if (
       model ||
@@ -418,11 +438,6 @@ export class Scene {
     const polys = this.cells(v.triangles, 3);
     this.surface.setPolys(polys);
     polys.$delete();
-    for (const data of [this.surface, this.grid]) {
-      const pd = data.getPointData();
-      for (const name of [...Object.values(FIELD), "Position", "Vector"])
-        pd.removeArray(name);
-    }
     this.surface.getCellData().removeArray("Colors");
     this.colors = this.array(
       new Uint8Array(v.triangleFaces.length * 3),
@@ -430,8 +445,6 @@ export class Scene {
       "Colors",
     );
     this.surface.getCellData().addArray(this.colors);
-    for (const a of Object.values(this.fieldArrays)) a.$delete();
-    this.fieldArrays = {};
     // The grid shares the new points, so its cells must be replaced too;
     // stale tetrahedra would index past the end of a smaller point set.
     this.grid.reset();
@@ -441,16 +454,28 @@ export class Scene {
       this.grid.setCells(VTK_QUADRATIC_TETRA, tets);
       tets.$delete();
     }
-    if (v.vonMises && v.displacement) {
-      this.share(
-        "Stress",
-        this.array(new Float64Array(v.vonMises), 1, "Stress"),
-      );
-      this.share("Displacement", this.array(movement(v), 1, "Displacement"));
-      this.share(
-        "Vector",
-        this.array(new Float64Array(v.displacement), 3, "Vector"),
-      );
+    this.setFields(v);
+    this.buildEdges(v);
+  }
+
+  /** Replaces the nodal result arrays, e.g. when another frame is shown. */
+  private setFields(v: ViewData) {
+    for (const [name, a] of Object.entries(this.fieldArrays)) {
+      for (const data of [this.surface, this.grid])
+        data.getPointData().removeArray(name);
+      a.$delete();
+    }
+    this.fieldArrays = {};
+    if (hasResults(v)) {
+      for (const [name, values] of Object.entries(v.fields))
+        this.share(name, this.array(new Float64Array(values), 1, name));
+      if (v.displacement) {
+        this.share("Movement", this.array(movement(v), 1, "Movement"));
+        this.share(
+          "Vector",
+          this.array(new Float64Array(v.displacement), 3, "Vector"),
+        );
+      }
       this.share(
         "Position",
         this.array(new Float64Array(v.points), 3, "Position"),
@@ -458,7 +483,6 @@ export class Scene {
     }
     this.surface.modified();
     this.grid.modified();
-    this.buildEdges(v);
   }
 
   /** Point arrays are shared by the surface and the volume. */
@@ -516,13 +540,11 @@ export class Scene {
     this.edges.modified();
   }
 
-  /** Scalar range of the active plot: [0, max], like the legend. */
+  /** Scalar range of the active plot, like the legend. */
   private scale() {
     const s = this.state!;
-    if (!s.plot || !s.view.vonMises) return 0;
-    if (s.plot === "safety") return s.marginMax;
-    if (s.plot === "stress") return range(s.view.vonMises).max || 1;
-    return range(movement(s.view)).max || 1;
+    if (!s.plot || !hasResults(s.view)) return { min: 0, max: 1 };
+    return plotRange(s.view, s.plot, s.yieldStrength, s.marginMax);
   }
 
   private colorFields() {
@@ -535,16 +557,18 @@ export class Scene {
       .getProperty()
       .setColor(...rgb(s.plot ? colors.resultEdge : colors.edge));
     this.edgesActor.getProperty().setOpacity(s.plot ? 0.45 : 0.6);
-    if (!s.plot || !s.view.vonMises) return;
-    if (s.yieldStrength)
+    if (!s.plot || !hasResults(s.view)) return;
+    if (s.yieldStrength && s.view.fields.vonMises)
       this.share(
         "Margin",
         this.array(margin(s.view, s.yieldStrength, s.marginMax), 1, "Margin"),
       );
-    const max = this.scale();
+    const { min, max } = this.scale();
     const stops = s.plot === "safety" ? [...palette].reverse() : palette;
     this.lut.removeAllPoints();
-    stops.forEach((c, i) => this.lut.addRGBPoint((i / 5) * max, ...rgb(c)));
+    stops.forEach((c, i) =>
+      this.lut.addRGBPoint(min + (i / 5) * (max - min), ...rgb(c)),
+    );
     const name = FIELD[s.plot];
     for (const data of [this.surface, this.grid])
       data.getPointData().setActiveScalars(name);
@@ -679,8 +703,9 @@ export class Scene {
   private filter() {
     const s = this.state!;
     const f = s.filters;
-    const results = !!(s.plot && s.view.tets && s.view.vonMises);
-    const max = this.scale();
+    const results = !!(s.plot && s.view.tets && hasResults(s.view));
+    const { min, max } = this.scale();
+    const at = (fraction: number) => min + fraction * (max - min);
     const section = results && f.section.on;
     const iso = results && f.iso.on;
     const band = results && f.threshold.on;
@@ -706,14 +731,14 @@ export class Scene {
 
     // The threshold keeps the critical side: high stress or displacement,
     // low yield margin.
-    const level = f.threshold.level * max;
+    const level = at(f.threshold.level);
     const low = s.plot === "safety";
     // Setup surfaces carry no scalars to clip by.
     this.bandSurface.setInputData(band ? this.surface : this.empty);
     this.bandSurface.setValue(level);
     this.bandSurface.setInsideOut(low ? 1 : 0);
     this.band.setValue(0, level);
-    this.iso.setValue(0, f.iso.level * max);
+    this.iso.setValue(0, at(f.iso.level));
     this.capClip.setValue(level);
     this.capClip.setInsideOut(low ? 1 : 0);
     this.capActor
@@ -767,8 +792,10 @@ export class Scene {
     const probe = s.probe;
     this.marker.setVisibility(probe ? 1 : 0);
     if (!probe) return;
-    const scale = s.view.displacement ? s.deformation : 0;
-    this.marker.setPosition(...add(probe.point, probe.displacement, scale));
+    const scale = s.view.displacement && probe.displacement ? s.deformation : 0;
+    this.marker.setPosition(
+      ...add(probe.point, probe.displacement || [0, 0, 0], scale),
+    );
     this.marker.$userData.source.setRadius(this.radius * 0.014);
   }
 
@@ -941,12 +968,16 @@ export class Scene {
         this.ta.toJSTypedArray(a) as ArrayLike<number>,
       ).slice(0, a.getNumberOfComponents());
     }
-    if (!values.vtkValidPointMask?.[0] || !values.Stress) return null;
+    if (!values.vtkValidPointMask?.[0] || !values.Position) return null;
     return {
       point: values.Position,
       node: null,
-      stress: values.Stress[0],
-      displacement: values.Vector,
+      values: Object.fromEntries(
+        Object.entries(values)
+          .filter(([k]) => !NOT_PROBED.has(k))
+          .map(([k, v]) => [k, v[0]]),
+      ),
+      displacement: values.Vector || null,
     };
   }
 

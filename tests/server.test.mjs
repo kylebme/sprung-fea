@@ -40,6 +40,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     const geo = await wait(base, imported.job);
     assert.equal(geo.faces.length, 6);
     const study = {
+      analysis: "static",
       material: {
         name: "Aluminum",
         young: 68900,
@@ -82,14 +83,25 @@ test("STEP → portable project → reopen → real solve → export", async () 
     const reopened = await wait(base, opened.job);
     assert.equal(reopened.hash, geo.hash);
     assert.deepEqual(opened.study, study);
-    const { solver, ...older } = study;
+    const { solver, analysis, ...older } = study;
     const legacy = await request(base, "/api/open", {
       ...project,
       study: { ...older, detail: "balanced" },
     });
     assert.equal(legacy.study.detail, "medium");
-    // Studies from before solver choice used the direct solver.
+    // Studies from before solver choice used the direct solver, and studies
+    // from before analysis types were linear static.
     assert.equal(legacy.study.solver, "spooles");
+    assert.equal(legacy.study.analysis, "static");
+    const unknown = await fetch(base + "/api/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...project,
+        study: { ...study, analysis: "cfd" },
+      }),
+    });
+    assert.equal(unknown.status, 400);
     await wait(base, legacy.job);
     const { cpus } = await request(base, "/api/health");
     assert.ok(cpus.logical >= cpus.performance && cpus.performance >= 1);
@@ -116,6 +128,16 @@ test("STEP → portable project → reopen → real solve → export", async () 
     // The viewer's binary contract: the client decoder reads what the
     // engine wrote, and its fields agree with the solver summary.
     assert.equal(data.result.stress, undefined);
+    // Result schema 2: one frame, its fields, and generic check rows.
+    assert.equal(data.result.version, 2);
+    assert.equal(data.result.analysis, "static");
+    assert.deepEqual(data.result.fields, ["displacement", "vonMises"]);
+    assert.equal(data.result.frames.length, 1);
+    assert.ok(
+      data.result.checks.some(
+        (c) => c.label === "Force balance error" && c.values[0] < 0.1,
+      ),
+    );
     assert.match(data.result.solver, /incomplete Cholesky/);
     assert.ok(data.result.iterations > 0);
     const response = await fetch(
@@ -132,7 +154,12 @@ test("STEP → portable project → reopen → real solve → export", async () 
       [...new Set(view.triangleFaces)].sort(),
       [1, 2, 3, 4, 5, 6],
     );
-    assert.equal(range(view.vonMises).max, data.result.summary.maxStress);
+    assert.equal(view.frames.length, 1);
+    assert.equal(
+      range(view.fields.vonMises).max,
+      data.result.summary.maxStress,
+    );
+    assert.equal(view.displacement.length, data.mesh.nodeCount * 3);
     const csp = response.headers.get("content-security-policy");
     assert.match(csp, /script-src 'self' 'wasm-unsafe-eval'/);
     const deck = await (
@@ -195,7 +222,11 @@ test("recovery on disk, error statuses, and document pruning", async () => {
     assert.equal(meta.name, "Cantilever beam.step");
     const restored = await request(base, "/api/recovery/open", {});
     assert.equal(restored.sample, "beam");
-    assert.deepEqual(restored.study, { ...study, solver: "spooles" });
+    assert.deepEqual(restored.study, {
+      ...study,
+      solver: "spooles",
+      analysis: "static",
+    });
     assert.equal((await wait(base, restored.job)).hash, geo.hash);
 
     const post = (url, body) =>

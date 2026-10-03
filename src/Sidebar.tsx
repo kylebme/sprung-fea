@@ -23,6 +23,7 @@ export function StudyTree({
   draft,
   section,
   plot,
+  plots,
   busy,
   onSection,
   onAdd,
@@ -36,6 +37,8 @@ export function StudyTree({
   draft: Draft | null;
   section: Section;
   plot: Plot;
+  /** Plots the displayed result can show. */
+  plots: Plot[];
   busy: boolean;
   onSection: (s: Section) => void;
   onAdd: (kind: "support" | "load") => void;
@@ -143,13 +146,13 @@ export function StudyTree({
             onClick={() => onSection("results")}
             disabled={busy}
           />
-          {(Object.keys(PLOTS) as Plot[]).map((k) => (
+          {plots.map((k) => (
             <Node
               key={k}
               depth={2}
               label={PLOTS[k].name}
               active={section === "results" && plot === k}
-              disabled={busy || (k === "safety" && !study.material?.yield)}
+              disabled={busy}
               onClick={() => onPlot(k)}
             />
           ))}

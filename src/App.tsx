@@ -27,6 +27,7 @@ import {
   history,
   marginScale,
   meshStillValid,
+  normalizeResult,
   previewStudy,
   restoreResults,
   type Draft,
@@ -34,7 +35,14 @@ import {
   type HistoryAction,
   type SavedResults,
 } from "./logic";
-import { PLOTS, STAGES, blankLoad, blankSupport, stripExt } from "./labels";
+import {
+  ANALYSES,
+  PLOTS,
+  STAGES,
+  blankLoad,
+  blankSupport,
+  stripExt,
+} from "./labels";
 import { StartScreen, type Recovery } from "./StartScreen";
 import { FaceList, StudyTree, type Section } from "./Sidebar";
 import { Console, JobCard, type Job, type LogEntry } from "./Console";
@@ -65,10 +73,17 @@ import {
   type Cpus,
 } from "./types";
 import {
+  atFrame,
+  availablePlots,
   decodeView,
   fromBase64,
+  hasResults,
   movement,
   nodeProbe,
+  peak,
+  plotRange,
+  plotValues,
+  probeValue,
   range,
   surfaceCsv,
   toBase64,
@@ -127,6 +142,7 @@ export default function App() {
     [error, setError] = useState<Failure | null>(null),
     [notice, setNotice] = useState(""),
     [plot, setPlot] = useState<Plot>("stress"),
+    [frame, setFrame] = useState(0),
     [deform, setDeform] = useState<"off" | "true" | "auto">("off"),
     [wire, setWire] = useState(false),
     [probe, setProbe] = useState<Probe | null>(null),
@@ -336,11 +352,12 @@ export default function App() {
       try {
         view = restored && decodeView(fromBase64(restored.view));
       } catch {}
-      if (restored && view?.vonMises) {
-        setMesh({ ...restored.mesh, view });
-        setResult({ ...restored.result, view });
+      if (restored && hasResults(view)) {
+        setMesh({ ...restored.mesh, view: view! });
+        setResult({ ...restored.result, view: view! });
         setFromProject(true);
         setPlot("stress");
+        setFrame(0);
         setDeform("off");
         setSection("results");
         write("open", "Results loaded from the project", "done");
@@ -482,19 +499,27 @@ export default function App() {
         setWire(true);
         setSection("mesh");
       } else {
-        const r: Result = { ...(data.result as ResultInfo), view };
+        const r: Result = {
+          ...normalizeResult(data.result as ResultInfo),
+          view,
+        };
         setResult(r);
         setProbe(null);
         setFromProject(false);
         setWire(false);
         setPlot("stress");
+        setFrame(0);
         setDeform("off");
         setSection("results");
         setSelected([]);
         if (refine && prior) setComparison({ before: prior, after: r });
+        const balance = r.summary.forceBalanceError;
         write(
           "solve",
-          `done in ${fmt(data.result.summary.seconds, 2)} s · force balance error ${fmt(data.result.summary.forceBalanceError * 100, 4)}%`,
+          `done in ${fmt(r.summary.seconds, 2)} s` +
+            (balance === undefined
+              ? ""
+              : ` · force balance error ${fmt(balance * 100, 4)}%`),
           "done",
         );
       }
@@ -623,59 +648,52 @@ export default function App() {
     part?.geometry.faces
       .filter((f) => selected.includes(f.id))
       .reduce((sum, f) => sum + f.area, 0) || 0;
+  // The displayed frame of the result, and what it can show.
+  const shown = useMemo(
+    () => (result ? atFrame(result.view, frame) : null),
+    [result, frame],
+  );
+  const yieldStrength = study.material?.yield || null;
+  const plots = shown ? availablePlots(shown, yieldStrength) : [];
+  const activePlot: Plot = plots.includes(plot) ? plot : plots[0] || plot;
+  const stats = useMemo(() => {
+    if (!shown || !plots.length) return null;
+    const stress = shown.fields.vonMises;
+    const minSafety =
+      yieldStrength && stress ? yieldStrength / (range(stress).max || 1) : null;
+    const marginMax = marginScale(minSafety);
+    const values = plotValues(shown, activePlot, yieldStrength, marginMax);
+    return {
+      marginMax,
+      maxMovement: shown.displacement ? range(movement(shown)).max : 0,
+      peak: peak(shown, activePlot, yieldStrength),
+      min: range(values).min,
+      scale: plotRange(shown, activePlot, yieldStrength, marginMax),
+    };
+  }, [shown, activePlot, yieldStrength, plots.length]);
+  const marginMax = stats?.marginMax ?? 5;
   const autoScale =
-    result && part
-      ? (Math.max(...part.geometry.dimensions) * 0.08) /
-        (result.summary.maxMovement || 1)
+    part && stats?.maxMovement
+      ? (Math.max(...part.geometry.dimensions) * 0.08) / stats.maxMovement
       : 0;
   const deformation =
-    result && mesh
+    result && mesh && shown?.displacement
       ? deform === "auto"
         ? autoScale
         : deform === "true"
           ? 1
           : 0
       : 0;
-  const yieldStrength = study.material?.yield || null;
-  const marginMax = marginScale(result?.summary.minSafety ?? null);
-  const extremes = useMemo(
-    () =>
-      result && {
-        minStress: range(result.view.vonMises!).min,
-        minMovement: range(movement(result.view)).min,
-      },
-    [result],
-  );
-  const legendMax = result
-    ? plot === "stress"
-      ? result.summary.maxStress
-      : plot === "movement"
-        ? result.summary.maxMovement
-        : marginMax
-    : 0;
-  const probeValues =
-    result && probe
-      ? {
-          stress: probe.stress,
-          movement: Math.hypot(...probe.displacement),
-          margin:
-            yieldStrength && probe.stress > 0
-              ? yieldStrength / probe.stress
-              : null,
-        }
-      : null;
-  const probeLabel = probeValues
-    ? plot === "stress"
-      ? fmt(probeValues.stress, 3) + " MPa"
-      : plot === "movement"
-        ? fmt(probeValues.movement, 4) + " mm"
-        : probeValues.margin
-          ? fmt(probeValues.margin, 2) + "×"
-          : null
-    : null;
+  const probeAt =
+    result && probe ? probeValue(probe, activePlot, yieldStrength) : null;
+  const probeLabel =
+    probeAt === null
+      ? null
+      : activePlot === "safety"
+        ? fmt(probeAt, 2) + "×"
+        : fmt(probeAt, PLOTS[activePlot].digits) + " " + PLOTS[activePlot].unit;
   const csv = async () => {
-    if (result)
-      await saveFile("bettersim-surface-nodes.csv", surfaceCsv(result.view));
+    if (shown) await saveFile("bettersim-surface-nodes.csv", surfaceCsv(shown));
   };
   const exportSolver = async (kind: "deck" | "log" | "frd") => {
     if (!part) return;
@@ -775,21 +793,26 @@ export default function App() {
       case "results":
         return (
           result &&
-          extremes && (
+          shown &&
+          stats && (
             <ResultsPanel
               result={result}
               mesh={mesh}
               study={study}
-              plot={plot}
-              extremes={extremes}
+              plot={activePlot}
+              stats={stats}
+              frame={frame}
+              onFrame={(k) => {
+                setFrame(k);
+                setProbe(null);
+              }}
               deform={deform}
               autoScale={autoScale}
               wire={wire}
               probe={probe}
-              probeValues={probeValues}
               filters={filters!}
               bounds={part.geometry.bounds}
-              scaleMax={legendMax}
+              scale={stats.scale}
               sectionArea={sectionArea}
               onFilters={setFilters}
               comparison={comparison}
@@ -798,7 +821,7 @@ export default function App() {
               onDeform={setDeform}
               onWire={setWire}
               onProbe={(node) =>
-                setProbe(node === null ? null : nodeProbe(result.view, node))
+                setProbe(node === null ? null : nodeProbe(shown, node))
               }
               onRefine={() => run("solve", true)}
               onCsv={csv}
@@ -869,7 +892,7 @@ export default function App() {
               <span className="sep">/</span>
               <span>{stripExt(part.name)}</span>
               <span className="sep">/</span>
-              <span className="faint">Linear static</span>
+              <span className="faint">{ANALYSES[study.analysis].name}</span>
             </>
           )}
         </div>
@@ -974,7 +997,8 @@ export default function App() {
               result={result}
               draft={draft}
               section={section}
-              plot={plot}
+              plot={activePlot}
+              plots={plots}
               busy={!!job}
               onSection={chooseSection}
               onAdd={add}
@@ -1003,8 +1027,8 @@ export default function App() {
               <Viewer
                 ref={viewer}
                 geometry={part.geometry}
-                view={result?.view || mesh?.view || null}
-                plot={result ? plot : null}
+                view={shown || mesh?.view || null}
+                plot={result && plots.length ? activePlot : null}
                 study={shownStudy}
                 selected={selected}
                 hovered={hover}
@@ -1026,8 +1050,13 @@ export default function App() {
               <div className="vlabel">
                 {result ? (
                   <>
-                    <b>{PLOTS[plot].name}</b>
-                    <span>{PLOTS[plot].unit} · nodal</span>
+                    <b>{PLOTS[activePlot].name}</b>
+                    <span>
+                      {PLOTS[activePlot].unit} · nodal
+                      {result.frames.length > 1
+                        ? " · " + result.frames[frame]?.label
+                        : ""}
+                    </span>
                   </>
                 ) : draft ? (
                   <>
@@ -1104,27 +1133,31 @@ export default function App() {
                   <Camera size={14} />
                 </button>
               </div>
-              {result && (
+              {result && stats && (
                 <div
                   className="legend"
-                  aria-label={PLOTS[plot].name + " scale"}
+                  aria-label={PLOTS[activePlot].name + " scale"}
                 >
                   <div
                     className="bar"
                     style={{
-                      background: `linear-gradient(to top,${(plot === "safety" ? [...palette].reverse() : palette).join(",")})`,
+                      background: `linear-gradient(to top,${(activePlot === "safety" ? [...palette].reverse() : palette).join(",")})`,
                     }}
                   />
                   {[1, 0.75, 0.5, 0.25, 0].map((f) => (
                     <span key={f}>
-                      {plot === "safety" && f === 1
+                      {activePlot === "safety" && f === 1
                         ? marginMax + "+"
-                        : fmt(f * legendMax, 3)}
+                        : fmt(
+                            stats.scale.min +
+                              f * (stats.scale.max - stats.scale.min),
+                            3,
+                          )}
                     </span>
                   ))}
                 </div>
               )}
-              {result && (
+              {result && shown?.displacement && (
                 <div className="vchip">
                   {deform === "off"
                     ? "Undeformed"

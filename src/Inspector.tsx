@@ -23,7 +23,7 @@ import {
   stripExt,
 } from "./labels";
 import { Head, NumberField, Row } from "./ui";
-import type { Probe } from "./viewData";
+import { probeValue, type Probe } from "./viewData";
 import {
   MATERIALS,
   type Axis,
@@ -650,27 +650,29 @@ export function MeshPanel({
   );
 }
 
-export type ProbeValues = {
-  stress: number;
-  movement: number;
-  margin: number | null;
-};
 export type Comparison = { before: Result; after: Result };
+/** Peak, minimum and color-scale range of the displayed plot. */
+export type PlotStats = {
+  peak: { value: number; node: number };
+  min: number;
+  scale: { min: number; max: number };
+};
 
 export function ResultsPanel({
   result,
   mesh,
   study,
   plot,
-  extremes,
+  stats,
+  frame,
+  onFrame,
   deform,
   autoScale,
   wire,
   probe,
-  probeValues,
   filters,
   bounds,
-  scaleMax,
+  scale,
   sectionArea,
   onFilters,
   comparison,
@@ -688,15 +690,16 @@ export function ResultsPanel({
   mesh: Mesh | null;
   study: Study;
   plot: Plot;
-  extremes: { minStress: number; minMovement: number };
+  stats: PlotStats;
+  frame: number;
+  onFrame: (k: number) => void;
   deform: "off" | "true" | "auto";
   autoScale: number;
   wire: boolean;
   probe: Probe | null;
-  probeValues: ProbeValues | null;
   filters: Filters;
   bounds: number[];
-  scaleMax: number;
+  scale: { min: number; max: number };
   sectionArea: number | null;
   onFilters: (f: Filters) => void;
   comparison: Comparison | null;
@@ -712,26 +715,22 @@ export function ResultsPanel({
 }) {
   const s = result.summary;
   const yieldStrength = study.material?.yield || null;
-  const peak =
-    plot === "stress"
-      ? { value: fmt(s.maxStress, 2), node: s.stressNode, label: "Maximum" }
-      : plot === "movement"
-        ? {
-            value: fmt(s.maxMovement, 4),
-            node: s.movementNode,
-            label: "Maximum",
-          }
-        : {
-            value: s.minSafety ? fmt(s.minSafety, 2) : "—",
-            node: s.stressNode,
-            label: "Minimum",
-          };
+  const low = plot === "safety";
+  const digits = plot === "stress" ? 2 : PLOTS[plot].digits;
+  const peak = {
+    value: fmt(stats.peak.value, digits),
+    node: stats.peak.node,
+    label: low ? "Minimum" : "Maximum",
+  };
   const solverNote = fromProject
     ? "Loaded from the project. Solve again to regenerate solver files."
     : undefined;
   return (
     <>
       <Head small="Result" title={PLOTS[plot].name} />
+      {result.frames.length > 1 && (
+        <FramePicker result={result} frame={frame} onFrame={onFrame} />
+      )}
       <div className="sec">
         <div className="big">
           <strong>{peak.value}</strong>
@@ -745,9 +744,7 @@ export function ResultsPanel({
           </Row>
         ) : (
           <Row label="Minimum">
-            {plot === "stress"
-              ? fmt(extremes.minStress, 3)
-              : fmt(extremes.minMovement, 4)}
+            {fmt(stats.min, PLOTS[plot].digits)}
             <em>{PLOTS[plot].unit}</em>
           </Row>
         )}
@@ -760,30 +757,32 @@ export function ResultsPanel({
       </div>
       <div className="sec">
         <h4>Display</h4>
-        <div className="field">
-          <span>Shape</span>
-          <div className="seg" role="group" aria-label="Shape">
-            <button
-              className={deform === "off" ? "on" : ""}
-              onClick={() => onDeform("off")}
-            >
-              Undeformed
-            </button>
-            <button
-              className={deform === "true" ? "on" : ""}
-              onClick={() => onDeform("true")}
-            >
-              1×
-            </button>
-            <button
-              className={deform === "auto" ? "on" : ""}
-              onClick={() => onDeform("auto")}
-              aria-label="Magnified"
-            >
-              {fmt(autoScale, autoScale >= 100 ? 0 : 1)}×
-            </button>
+        {autoScale > 0 && (
+          <div className="field">
+            <span>Shape</span>
+            <div className="seg" role="group" aria-label="Shape">
+              <button
+                className={deform === "off" ? "on" : ""}
+                onClick={() => onDeform("off")}
+              >
+                Undeformed
+              </button>
+              <button
+                className={deform === "true" ? "on" : ""}
+                onClick={() => onDeform("true")}
+              >
+                1×
+              </button>
+              <button
+                className={deform === "auto" ? "on" : ""}
+                onClick={() => onDeform("auto")}
+                aria-label="Magnified"
+              >
+                {fmt(autoScale, autoScale >= 100 ? 0 : 1)}×
+              </button>
+            </div>
           </div>
-        </div>
+        )}
         <div className="switch-row">
           <span>Mesh edges</span>
           <button
@@ -798,7 +797,7 @@ export function ResultsPanel({
       <div className="sec probe-card">
         <h4>
           Probe
-          {probeValues ? (
+          {probe ? (
             <button className="link" onClick={() => onProbe(null)}>
               Clear
             </button>
@@ -806,7 +805,7 @@ export function ResultsPanel({
             <span className="mono">click model</span>
           )}
         </h4>
-        {probeValues && probe ? (
+        {probe ? (
           <>
             <Row label="At">
               {probe.node === null ? "Interpolated" : "Node " + probe.node}
@@ -815,22 +814,19 @@ export function ResultsPanel({
               {probe.point.map((n) => fmt(n, 2)).join(", ")}
               <em>mm</em>
             </Row>
-            <Row label="Stress">
-              {fmt(probeValues.stress, 3)}
-              <em>MPa</em>
-            </Row>
-            <Row label="Displacement">
-              {fmt(probeValues.movement, 5)}
-              <em>mm</em>
-            </Row>
-            {probeValues.margin && (
-              <Row label="Yield margin">
-                {probeValues.margin >= 1000
-                  ? "> 1000"
-                  : fmt(probeValues.margin, 2)}
-                <em>×</em>
-              </Row>
-            )}
+            {PROBE_ROWS.map(({ plot: p, label, digits }) => {
+              const value = probeValue(probe, p, yieldStrength);
+              return (
+                value !== null && (
+                  <Row key={p} label={label}>
+                    {p === "safety" && value >= 1000
+                      ? "> 1000"
+                      : fmt(value, digits)}
+                    <em>{p === "safety" ? "×" : PLOTS[p].unit}</em>
+                  </Row>
+                )
+              );
+            })}
           </>
         ) : (
           <p className="note" style={{ marginTop: 0 }}>
@@ -842,7 +838,7 @@ export function ResultsPanel({
         filters={filters}
         plot={plot}
         bounds={bounds}
-        scaleMax={scaleMax}
+        scale={scale}
         sectionArea={sectionArea}
         onChange={onFilters}
       />
@@ -856,7 +852,7 @@ export function ResultsPanel({
             <Row label="Displacement change">
               {fmt(
                 Math.abs(
-                  s.maxMovement / comparison.before.summary.maxMovement - 1,
+                  s.maxMovement! / comparison.before.summary.maxMovement! - 1,
                 ) * 100,
                 2,
               )}
@@ -865,7 +861,7 @@ export function ResultsPanel({
             <Row label="Peak stress change">
               {fmt(
                 Math.abs(
-                  s.maxStress / comparison.before.summary.maxStress - 1,
+                  s.maxStress! / comparison.before.summary.maxStress! - 1,
                 ) * 100,
                 2,
               )}
@@ -934,20 +930,25 @@ function FilterControls({
   filters,
   plot,
   bounds,
-  scaleMax,
+  scale,
   sectionArea,
   onChange,
 }: {
   filters: Filters;
   plot: Plot;
   bounds: number[];
-  scaleMax: number;
+  scale: { min: number; max: number };
   sectionArea: number | null;
   onChange: (f: Filters) => void;
 }) {
   const { section, iso, threshold } = filters;
   const unit = PLOTS[plot].unit;
-  const digits = plot === "movement" ? 4 : plot === "stress" ? 2 : 1;
+  const digits =
+    plot === "movement"
+      ? 4
+      : plot === "stress" || plot === "temperature"
+        ? 2
+        : 1;
   const [lo, hi] = [bounds[section.axis], bounds[section.axis + 3]];
   const set = <K extends keyof Filters>(key: K, changes: Partial<Filters[K]>) =>
     onChange({ ...filters, [key]: { ...filters[key], ...changes } });
@@ -968,7 +969,11 @@ function FilterControls({
       <span>
         {label}
         <b className="mono">
-          {fmt(filters[key].level * scaleMax, digits)} {unit}
+          {fmt(
+            scale.min + filters[key].level * (scale.max - scale.min),
+            digits,
+          )}{" "}
+          {unit}
         </b>
       </span>
       <input
@@ -1049,6 +1054,53 @@ function FilterControls({
         Filters use the plotted quantity. Click a section or surface to probe
         it.
       </p>
+    </div>
+  );
+}
+
+/** Probe card rows, shown when the probed frame has the quantity. */
+const PROBE_ROWS: { plot: Plot; label: string; digits: number }[] = [
+  { plot: "stress", label: "Stress", digits: 3 },
+  { plot: "movement", label: "Displacement", digits: 5 },
+  { plot: "safety", label: "Yield margin", digits: 2 },
+  { plot: "temperature", label: "Temperature", digits: 2 },
+  { plot: "plastic", label: "Plastic strain", digits: 5 },
+];
+
+/** Chooses the displayed frame: a mode, increment, or frequency. */
+function FramePicker({
+  result,
+  frame,
+  onFrame,
+}: {
+  result: Result;
+  frame: number;
+  onFrame: (k: number) => void;
+}) {
+  const frames = result.frames;
+  const label = (k: number) => {
+    const f = frames[k];
+    return f.value === null
+      ? f.label
+      : `${f.label} · ${fmt(f.value, 4)} ${f.unit}`.trim();
+  };
+  return (
+    <div className="sec">
+      <label className="field">
+        <span>
+          Showing
+          <b className="mono">{label(frame)}</b>
+        </span>
+        <input
+          type="range"
+          aria-label="Result frame"
+          min={0}
+          max={frames.length - 1}
+          step={1}
+          value={frame}
+          onChange={(e) => onFrame(Number(e.target.value))}
+        />
+      </label>
     </div>
   );
 }

@@ -1,4 +1,6 @@
 export const SOLVERS = ["spooles", "iterative-scaling", "iterative-cholesky"];
+/** Analysis types the engine implements (engine/analyses.py). */
+export const ANALYSES = ["static"];
 // Errors caused by the request itself; the service reports them as 400.
 export class RequestError extends Error {
   status = 400;
@@ -40,8 +42,12 @@ export function validateStudy(s) {
   if (!["coarse", "medium", "fine", "custom"].includes(s.detail))
     throw new RequestError("The mesh detail setting is invalid.");
   number(s.meshSize, "Mesh size", { positive: true });
-  // Studies saved before solver choice used the direct solver.
+  // Studies saved before solver choice used the direct solver, and studies
+  // saved before analysis types were linear static.
   s.solver ??= "spooles";
+  s.analysis ??= "static";
+  if (!ANALYSES.includes(s.analysis))
+    throw new RequestError("This analysis type is not available.");
   if (!SOLVERS.includes(s.solver))
     throw new RequestError("The solver setting is invalid.");
   if (s.material) {

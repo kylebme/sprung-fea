@@ -1,4 +1,5 @@
-import type { ViewData } from "./viewData";
+import type { Plot, ViewData } from "./viewData";
+export type { Plot };
 export type Face = {
   id: number;
   name: string;
@@ -47,7 +48,10 @@ export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
  */
 export type Threads = "auto" | "single" | "all";
 export type Cpus = { logical: number; performance: number };
+/** Analysis types; projects saved before the choice are linear static. */
+export type Analysis = "static";
 export type Study = {
+  analysis: Analysis;
   material: Material | null;
   supports: Support[];
   loads: Load[];
@@ -63,18 +67,36 @@ export type MeshInfo = {
 };
 /** Mesh arrays for display come from the engine's binary view file. */
 export type Mesh = MeshInfo & { view: ViewData };
+/** Summary numbers. Static results fill the force fields. */
 export type Summary = {
-  maxStress: number;
-  maxMovement: number;
-  minSafety: number | null;
-  reactions: number[];
-  stressNode: number;
-  movementNode: number;
   seconds: number;
-  appliedForce: number[];
-  forceBalanceError: number;
+  maxStress?: number;
+  maxMovement?: number;
+  minSafety?: number | null;
+  reactions?: number[];
+  stressNode?: number;
+  movementNode?: number;
+  appliedForce?: number[];
+  forceBalanceError?: number;
+  [key: string]: unknown;
+};
+/** One result frame: a load step, mode, increment or frequency. */
+export type FrameInfo = { label: string; value: number | null; unit: string };
+/** A row of the console's Checks tab. */
+export type Check = { label: string; values: number[]; unit: string };
+export type Chart = {
+  id: string;
+  title: string;
+  x: { label: string; unit: string; values: number[] };
+  series: { label: string; unit: string; values: number[] }[];
 };
 export type ResultInfo = {
+  /** Result schema version; results saved before 2 are linear static. */
+  version: number;
+  analysis: Analysis;
+  frames: FrameInfo[];
+  checks: Check[];
+  charts: Chart[];
   summary: Summary;
   warnings: string[];
   solver: string;
@@ -93,7 +115,6 @@ export type Part = {
   geometry: Geometry;
   sample?: "beam" | "bracket";
 };
-export type Plot = "stress" | "movement" | "safety";
 export type Axis = 0 | 1 | 2;
 /**
  * Result filters, applied in the viewer. The section cuts away the part
@@ -139,6 +160,7 @@ export const MATERIALS: Material[] = [
   },
 ];
 export const emptyStudy = (): Study => ({
+  analysis: "static",
   material: null,
   supports: [],
   loads: [],

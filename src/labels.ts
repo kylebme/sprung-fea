@@ -1,5 +1,5 @@
 import { fmt } from "./logic";
-import type { Load, Plot, Solver, Study, Support } from "./types";
+import type { Analysis, Load, Plot, Solver, Study, Support } from "./types";
 
 export const DETAILS = [
   { id: "coarse", name: "Coarse", factor: 1.5 },
@@ -29,10 +29,21 @@ export const SOLVERS: { id: Solver; name: string; note: string }[] = [
     note: "Conjugate gradients with the least memory. Needs more iterations.",
   },
 ];
-export const PLOTS: Record<Plot, { name: string; unit: string }> = {
-  stress: { name: "von Mises stress", unit: "MPa" },
-  movement: { name: "Displacement", unit: "mm" },
-  safety: { name: "Yield margin", unit: "× yield" },
+export const PLOTS: Record<
+  Plot,
+  { name: string; unit: string; digits: number }
+> = {
+  stress: { name: "von Mises stress", unit: "MPa", digits: 3 },
+  movement: { name: "Displacement", unit: "mm", digits: 4 },
+  safety: { name: "Yield margin", unit: "× yield", digits: 2 },
+  temperature: { name: "Temperature", unit: "°C", digits: 2 },
+  plastic: { name: "Plastic strain", unit: "mm/mm", digits: 5 },
+};
+export const ANALYSES: Record<Analysis, { name: string; note: string }> = {
+  static: {
+    name: "Linear static",
+    note: "Stress and deflection under steady loads.",
+  },
 };
 /** Short console labels for worker stages. */
 export const STAGES: Record<string, string> = {
