@@ -79,6 +79,8 @@ See `docs/validation.md` for measured results and their limits. The generator cr
 
 ## Architecture
 
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the implemented architecture, numerical pipeline, API and persistence contracts, validation coverage, and proposed extension sequence.
+
 - `src/`: study state, face-aware Three.js view, contextual editors, contour/probe UI.
 - `electron/`: sandboxed desktop shell and native save dialog.
 - `server/`: loopback-only service, bounded file import, portable project handling, cancellable isolated jobs.
