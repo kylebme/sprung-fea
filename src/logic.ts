@@ -3,8 +3,8 @@ import type {
   Face,
   Load,
   Material,
-  Mesh,
-  Result,
+  MeshInfo,
+  ResultInfo,
   Study,
   Support,
 } from "./types";
@@ -124,38 +124,35 @@ export function sameValue(a: unknown, b: unknown): boolean {
   );
 }
 
+/** Results embedded in a project: the engine's view file in base64. */
 export type SavedResults = {
   hash: string;
   study: Study;
-  mesh: Mesh;
-  result: Result;
+  mesh: MeshInfo;
+  result: ResultInfo;
+  view: string;
 };
 
 /**
  * Results saved in a project are shown again only for the same geometry and
- * study, and only if their arrays are consistent.
+ * study. The caller still decodes `view`, which checks the arrays.
  */
 export function restoreResults(
   saved: unknown,
   hash: string,
   study: Study,
-): { mesh: Mesh; result: Result } | null {
+): Omit<SavedResults, "hash" | "study"> | null {
   if (!saved || typeof saved !== "object") return null;
   const s = saved as Partial<SavedResults>;
   if (s.hash !== hash || !sameValue(s.study, study)) return null;
-  const n = s.mesh?.surface?.nodeIds?.length;
-  const r = s.result;
   if (
-    !n ||
-    !r ||
-    s.mesh!.surface.positions?.length !== n * 3 ||
-    r.stress?.length !== n ||
-    r.movement?.length !== n ||
-    r.displacements?.length !== n ||
-    !r.summary
+    typeof s.view !== "string" ||
+    !s.mesh?.elementCount ||
+    !s.result?.summary ||
+    !Array.isArray(s.result.warnings)
   )
     return null;
-  return { mesh: s.mesh!, result: r };
+  return { mesh: s.mesh, result: s.result, view: s.view };
 }
 
 /** Next focus position for arrow-key navigation in a vertical list. */

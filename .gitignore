@@ -12,3 +12,5 @@ runtime/
 *.tsbuildinfo
 
 .cad-venv/
+
+public/vtk-wasm/

@@ -6,7 +6,7 @@ This document describes the implemented application, its numerical and persisten
 
 ## 1. Scope and product decisions
 
-BetterSim performs linear static structural analysis of one STEP solid using CalculiX. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and Three.js provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
+BetterSim performs linear static structural analysis of one STEP solid using CalculiX. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
 
 The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A study tree with the part's face list on the left, the model view in the center, and an inspector on the right keep these dependencies visible. A collapsible console under the view holds job output and solver checks. Light and dark themes follow the system setting until the user picks one. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
 
@@ -20,13 +20,13 @@ Implemented analysis inputs are:
 - A total vector force distributed over selected faces, normal pressure, and gravity.
 - Curvature-aware quadratic tetrahedral meshing, with detail presets and an explicit target size.
 
-Results include equivalent stress, displacement magnitude, yield margin, support reactions, force balance, a node probe, and a finer-mesh comparison. All numerical results come from the actual solver pipeline.
+Results include equivalent stress, displacement magnitude, yield margin, support reactions, force balance, interpolated and nodal probes, section planes, iso-surfaces, thresholds, and a finer-mesh comparison. All numerical results come from the actual solver pipeline.
 
 ## 2. Architecture and source ownership
 
 ```mermaid
 flowchart LR
-    Shell[Electron shell] --> UI[React and Three.js renderer]
+    Shell[Electron shell] --> UI[React renderer with VTK.wasm view]
     UI --> Service[Loopback Node service]
     Service --> Worker[Isolated Python or bundled worker]
     Worker --> CAD[OpenCASCADE and Gmsh]
@@ -41,7 +41,8 @@ flowchart LR
 | [src/App.tsx](src/App.tsx) | Application state, job polling, autosave, project save/open, exports, and layout |
 | [src/logic.ts](src/logic.ts) | Pure study logic: undo/redo history, draft previews, saved-result validation, yield-margin scale, and material edits |
 | [src/Sidebar.tsx](src/Sidebar.tsx), [src/Inspector.tsx](src/Inspector.tsx), [src/Console.tsx](src/Console.tsx), [src/StartScreen.tsx](src/StartScreen.tsx) | Study tree and face list, per-section inspector panels, output/checks console and job progress, and start screen |
-| [src/Viewer.tsx](src/Viewer.tsx) | CAD-face rendering, selection and hover, camera controls, condition annotations, mesh display, contours, deformation, and node picking |
+| [src/Viewer.tsx](src/Viewer.tsx), [src/scene.ts](src/scene.ts) | VTK.wasm view: CAD-face rendering, selection and hover, camera controls, condition annotations, mesh display, contours, deformation, picking, probes, sections, iso-surfaces, and thresholds |
+| [src/viewData.ts](src/viewData.ts) | Decoding of the engine's binary view file, setup triangulation, derived fields, probes at nodes, and surface CSV |
 | [src/types.ts](src/types.ts) | Renderer domain types, material presets, and initial study values |
 | [src/api.ts](src/api.ts) | Local HTTP requests and browser/native file-save bridge |
 | [electron/main.cjs](electron/main.cjs) | Window lifecycle, local service startup, packaged engine paths, application menus, and native save dialogs |
@@ -115,15 +116,17 @@ Condition editors use drafts: selecting faces and changing values does not modif
 
 Physical study edits invalidate results. Mesh-size edits invalidate both mesh and results. Camera movement, plot choice, node probing, and deformation display do not change the physical setup. Undo/redo stores up to 30 study edits; undoing a physical edit does not silently resurrect a previously computed result, and keeps the mesh when the element size is unchanged. In the desktop app, Edit > Undo and Redo apply to the focused text field, or otherwise to the study history. Jobs don't block the window: the view stays usable and the inspector is inert until the job finishes or is cancelled.
 
-The viewer provides stress, movement, and yield-margin plots; original, true-scale, and magnified shape display; and an explicit deformation multiplier. Left-drag rotates freely (trackball, no fixed up axis), right-drag pans, and scroll zooms. Perspective is the default; an orthographic projection can be chosen in the view toolbar and is remembered. Resizing the view keeps the camera. Clicking the model probes the nearest rendered result node. Show in view probes the extremum for the active plot; the probed value is labelled in the view. Force balance, reactions, and solver details are in the console's Checks tab. The yield-margin scale runs from 0 to 5 when the part yields and widens (to 10, 20, 50, …) for safer parts, so variation stays visible.
+The viewer provides stress, movement, and yield-margin plots; original, true-scale, and magnified shape display; and an explicit deformation multiplier. Left-drag rotates freely (trackball, no fixed up axis), right-drag pans, and scroll zooms. Perspective is the default; an orthographic projection can be chosen in the view toolbar and is remembered. Resizing the view keeps the camera. Clicking the model, a section, an iso-surface or a threshold boundary probes there: stress and displacement are interpolated inside the containing quadratic tetrahedron, and the undeformed position is reported. Show in view probes the extreme node for the active plot exactly. The probed value is labelled in the view.
+
+Result filters act on the volume. A section plane normal to X, Y or Z clips the part and shows the cut colored by the plotted quantity, with its area. An iso-surface shows where the plotted quantity equals a level. A threshold shows the critical region: stress or displacement above a level, or yield margin below it. Filters act on the displayed (deformed) shape and combine with the section. Their design is recorded in [vtk-wasm.md](docs/vtk-wasm.md). Force balance, reactions, and solver details are in the console's Checks tab. The yield-margin scale runs from 0 to 5 when the part yields and widens (to 10, 20, 50, …) for safer parts, so variation stays visible.
 
 Refinement reduces the current mesh size to 70%, reruns the analysis, and compares maximum movement and peak stress with the previous result. One comparison is evidence of sensitivity, not an automatic convergence certificate. Sharp support edges and corners may produce increasing peak stress.
 
-Exports available in the interface are portable projects, surface-node CSV, viewport PNG, solver input, FRD results, and solver log. The service also exposes the raw mesh.
+Exports available in the interface are portable projects, surface-node CSV, viewport PNG, solver input, FRD results, and solver log. The service also exposes the raw mesh and the binary view file.
 
 ## 6. Service and worker protocol
 
-The service binds to `127.0.0.1`: port 4318 during normal browser development and an allocated port inside the desktop application. Workers receive a command and document directory as arguments, and study JSON on stdin. Stdout contains the final JSON response; stderr carries progress messages and diagnostics.
+The service binds to `127.0.0.1`: port 4318 during normal browser development and an allocated port inside the desktop application. Workers receive a command and document directory as arguments, and study JSON on stdin. Stdout contains the final JSON response (mesh metadata and the result summary); stderr carries progress messages and diagnostics. Mesh and nodal arrays go to `view.bin` in the document directory instead of stdout.
 
 | Endpoint | Behavior |
 |---|---|
@@ -134,6 +137,7 @@ The service binds to `127.0.0.1`: port 4318 during normal browser development an
 | `DELETE /api/jobs/:id` | Cancel a running job |
 | `POST /api/documents/:id/mesh` | Generate a mesh for the submitted study |
 | `POST /api/documents/:id/solve` | Mesh and solve the submitted study |
+| `GET /api/documents/:id/view` | Binary mesh and nodal results for the viewer (`view.bin`, layout in [vtk-wasm.md](docs/vtk-wasm.md)) |
 | `POST /api/documents/:id/save` | Serialize the embedded STEP and study |
 | `POST /api/open` | Validate and import a portable project |
 | `GET`/`POST /api/recovery` | Read or update the autosaved study |
@@ -142,13 +146,13 @@ The service binds to `127.0.0.1`: port 4318 during normal browser development an
 
 One mesh/solve job may run per document. On macOS, cancellation and service shutdown terminate worker process groups, including solver children. The renderer tracks operation sequences so an old job's completion cannot clear the busy state of a newer operation. Completed in-memory job records expire after one hour. Document directories are pruned at startup and hourly: the 40 most recently used are kept unless older than seven days, and documents used in the last hour or with a running job are never removed. Errors map to 400 (invalid request), 404 (missing document or artifact), 413 (too large), or 500 (logged, with a generic message).
 
-The service limits STEP uploads to 50 MB, JSON request bodies to 70 MB (enough for a 50 MB STEP encoded in a project), and worker stdout to 100 MB. Electron disables renderer Node integration, enables context isolation and sandboxing, denies permission requests and new windows, and restricts navigation to the application origin. The service validates local hosts and request origins and rejects cross-site requests. These protections do not constitute a completed independent security audit.
+The service limits STEP uploads to 50 MB, JSON request bodies to 70 MB (enough for a 50 MB STEP encoded in a project), and worker stdout to 100 MB. Electron disables renderer Node integration, enables context isolation and sandboxing, denies permission requests and new windows, and restricts navigation to the application origin. The service validates local hosts and request origins and rejects cross-site requests. Its Content Security Policy allows `'wasm-unsafe-eval'` and `'unsafe-eval'` for scripts because VTK.wasm's Emscripten glue generates functions at runtime; this is a deliberate relaxation, explained in [vtk-wasm.md](docs/vtk-wasm.md). These protections do not constitute a completed independent security audit.
 
 ## 7. Persistence and recovery
 
 A `.bsim` file is JSON with `format: "bettersim"`, `version: 1`, a display name, base64 STEP bytes, and the study definition. Opening checks the format/version, study schema, STEP header, and file-size limit, then reimports the embedded geometry.
 
-Saving after a solve also embeds the surface mesh and results with the geometry hash and study they belong to. Opening shows them again only when both match exactly; otherwise they are skipped. Solver artifacts are not embedded, so their exports need a new solve.
+Saving after a solve also embeds the binary view file (volume mesh and nodal results, base64) and the result summary with the geometry hash and study they belong to. Opening shows them again only when both match exactly; otherwise they are skipped. Solver artifacts are not embedded, so their exports need a new solve.
 
 Autosave keeps one recovery copy, STEP and study, in the service's `recovery/` directory, outside pruning (`GET`/`POST /api/recovery`, `POST /api/recovery/open`). It is a convenience, not a substitute for saving a portable project.
 
@@ -171,7 +175,7 @@ npm run package:mac
 
 `BETTERSIM_PYTHON` overrides the development worker interpreter, and `BETTERSIM_CCX` selects a solver executable. Browser development uses `npm run dev`; `BETTERSIM_CHROMIUM` overrides the browser executable used by end-to-end tests.
 
-The Mac build freezes Python, Gmsh, and NumPy into a standalone worker. The bundler copies CalculiX and its non-system dynamic dependencies, rewrites library references to adjacent bundled files, and signs the relocated binaries. Electron Builder packages the renderer, service, engine, sample STEP files, offline fonts, and license notices. A final script ad-hoc signs and verifies the application.
+The Mac build freezes Python, Gmsh, and NumPy into a standalone worker. The bundler copies CalculiX and its non-system dynamic dependencies, rewrites library references to adjacent bundled files, and signs the relocated binaries. Electron Builder packages the renderer (including the VTK.wasm runtime, about 87 MB), service, engine, sample STEP files, offline fonts, and license notices. A final script ad-hoc signs and verifies the application.
 
 Output is `release/mac-arm64/BetterSim.app`. The tested app needs neither Python nor Homebrew on the destination PATH. `npm run dist:mac` additionally requests a DMG. Apple notarization, Intel Mac packaging, and Windows/Linux packaging remain future work.
 
@@ -179,16 +183,16 @@ BetterSim is GPL-3.0-or-later. Dependency notices and public binary correspondin
 
 ## 9. Acceptance evidence
 
-The recorded baseline passed 18 engine subsystem tests, one local-service acceptance scenario, seven browser scenarios, and a packaged Electron workflow covering the beam and four complex parts. These tests exercise real Gmsh and CalculiX execution.
+After the VTK.wasm viewer rewrite (3 October 2026), 19 engine subsystem tests, the local-service and study-logic tests, ten browser scenarios, and a packaged Electron workflow covering the beam and four complex parts passed. These tests exercise real Gmsh and CalculiX execution.
 
 | Test source | Coverage |
 |---|---|
-| [tests/test_engine.py](tests/test_engine.py) | Analytical bending/extension, units, face identity, supports, forces, pressures, gravity, invalid input, refinement, and nine repeated fixed-mesh solves |
+| [tests/test_engine.py](tests/test_engine.py) | Analytical bending/extension, units, face identity, supports, forces, pressures, gravity, invalid input, refinement, nine repeated fixed-mesh solves, and the viewer file's VTK tetrahedron order |
 | [tests/test_complex_parts.py](tests/test_complex_parts.py) | Independent STEP exporter checks, curved geometry, quadratic mesh quality, equilibrium, load scaling, refinement, and curved pressure references |
-| [tests/server.test.mjs](tests/server.test.mjs) | Import, portable save/open, solve, exports, request/project validation, recovery, error statuses, size limits, and pruning |
+| [tests/server.test.mjs](tests/server.test.mjs) | Import, portable save/open, solve, binary view decoded by the client decoder, exports, request/project validation, recovery, error statuses, size limits, and pruning |
 | [tests/logic.test.ts](tests/logic.test.ts) | Undo history invariants and the guard against showing saved results for a different study |
-| [tests/e2e.spec.ts](tests/e2e.spec.ts) | Full study setup, probing, refinement, project reopening, invalidation, undo, malformed import, complex parts, and toroidal pressure reactions |
-| [tests/desktop.mjs](tests/desktop.mjs) | Packaged app with restricted PATH, bundled engine/solver, complex imports, solves, contours, and peak probes |
+| [tests/e2e.spec.ts](tests/e2e.spec.ts) | Full study setup, probing, section area and section probing, iso-surface, threshold, refinement, project reopening with results, invalidation, undo, malformed import, complex parts, and toroidal pressure reactions |
+| [tests/desktop.mjs](tests/desktop.mjs) | Packaged app with restricted PATH, bundled engine/solver, VTK.wasm under the service CSP, complex imports, solves, contours, sections, and peak probes |
 
 The complex fixtures are a bearing block with fillets and counterbores, a gusseted bracket, a pocketed housing with intersecting bores, and a toroidal elbow with end collars. They contain 10–35 CAD faces. Recorded refined meshes contain up to about 56,000 quadratic elements, with maximum movement changes below 0.5% for these setups. Peak stress on the bracket changes by about 20%, so peak stress convergence is not claimed.
 

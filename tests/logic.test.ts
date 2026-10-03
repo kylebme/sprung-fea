@@ -37,33 +37,15 @@ test("saved results are restored only for the same geometry and study", () => {
   const saved = {
     hash: "abc",
     study: s,
-    mesh: {
-      surface: { positions: [0, 0, 0, 1, 1, 1], nodeIds: [1, 2], faces: [] },
-      size: 2,
-      nodeCount: 2,
-      elementCount: 1,
-      minQuality: 0.5,
-    },
-    result: {
-      displacements: [
-        [0, 0, 0],
-        [0, 0, 1],
-      ],
-      stress: [1, 2],
-      movement: [0, 1],
-      summary: {},
-    },
+    mesh: { size: 2, nodeCount: 2, elementCount: 1, minQuality: 0.5 },
+    result: { summary: {}, warnings: [] },
+    view: "QlNJTVZJRVc=",
   };
-  assert.ok(restoreResults(saved, "abc", { ...s }));
+  assert.equal(restoreResults(saved, "abc", { ...s })?.view, saved.view);
   assert.equal(restoreResults(saved, "other", s), null);
   assert.equal(restoreResults(saved, "abc", study(3)), null);
-  assert.equal(
-    restoreResults(
-      { ...saved, result: { ...saved.result, stress: [1] } },
-      "abc",
-      s,
-    ),
-    null,
-  );
+  // Projects saved before the VTK viewer carry JSON arrays, not a view file.
+  const { view, ...older } = saved;
+  assert.equal(restoreResults(older, "abc", s), null);
   assert.equal(restoreResults(undefined, "abc", s), null);
 });

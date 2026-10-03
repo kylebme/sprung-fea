@@ -22,8 +22,11 @@ import {
   stripExt,
 } from "./labels";
 import { Head, NumberField, Row } from "./ui";
+import type { Probe } from "./viewData";
 import {
   MATERIALS,
+  type Axis,
+  type Filters,
   type Load,
   type Material,
   type Mesh,
@@ -608,8 +611,12 @@ export function ResultsPanel({
   autoScale,
   wire,
   probe,
-  probeIndex,
   probeValues,
+  filters,
+  bounds,
+  scaleMax,
+  sectionArea,
+  onFilters,
   comparison,
   fromProject,
   busy,
@@ -629,9 +636,13 @@ export function ResultsPanel({
   deform: "off" | "true" | "auto";
   autoScale: number;
   wire: boolean;
-  probe: number | null;
-  probeIndex: number;
+  probe: Probe | null;
   probeValues: ProbeValues | null;
+  filters: Filters;
+  bounds: number[];
+  scaleMax: number;
+  sectionArea: number | null;
+  onFilters: (f: Filters) => void;
   comparison: Comparison | null;
   fromProject: boolean;
   busy: boolean;
@@ -739,14 +750,13 @@ export function ResultsPanel({
             <span className="mono">click model</span>
           )}
         </h4>
-        {probeValues && mesh ? (
+        {probeValues && probe ? (
           <>
-            <Row label="Node">{probe}</Row>
+            <Row label="At">
+              {probe.node === null ? "Interpolated" : "Node " + probe.node}
+            </Row>
             <Row label="Position">
-              {mesh.surface.positions
-                .slice(probeIndex * 3, probeIndex * 3 + 3)
-                .map((n) => fmt(n, 2))
-                .join(", ")}
+              {probe.point.map((n) => fmt(n, 2)).join(", ")}
               <em>mm</em>
             </Row>
             <Row label="Stress">
@@ -768,10 +778,18 @@ export function ResultsPanel({
           </>
         ) : (
           <p className="note" style={{ marginTop: 0 }}>
-            Click the model to read values at the nearest node.
+            Click the model or a section to read interpolated values.
           </p>
         )}
       </div>
+      <FilterControls
+        filters={filters}
+        plot={plot}
+        bounds={bounds}
+        scaleMax={scaleMax}
+        sectionArea={sectionArea}
+        onChange={onFilters}
+      />
       <div className="sec">
         <h4>Mesh sensitivity</h4>
         {comparison && (
@@ -853,5 +871,128 @@ export function ResultsPanel({
         at supports and sharp corners can keep rising with refinement.
       </p>
     </>
+  );
+}
+
+function FilterControls({
+  filters,
+  plot,
+  bounds,
+  scaleMax,
+  sectionArea,
+  onChange,
+}: {
+  filters: Filters;
+  plot: Plot;
+  bounds: number[];
+  scaleMax: number;
+  sectionArea: number | null;
+  onChange: (f: Filters) => void;
+}) {
+  const { section, iso, threshold } = filters;
+  const unit = PLOTS[plot].unit;
+  const digits = plot === "movement" ? 4 : plot === "stress" ? 2 : 1;
+  const [lo, hi] = [bounds[section.axis], bounds[section.axis + 3]];
+  const set = <K extends keyof Filters>(key: K, changes: Partial<Filters[K]>) =>
+    onChange({ ...filters, [key]: { ...filters[key], ...changes } });
+  const toggle = (key: keyof Filters, label: string) => (
+    <div className="switch-row">
+      <span>{label}</span>
+      <button
+        className={"switch" + (filters[key].on ? " on" : "")}
+        role="switch"
+        aria-checked={filters[key].on}
+        aria-label={label}
+        onClick={() => set(key, { on: !filters[key].on })}
+      />
+    </div>
+  );
+  const level = (key: "iso" | "threshold", label: string) => (
+    <label className="field">
+      <span>
+        {label}
+        <b className="mono">
+          {fmt(filters[key].level * scaleMax, digits)} {unit}
+        </b>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.005}
+        aria-label={label}
+        value={filters[key].level}
+        onChange={(e) => set(key, { level: Number(e.target.value) })}
+      />
+    </label>
+  );
+  return (
+    <div className="sec filters">
+      <h4>Filters</h4>
+      {toggle("section", "Section")}
+      {section.on && (
+        <>
+          <div className="field">
+            <span>Normal</span>
+            <div className="seg" role="group" aria-label="Section normal">
+              {(["X", "Y", "Z"] as const).map((a, i) => (
+                <button
+                  key={a}
+                  className={section.axis === i ? "on" : ""}
+                  onClick={() =>
+                    set("section", {
+                      axis: i as Axis,
+                      position: (bounds[i] + bounds[i + 3]) / 2,
+                    })
+                  }
+                >
+                  {a}
+                </button>
+              ))}
+              <button
+                aria-pressed={section.flip}
+                className={section.flip ? "on" : ""}
+                onClick={() => set("section", { flip: !section.flip })}
+                title="Keep the other side"
+              >
+                Flip
+              </button>
+            </div>
+          </div>
+          <label className="field">
+            <span>
+              Position
+              <b className="mono">{fmt(section.position, 2)} mm</b>
+            </span>
+            <input
+              type="range"
+              aria-label="Section position"
+              min={lo}
+              max={hi}
+              step={(hi - lo) / 400 || 1}
+              value={section.position}
+              onChange={(e) =>
+                set("section", { position: Number(e.target.value) })
+              }
+            />
+          </label>
+          {sectionArea !== null && (
+            <Row label="Section area">
+              {fmt(sectionArea, 1)}
+              <em>mm²</em>
+            </Row>
+          )}
+        </>
+      )}
+      {toggle("iso", "Iso-surface")}
+      {iso.on && level("iso", "Iso value")}
+      {toggle("threshold", "Threshold")}
+      {threshold.on &&
+        level("threshold", plot === "safety" ? "Show below" : "Show above")}
+      <p className="note">
+        Filters use the plotted quantity. Click a section or surface to probe
+        it.
+      </p>
+    </div>
   );
 }

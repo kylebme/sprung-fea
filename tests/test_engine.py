@@ -50,6 +50,26 @@ class Pipeline(unittest.TestCase):
         self.assertAlmostEqual(self.geo['volume'],20000)
         self.assertGreater(self.mesh['minQuality'],0)
         self.assertEqual(len(self.mesh['elements'][0]),10)
+    def test_view_file_uses_vtk_quadratic_tetra_order(self):
+        mesh=worker.mesh_part(self.folder,study())
+        data=(self.folder/'view.bin').read_bytes()
+        self.assertEqual(data[:8],b'BSIMVIEW')
+        length=int(np.frombuffer(data[8:12],'<u4')[0])
+        header=json.loads(data[12:12+length]);offset=12+length;arrays={}
+        for a in header['arrays']:
+            self.assertEqual(offset%8,0)
+            dtype={'float64':'<f8','int32':'<i4'}[a['type']];count=int(np.prod(a['shape']))
+            arrays[a['name']]=np.frombuffer(data,dtype,count,offset).reshape(a['shape'])
+            offset+=-(-count*np.dtype(dtype).itemsize//8)*8
+        points,tets=arrays['points'],arrays['tets']
+        self.assertEqual(len(tets),mesh['elementCount'])
+        # The beam is planar, so every midside node lies on its edge midpoint.
+        for k,(i,j) in enumerate([(0,1),(1,2),(2,0),(0,3),(1,3),(2,3)]):
+            mid=(points[tets[:,i]]+points[tets[:,j]])/2
+            np.testing.assert_allclose(points[tets[:,4+k]],mid,atol=1e-9)
+        self.assertEqual(sorted(set(arrays['triangleFaces'].tolist())),[1,2,3,4,5,6])
+        self.assertTrue(np.all(arrays['triangles']<len(points)))
+        (self.folder/'mesh.json').write_text(json.dumps(self.mesh))
     def test_cantilever_bending_and_reaction_balance(self):
         result=worker.solve(self.folder,study())
         expected=100*100**3/(3*68900*(20*10**3/12))

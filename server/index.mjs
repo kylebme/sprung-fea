@@ -33,9 +33,11 @@ export async function createServer({
   const children = new Set();
   app.disable("x-powered-by");
   app.use((req, res, next) => {
+    // VTK.wasm needs WebAssembly compilation, and its Emscripten embind glue
+    // generates invokers with new Function, hence 'unsafe-eval'.
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'",
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'",
     );
     res.setHeader("X-Content-Type-Options", "nosniff");
     next();
@@ -362,6 +364,23 @@ export async function createServer({
       name: String(project.name || "Untitled part"),
       study: project.study,
       job: run("import", dir),
+    });
+  });
+  // Mesh and nodal results for the viewer, in the engine's binary layout.
+  app.get("/api/documents/:id/view", async (req, res) => {
+    const target = path.join(folder(req.params.id), "view.bin");
+    try {
+      await fs.access(target);
+    } catch {
+      return res.status(404).json({ error: "Mesh the part first." });
+    }
+    await touch(req.params.id);
+    res.sendFile(target, {
+      dotfiles: "allow",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Cache-Control": "no-store",
+      },
     });
   });
   app.get("/api/documents/:id/export/:file", async (req, res) => {

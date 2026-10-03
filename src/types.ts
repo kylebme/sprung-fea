@@ -1,3 +1,4 @@
+import type { ViewData } from "./viewData";
 export type Face = {
   id: number;
   name: string;
@@ -45,34 +46,35 @@ export type Study = {
   meshSize: number;
   detail: "coarse" | "medium" | "fine" | "custom";
 };
-export type Mesh = {
-  surface: Surface;
+export type MeshInfo = {
   size: number;
   nodeCount: number;
   elementCount: number;
   minQuality: number;
 };
-export type Result = {
-  displacements: number[][];
-  stress: number[];
-  movement: number[];
-  summary: {
-    maxStress: number;
-    maxMovement: number;
-    minSafety: number | null;
-    reactions: number[];
-    stressNode: number;
-    movementNode: number;
-    seconds: number;
-    appliedForce: number[];
-    forceBalanceError: number;
-  };
+/** Mesh arrays for display come from the engine's binary view file. */
+export type Mesh = MeshInfo & { view: ViewData };
+export type Summary = {
+  maxStress: number;
+  maxMovement: number;
+  minSafety: number | null;
+  reactions: number[];
+  stressNode: number;
+  movementNode: number;
+  seconds: number;
+  appliedForce: number[];
+  forceBalanceError: number;
+};
+export type ResultInfo = {
+  summary: Summary;
   warnings: string[];
   solver: string;
   meshSize: number;
   nodeCount: number;
   elementCount: number;
 };
+/** Nodal displacement and stress live in `view`, with the mesh they belong to. */
+export type Result = ResultInfo & { view: ViewData };
 export type Part = {
   id: string;
   name: string;
@@ -80,6 +82,20 @@ export type Part = {
   sample?: "beam" | "bracket";
 };
 export type Plot = "stress" | "movement" | "safety";
+export type Axis = 0 | 1 | 2;
+/**
+ * Result filters, applied in the viewer. The section cuts away the part
+ * beyond `position` (mm) along the axis; `flip` cuts away the near side
+ * instead. Iso-surface and threshold levels are fractions of the active
+ * plot's color scale, so they stay meaningful when the plot changes.
+ * The threshold keeps stress or displacement above its level, and yield
+ * margin below it: the critical region either way.
+ */
+export type Filters = {
+  section: { on: boolean; axis: Axis; position: number; flip: boolean };
+  iso: { on: boolean; level: number };
+  threshold: { on: boolean; level: number };
+};
 export const MATERIALS: Material[] = [
   {
     name: "Aluminum 6061-T6",

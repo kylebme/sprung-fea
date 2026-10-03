@@ -424,15 +424,19 @@ svg {
     var(--view-b) 70%
   );
 }
-.three-host {
+.view-host {
   position: absolute;
   inset: 0;
 }
-.three-host canvas {
+.view-host canvas {
   display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
   cursor: grab;
+  touch-action: none;
 }
-.viewer-error {
+.viewer-note {
   position: absolute;
   inset: 0;
   display: grid;
@@ -739,6 +743,21 @@ svg {
 .field > span:first-child {
   color: var(--muted);
   font-size: 11px;
+}
+.field > span:first-child b {
+  float: right;
+  font-weight: 400;
+  color: var(--text);
+}
+.field input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.filters .switch-row + .switch-row,
+.filters .field + .switch-row,
+.filters .kv + .switch-row {
+  margin-top: 6px;
 }
 .input,
 .number-field {

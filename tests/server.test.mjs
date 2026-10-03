@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "../server/index.mjs";
+import { decodeView, range } from "../src/viewData.ts";
 const request = async (base, url, body) => {
   const response = await fetch(
     base + url,
@@ -96,6 +97,26 @@ test("STEP → portable project → reopen → real solve → export", async () 
       data.result.summary.maxMovement > 0.28 &&
         data.result.summary.maxMovement < 0.3,
     );
+    // The viewer's binary contract: the client decoder reads what the
+    // engine wrote, and its fields agree with the solver summary.
+    assert.equal(data.result.stress, undefined);
+    const response = await fetch(
+      base + "/api/documents/" + opened.id + "/view",
+    );
+    assert.equal(
+      response.headers.get("content-type"),
+      "application/octet-stream",
+    );
+    const view = decodeView(await response.arrayBuffer());
+    assert.equal(view.nodeIds.length, data.mesh.nodeCount);
+    assert.equal(view.tets.length / 10, data.mesh.elementCount);
+    assert.deepEqual(
+      [...new Set(view.triangleFaces)].sort(),
+      [1, 2, 3, 4, 5, 6],
+    );
+    assert.equal(range(view.vonMises).max, data.result.summary.maxStress);
+    const csp = response.headers.get("content-security-policy");
+    assert.match(csp, /script-src 'self' 'wasm-unsafe-eval'/);
     const deck = await (
       await fetch(base + "/api/documents/" + opened.id + "/export/deck")
     ).text();
@@ -172,6 +193,8 @@ test("recovery on disk, error statuses, and document pruning", async () => {
     );
     assert.equal(missing.status, 404);
     assert.doesNotMatch((await missing.json()).error, /\//);
+    const noView = await fetch(`${base}/api/documents/${imported.id}/view`);
+    assert.equal(noView.status, 404);
     const noDeck = await fetch(
       `${base}/api/documents/${imported.id}/export/deck`,
     );

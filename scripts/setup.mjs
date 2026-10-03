@@ -13,6 +13,7 @@ const python =
     ? ".venv/Scripts/python.exe"
     : ".venv/bin/python";
 run(python, ["-m", "pip", "install", "-r", "engine/requirements.txt"]);
+run(process.execPath, ["scripts/fetch-vtk-wasm.mjs"]);
 console.log(
-  "STEP mesher ready. Install CalculiX (ccx) or set BETTERSIM_CCX. On Mac: brew install costerwi/calculix/calculix-ccx",
+  "STEP mesher and VTK.wasm viewer ready. Install CalculiX (ccx) or set BETTERSIM_CCX. On Mac: brew install costerwi/calculix/calculix-ccx",
 );

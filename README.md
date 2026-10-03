@@ -2,7 +2,7 @@
 
 An open-source mechanical FEA workspace built around engineering intent. Import a STEP solid, choose its material, select the faces that hold it, apply loads, and inspect real CalculiX results.
 
-**Version 0.1:** linear static analysis of one solid part. Electron + Vite + React + Three.js, with OpenCASCADE/Gmsh for CAD and meshing and CalculiX for solving. GPL-3.0-or-later.
+**Version 0.1:** linear static analysis of one solid part. Electron + Vite + React, with VTK compiled to WebAssembly for the 3D view, OpenCASCADE/Gmsh for CAD and meshing and CalculiX for solving. GPL-3.0-or-later.
 
 ## Run on macOS
 
@@ -13,6 +13,8 @@ brew install costerwi/calculix/calculix-ccx
 npm run dev:desktop
 ```
 
+`npm run setup` creates the Python engine environment and downloads the pinned VTK.wasm runtime (13 MB, checksum-verified) into `public/vtk-wasm/`. The 3D view needs WebGL 2.
+
 For a browser development session, use `npm run dev` and visit http://127.0.0.1:5173. After `npm run build`, `npm start` opens the desktop application with its own local service. If CalculiX is installed elsewhere, set `BETTERSIM_CCX` to its executable. `BETTERSIM_PYTHON` overrides the development Python runtime.
 
 ## Build a standalone Mac app
@@ -22,7 +24,7 @@ For a browser development session, use `npm run dev` and visit http://127.0.0.1:
 npm run package:mac
 ```
 
-The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundles the Python/Gmsh engine, CalculiX, all required native libraries, and offline fonts. It needs neither Python nor Homebrew on the destination Mac. The build is ad-hoc signed for local testing, not Apple-notarized. Intel Mac packaging requires an Intel runtime and solver built on that architecture. `npm run dist:mac` also produces a DMG.
+The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundles the Python/Gmsh engine, CalculiX, all required native libraries, the VTK.wasm runtime, and offline fonts. It needs neither Python nor Homebrew on the destination Mac. The build is ad-hoc signed for local testing, not Apple-notarized. Intel Mac packaging requires an Intel runtime and solver built on that architecture. `npm run dist:mac` also produces a DMG.
 
 ## A first study
 
@@ -32,7 +34,7 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 4. Add a support and select CAD faces in the model or face list. "Fixed" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
 5. Add force, pressure, or gravity. Vector force is **one total force distributed over all selected faces**. Positive pressure pushes inward; gravity uses m/s² and material density.
 6. Start with the Medium mesh. Preview it or run directly; Solve meshes automatically.
-7. Inspect stress, movement, and yield margin. Click the surface to probe a node, or show the peak. Deformation magnification is displayed explicitly.
+7. Inspect stress, movement, and yield margin. Click the part, or a section through it, to probe interpolated values, or show the peak node. Cut the part with a section plane, show an iso-surface, or threshold the critical region. Deformation magnification is displayed explicitly.
 8. Compare with a finer mesh. Save a `.bsim` project, nodal CSV, viewport PNG, solver deck, or log.
 
 Study edits invalidate results. Undo/redo preserves setup history. Autosave retains the most recent geometry and setup. A portable `.bsim` embeds both, plus the latest results, and can be opened on another machine. Saved results are shown only when the geometry and study match exactly, so stale plots are never presented as current.
@@ -81,12 +83,13 @@ See `docs/validation.md` for measured results and their limits. The generator cr
 
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the implemented architecture, numerical pipeline, API and persistence contracts, validation coverage, and proposed extension sequence.
 
-- `src/`: study state, face-aware Three.js view, contextual editors, contour/probe UI.
+- `src/`: study state, contextual editors, and the VTK.wasm view (`scene.ts`): face picking, contours, sections, probes, iso-surfaces and thresholds.
 - `electron/`: sandboxed desktop shell and native save dialog.
 - `server/`: loopback-only service, bounded file import, portable project handling, cancellable isolated jobs.
 - `engine/worker.py`: STEP topology, meshing, support checks, CalculiX deck generation and result decoding.
 - `scripts/bundle-runtime.py`: standalone engine and native library relocation.
 - `docs/interaction-design.md`: pre-implementation workflow research and design decisions.
+- `docs/vtk-wasm.md`: decisions behind the VTK.wasm viewer and result filters.
 - `tests/`: subsystem and end-to-end acceptance tests.
 
 The project remains solver-independent at the study model boundary. Future solver adapters can consume the same material/support/load definitions. Study types and assembly contact need explicit domain models before extending the UI.

@@ -12,7 +12,8 @@ BetterSim is GPL-3.0-or-later. Its original interface and integration code are i
 | PyInstaller | Native runtime packaging | GPL with bootloader exception | https://pyinstaller.org/ |
 | Electron | Desktop application shell | MIT, Chromium third-party notices | https://github.com/electron/electron |
 | React | User interface | MIT | https://github.com/facebook/react |
-| Three.js | 3D renderer, controls, ray picking | MIT | https://github.com/mrdoob/three.js |
+| VTK 9.7 (nightly 9.7.20260927, WebAssembly build) | 3D rendering, picking, sections, probing, iso-surfaces and thresholds in the viewer | BSD-3-Clause; bundled third-party libraries keep their own permissive licenses | https://gitlab.kitware.com/vtk/vtk |
+| @kitware/vtk-wasm 3.0.5 | JavaScript loader and bindings for VTK.wasm | Apache-2.0 | https://github.com/Kitware/vtk-wasm |
 | Lucide | Interface icons | ISC | https://github.com/lucide-icons/lucide |
 | CadQuery 2.7.0 (optional development only) | Reproducible complex STEP test fixtures | Apache-2.0 | https://github.com/CadQuery/cadquery |
 | Vite | Frontend build and development | MIT | https://github.com/vitejs/vite |
@@ -23,6 +24,8 @@ BetterSim is GPL-3.0-or-later. Its original interface and integration code are i
 | GCC runtime | Fortran, OpenMP, quadmath | GPL-3.0 with GCC Runtime Library Exception where applicable; LGPL for quadmath | https://gcc.gnu.org/ |
 | Open MPI / PMIx / hwloc / libevent | Transitive native dependencies | BSD licenses; see individual notices | https://www.open-mpi.org/ and https://libevent.org/ |
 | LLVM OpenMP | Transitive native dependency | Apache-2.0 with LLVM exception | https://llvm.org/ |
+
+The VTK.wasm runtime is Kitware's unmodified prebuilt package `vtk-wasm32-emscripten` 9.7.20260927 from the VTK package registry (https://gitlab.kitware.com/vtk/vtk/-/packages), SHA-256 `63252b799e8c44dfb149f329c94f9f6715c78b654292f18cce067c9d080a2e92`. `scripts/fetch-vtk-wasm.mjs` downloads and verifies it; it is not committed to this repository.
 
 The native solver is the existing Homebrew build, with dynamic-library install names changed only to use adjacent bundled libraries. The build recipe is `costerwi/homebrew-calculix` commit `57711a3e00dec3128664260a9f58e69fbe874dca`, source archive SHA-256 `9c88385c10fb04f5dc6c4e98027a51bebdd8aee3920e05190d6c1dd08357d6e7`. The recipe incorporates SPOOLES 2.2, https://www.netlib.org/linalg/spooles/. The Gmsh wheel includes its upstream CAD/mesher implementation unchanged.
 

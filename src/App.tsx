@@ -50,14 +50,28 @@ import {
 import {
   MATERIALS,
   emptyStudy,
+  type Filters,
+  type Geometry,
   type Load,
   type Mesh,
+  type MeshInfo,
   type Part,
   type Plot,
   type Result,
+  type ResultInfo,
   type Study,
   type Support,
 } from "./types";
+import {
+  decodeView,
+  fromBase64,
+  movement,
+  nodeProbe,
+  range,
+  surfaceCsv,
+  toBase64,
+  type Probe,
+} from "./viewData";
 
 type Failure = { title: string; message: string };
 // Autosave used browser storage before it moved to the local service.
@@ -72,6 +86,22 @@ const readStorage = (key: string) => {
 };
 const systemTheme = (): Theme =>
   matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+/** Filters start off, with the section through the middle of the part. */
+const defaultFilters = (geometry: Geometry): Filters => ({
+  section: {
+    on: false,
+    axis: 0,
+    position: (geometry.bounds[0] + geometry.bounds[3]) / 2,
+    flip: false,
+  },
+  iso: { on: false, level: 0.5 },
+  threshold: { on: false, level: 0.75 },
+});
+const fetchView = async (id: string) => {
+  const response = await fetch(`/api/documents/${id}/view`);
+  if (!response.ok) throw Error((await response.json()).error);
+  return decodeView(await response.arrayBuffer());
+};
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLInputElement ||
   el instanceof HTMLTextAreaElement ||
@@ -97,7 +127,9 @@ export default function App() {
     [plot, setPlot] = useState<Plot>("stress"),
     [deform, setDeform] = useState<"off" | "true" | "auto">("off"),
     [wire, setWire] = useState(false),
-    [probe, setProbe] = useState<number | null>(null),
+    [probe, setProbe] = useState<Probe | null>(null),
+    [filters, setFilters] = useState<Filters | null>(null),
+    [sectionArea, setSectionArea] = useState<number | null>(null),
     [query, setQuery] = useState(""),
     [comparison, setComparison] = useState<Comparison | null>(null),
     [recovery, setRecovery] = useState<Recovery | null>(null),
@@ -264,6 +296,7 @@ export default function App() {
         meshSize: geometry.recommendedSize,
       };
       setPart({ id: info.id, name: info.name, geometry, sample: info.sample });
+      setFilters(defaultFilters(geometry));
       setHist(history(hist, { type: "reset", study: nextStudy }));
       setMesh(null);
       setResult(null);
@@ -281,9 +314,13 @@ export default function App() {
       const restored = saved
         ? restoreResults(saved, geometry.hash, nextStudy)
         : null;
-      if (restored) {
-        setMesh(restored.mesh);
-        setResult(restored.result);
+      let view = null;
+      try {
+        view = restored && decodeView(fromBase64(restored.view));
+      } catch {}
+      if (restored && view?.vonMises) {
+        setMesh({ ...restored.mesh, view });
+        setResult({ ...restored.result, view });
         setFromProject(true);
         setPlot("stress");
         setDeform("off");
@@ -337,13 +374,15 @@ export default function App() {
         name: part.name,
         study,
       });
-      if (result && mesh) {
-        const { surface, size, nodeCount, elementCount, minQuality } = mesh;
+      if (result?.view.buffer && mesh) {
+        const { view: _mesh, ...meshInfo } = mesh;
+        const { view, ...resultInfo } = result;
         data.results = {
           hash: part.geometry.hash,
           study,
-          mesh: { surface, size, nodeCount, elementCount, minQuality },
-          result,
+          mesh: meshInfo,
+          result: resultInfo,
+          view: toBase64(view.buffer!),
         } satisfies SavedResults;
       }
       if (
@@ -407,7 +446,10 @@ export default function App() {
       const j = await post("/documents/" + part.id + "/" + action, next);
       const data = await poll(j.job, action === "mesh" ? "meshing" : "solve");
       if (!data) return;
-      const m: Mesh = action === "mesh" ? data : data.mesh;
+      const view = await fetchView(part.id);
+      if (sequence.current !== operation) return;
+      const info: MeshInfo = action === "mesh" ? data : data.mesh;
+      const m: Mesh = { ...info, view };
       write(
         "mesh",
         `${fmt(m.elementCount)} elements · ${fmt(m.nodeCount)} nodes · min quality ${fmt(m.minQuality, 3)}`,
@@ -417,15 +459,16 @@ export default function App() {
         setWire(true);
         setSection("mesh");
       } else {
-        setResult(data.result);
+        const r: Result = { ...(data.result as ResultInfo), view };
+        setResult(r);
+        setProbe(null);
         setFromProject(false);
         setWire(false);
         setPlot("stress");
         setDeform("off");
         setSection("results");
         setSelected([]);
-        if (refine && prior)
-          setComparison({ before: prior, after: data.result });
+        if (refine && prior) setComparison({ before: prior, after: r });
         write(
           "solve",
           `done in ${fmt(data.result.summary.seconds, 2)} s · force balance error ${fmt(data.result.summary.forceBalanceError * 100, 4)}%`,
@@ -572,14 +615,14 @@ export default function App() {
       : 0;
   const yieldStrength = study.material?.yield || null;
   const marginMax = marginScale(result?.summary.minSafety ?? null);
-  const extremes = useMemo(() => {
-    if (!result) return null;
-    let minStress = Infinity,
-      minMovement = Infinity;
-    for (const v of result.stress) minStress = Math.min(minStress, v);
-    for (const v of result.movement) minMovement = Math.min(minMovement, v);
-    return { minStress, minMovement };
-  }, [result]);
+  const extremes = useMemo(
+    () =>
+      result && {
+        minStress: range(result.view.vonMises!).min,
+        minMovement: range(movement(result.view)).min,
+      },
+    [result],
+  );
   const legendMax = result
     ? plot === "stress"
       ? result.summary.maxStress
@@ -587,16 +630,14 @@ export default function App() {
         ? result.summary.maxMovement
         : marginMax
     : 0;
-  const surface = mesh?.surface || part?.geometry;
-  const probeIndex = probe && surface ? surface.nodeIds.indexOf(probe) : -1;
   const probeValues =
-    result && probeIndex >= 0
+    result && probe
       ? {
-          stress: result.stress[probeIndex],
-          movement: result.movement[probeIndex],
+          stress: probe.stress,
+          movement: Math.hypot(...probe.displacement),
           margin:
-            yieldStrength && result.stress[probeIndex] > 0
-              ? yieldStrength / result.stress[probeIndex]
+            yieldStrength && probe.stress > 0
+              ? yieldStrength / probe.stress
               : null,
         }
       : null;
@@ -610,22 +651,8 @@ export default function App() {
           : null
     : null;
   const csv = async () => {
-    if (!result || !mesh) return;
-    const lines = [
-      "surface_node,x_mm,y_mm,z_mm,ux_mm,uy_mm,uz_mm,displacement_mm,von_mises_MPa",
-    ];
-    mesh.surface.nodeIds.forEach((n, i) =>
-      lines.push(
-        [
-          n,
-          ...mesh.surface.positions.slice(i * 3, i * 3 + 3),
-          ...result.displacements[i],
-          result.movement[i],
-          result.stress[i],
-        ].join(","),
-      ),
-    );
-    await saveFile("bettersim-surface-nodes.csv", lines.join("\n"));
+    if (result)
+      await saveFile("bettersim-surface-nodes.csv", surfaceCsv(result.view));
   };
   const exportSolver = async (kind: "deck" | "log" | "frd") => {
     if (!part) return;
@@ -733,14 +760,20 @@ export default function App() {
               autoScale={autoScale}
               wire={wire}
               probe={probe}
-              probeIndex={probeIndex}
               probeValues={probeValues}
+              filters={filters!}
+              bounds={part.geometry.bounds}
+              scaleMax={legendMax}
+              sectionArea={sectionArea}
+              onFilters={setFilters}
               comparison={comparison}
               fromProject={fromProject}
               busy={!!job}
               onDeform={setDeform}
               onWire={setWire}
-              onProbe={setProbe}
+              onProbe={(node) =>
+                setProbe(node === null ? null : nodeProbe(result.view, node))
+              }
               onRefine={() => run("solve", true)}
               onCsv={csv}
               onImage={screenshot}
@@ -944,15 +977,16 @@ export default function App() {
               <Viewer
                 ref={viewer}
                 geometry={part.geometry}
-                mesh={mesh}
-                result={result}
+                view={result?.view || mesh?.view || null}
+                plot={result ? plot : null}
                 study={shownStudy}
                 selected={selected}
                 hovered={hover}
                 onSelect={selectFace}
                 onHover={setHover}
                 onProbe={setProbe}
-                plot={plot}
+                onSectionArea={setSectionArea}
+                filters={filters!}
                 deformation={deformation}
                 wireframe={wire}
                 probe={probe}

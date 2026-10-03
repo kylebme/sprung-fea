@@ -75,6 +75,45 @@ def surface_data(quadratic=False):
     return {'positions': coords.flatten().tolist(), 'nodeIds': [int(t) for t in tags], 'faces': faces}
 
 
+# Gmsh and VTK/Abaqus/CalculiX use opposite order for the last two midside
+# nodes of a ten-node tetrahedron.
+TET10_ORDER=[0,1,2,3,4,5,6,7,9,8]
+
+
+def write_view(folder, arrays):
+    """Binary arrays for the VTK.wasm viewer: 'BSIMVIEW', a uint32 header
+    length, a JSON header naming each little-endian array, then the arrays,
+    each starting on an 8-byte boundary."""
+    entries=[];blobs=[]
+    for name,(dtype,data) in arrays.items():
+        data=np.ascontiguousarray(data,dtype='<'+dtype)
+        entries.append({'name':name,'type':{'f8':'float64','i4':'int32'}[dtype],'shape':list(data.shape)})
+        blobs.append(data.tobytes())
+    header=json.dumps({'version':1,'arrays':entries}).encode()
+    header+=b' '*(-(12+len(header))%8)
+    with open(folder/'view.bin.tmp','wb') as out:
+        out.write(b'BSIMVIEW'+np.uint32(len(header)).tobytes()+header)
+        for blob in blobs: out.write(blob+b'\0'*(-len(blob)%8))
+    os.replace(folder/'view.bin.tmp',folder/'view.bin')
+
+
+def mesh_view(mesh):
+    """Points, VTK-ordered quadratic tetrahedra and boundary triangles tagged
+    with their CAD face. Indices refer to the surface node order."""
+    surface=mesh['surface']
+    tags=np.asarray(surface['nodeIds'])
+    index=np.full(tags.max()+1,-1,np.int32);index[tags]=np.arange(len(tags))
+    tets=index[np.asarray(mesh['elements'])][:,TET10_ORDER]
+    triangles=np.concatenate([np.asarray(f['indices'],np.int32) for f in surface['faces']])
+    faces=np.concatenate([np.full(len(f['indices'])//3,f['id'],np.int32) for f in surface['faces']])
+    return {'nodeIds':('i4',surface['nodeIds']),'points':('f8',np.asarray(surface['positions']).reshape(-1,3)),
+            'tets':('i4',tets),'triangles':('i4',triangles.reshape(-1,3)),'triangleFaces':('i4',faces)}
+
+
+def mesh_info(mesh):
+    return {k:mesh[k] for k in ['size','nodeCount','elementCount','minQuality']}
+
+
 def import_part(folder):
     emit('importing', 'Reading STEP geometry')
     solid = initialize(folder / 'part.step')
@@ -125,6 +164,7 @@ def mesh_part(folder, study):
     if mesh['minQuality'] <= 0:
         raise ValueError('The mesh contains inverted elements. Try another mesh size or repair tiny CAD features.')
     (folder/'mesh.json').write_text(json.dumps(mesh))
+    write_view(folder,mesh_view(mesh))
     gmsh.write(str(folder/'part.msh'))
     gmsh.finalize()
     return mesh
@@ -245,9 +285,7 @@ def write_deck(folder, study, mesh):
     lines=['*HEADING','BetterSim linear static study; mm N MPa tonne s','*NODE']
     lines += [f'{n}, '+', '.join(f'{v:.12g}' for v in xyz) for n,xyz in nodes.items()]
     lines += ['*ELEMENT, TYPE=C3D10, ELSET=PART']
-    # Gmsh and Abaqus/CalculiX use opposite order for the last two midside nodes.
-    order=[0,1,2,3,4,5,6,7,9,8]
-    lines += [f'{eid}, '+', '.join(str(c[i]) for i in order) for eid,c in zip(mesh['elementIds'],mesh['elements'])]
+    lines += [f'{eid}, '+', '.join(str(c[i]) for i in TET10_ORDER) for eid,c in zip(mesh['elementIds'],mesh['elements'])]
     lines += ['*MATERIAL, NAME=MAT','*ELASTIC',f"{m['young']:.12g}, {m['poisson']:.12g}", '*DENSITY',f"{m['density']*1e-12:.12g}",'*SOLID SECTION, ELSET=PART, MATERIAL=MAT','*BOUNDARY']
     lines += [f'{n}, {a+1}, {a+1}, 0' for n,a in sorted(fixed)]
     lines += ['*NSET, NSET=HELD']
@@ -379,7 +417,14 @@ def solve(folder, study):
             'appliedForce':total_load.tolist(),'forceBalanceError':float(balance),'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))], 'seconds':time.monotonic()-start},
             'warnings':warnings,'solver':'CalculiX','meshSize':mesh['size'], 'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']}
     (folder/'result.json').write_text(json.dumps(result))
+    view=mesh_view(mesh)
+    view.update(displacement=('f8',displacements),vonMises=('f8',stress))
+    write_view(folder,view)
     return result
+
+
+# Nodal arrays reach the viewer through view.bin, not the JSON response.
+FIELDS=('displacements','stress','movement')
 
 
 def main():
@@ -387,10 +432,10 @@ def main():
     study=json.loads(sys.stdin.read() or '{}')
     try:
         if command=='import': result=import_part(folder)
-        elif command=='mesh': result=mesh_part(folder,study)
+        elif command=='mesh': result=mesh_info(mesh_part(folder,study))
         elif command=='solve':
-            mesh_part(folder,study)
-            result={'mesh':json.loads((folder/'mesh.json').read_text()),'result':solve(folder,study)}
+            mesh=mesh_info(mesh_part(folder,study))
+            result={'mesh':mesh,'result':{k:v for k,v in solve(folder,study).items() if k not in FIELDS}}
         else: raise ValueError('Unknown worker command.')
         print(json.dumps({'ok':True,'data':result}))
     except Exception as error:

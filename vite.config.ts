@@ -6,13 +6,6 @@ export default defineConfig({
     // The service's CSP allows fonts only from 'self', so never inline them.
     assetsInlineLimit: (file) =>
       /\.(woff2?|ttf)$/.test(file) ? false : undefined,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          three: ["three", "three/addons/controls/OrbitControls.js"],
-        },
-      },
-    },
   },
   server: {
     host: "127.0.0.1",

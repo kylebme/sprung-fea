@@ -48,7 +48,7 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   const canvas = page.locator("canvas");
   const box = await canvas.boundingBox();
   await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
-  await expect(page.locator(".probe-card")).toContainText("Node");
+  await expect(page.locator(".probe-card")).toContainText("Interpolated");
   await page.getByRole("button", { name: /^Re-solve with/ }).click();
   await expect(
     page.getByText("Peak stress change", { exact: true }),
@@ -196,7 +196,7 @@ test("free rotation and orthographic projection keep picking working", async ({
   ).toHaveAttribute("aria-pressed", "true");
   await page.waitForTimeout(500);
   await page.mouse.click(cx, cy);
-  await expect(page.locator(".probe-card")).toContainText("Node");
+  await expect(page.locator(".probe-card")).toContainText("Interpolated");
   await page.screenshot({ path: "output/playwright/orthographic.png" });
   expect(
     await page.evaluate(() => localStorage.getItem("bettersim-projection")),
@@ -204,7 +204,69 @@ test("free rotation and orthographic projection keep picking working", async ({
   await page.getByRole("button", { name: "Perspective" }).click();
   await page.getByRole("button", { name: "Clear" }).click();
   await page.mouse.click(cx, cy);
-  await expect(page.locator(".probe-card")).toContainText("Node");
+  await expect(page.locator(".probe-card")).toContainText("Interpolated");
+  expect(errors).toEqual([]);
+});
+test("result filters: section area, section probing, iso-surface, threshold, and saved results", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("http://127.0.0.1:5173");
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
+  await page.getByRole("button", { name: "Use example setup" }).click();
+  await inspector(page)
+    .getByRole("button", { name: "Solve", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "von Mises stress" }),
+  ).toBeVisible({ timeout: 60000 });
+  const filters = page.locator(".filters");
+  await page.getByRole("switch", { name: "Section" }).click();
+  // The 100 × 20 × 10 mm beam, cut through the volume at mid-length.
+  await expect(filters).toContainText("50 mm");
+  await expect(filters).toContainText(/Section area\s*200\s*mm²/);
+  await page
+    .getByRole("group", { name: "Section normal" })
+    .getByRole("button", { name: "Z" })
+    .click();
+  await expect(filters).toContainText(/Section area\s*2,000\s*mm²/);
+  await page
+    .getByRole("group", { name: "Section normal" })
+    .getByRole("button", { name: "X" })
+    .click();
+  // Looking at the cut face: a click probes the section, inside the part.
+  await page.getByRole("button", { name: "Right", exact: true }).click();
+  const box = (await page.locator("canvas").boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const card = page.locator(".probe-card");
+  await expect(card).toContainText("Interpolated");
+  await expect(card).toContainText(/Position\s*50, 10, 5\s*mm/);
+  await page.screenshot({ path: "output/playwright/section.png" });
+  await page.getByRole("button", { name: "Iso", exact: true }).click();
+  await page.getByRole("switch", { name: "Section" }).click();
+  await page.getByRole("switch", { name: "Iso-surface" }).click();
+  await expect(filters).toContainText(/Iso value\s*14\.\d+ MPa/);
+  await page.screenshot({ path: "output/playwright/iso-surface.png" });
+  await page.getByRole("switch", { name: "Iso-surface" }).click();
+  await page.getByRole("button", { name: "Yield margin", exact: true }).click();
+  await page.getByRole("switch", { name: "Threshold" }).click();
+  await expect(filters).toContainText("Show below");
+  await page.getByRole("button", { name: "Magnified" }).click();
+  await page.screenshot({ path: "output/playwright/threshold.png" });
+  // Saved projects carry the volume results, so filters work after reopening.
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await (await download).saveAs("output/playwright/filters.bsim");
+  await page.reload();
+  await page
+    .locator('input[type=file][accept=".bsim"]')
+    .setInputFiles(path.resolve("output/playwright/filters.bsim"));
+  await expect(page.getByText("Results loaded from project")).toBeVisible();
+  await page.getByRole("switch", { name: "Section" }).click();
+  await expect(page.locator(".filters")).toContainText(
+    /Section area\s*200\s*mm²/,
+  );
   expect(errors).toEqual([]);
 });
 test("invalid STEP reports an actionable import error", async ({ page }) => {
