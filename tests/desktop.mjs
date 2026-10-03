@@ -29,6 +29,35 @@ try {
   await page.getByRole("button", { name: "Show in view" }).click();
   await expect(page.locator(".probe-card")).toContainText("Node");
   await page.screenshot({ path: "output/playwright/desktop.png" });
+  // Edit > Undo reaches the study history, and text fields keep text undo.
+  const menu = (id) =>
+    app.evaluate(({ Menu }, id) => {
+      Menu.getApplicationMenu().getMenuItemById(id).click();
+    }, id);
+  await page.getByRole("button", { name: /^Material\s*Aluminum/ }).click();
+  await page.getByRole("button", { name: /Structural steel/ }).click();
+  await page.getByRole("button", { name: "Apply material" }).click();
+  await expect(
+    page.getByRole("button", { name: /^Material\s*Structural steel/ }),
+  ).toBeVisible();
+  await menu("undo");
+  await expect(
+    page.getByRole("button", { name: /^Material\s*Aluminum/ }),
+  ).toBeVisible();
+  await menu("redo");
+  await expect(
+    page.getByRole("button", { name: /^Material\s*Structural steel/ }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /^Material\s*Structural/ }).click();
+  const name = page.getByLabel("Name", { exact: true });
+  await name.click();
+  await page.keyboard.type("X");
+  await expect(name).toHaveValue("Structural steelX");
+  await menu("undo");
+  await expect(name).toHaveValue("Structural steel");
+  await expect(
+    page.getByRole("button", { name: /^Material\s*Structural steel/ }),
+  ).toBeVisible();
   for (const name of [
     "bearing-block",
     "ribbed-bracket",

@@ -73,7 +73,12 @@ export type Result = {
   nodeCount: number;
   elementCount: number;
 };
-export type Part = { id: string; name: string; geometry: Geometry };
+export type Part = {
+  id: string;
+  name: string;
+  geometry: Geometry;
+  sample?: "beam" | "bracket";
+};
 export type Plot = "stress" | "movement" | "safety";
 export const MATERIALS: Material[] = [
   {
@@ -112,19 +117,12 @@ export const emptyStudy = (): Study => ({
   meshSize: 0,
   detail: "medium",
 });
-export function fmt(n: number, digits = 3) {
-  return !Number.isFinite(n)
-    ? "—"
-    : Math.abs(n) > 0 && (Math.abs(n) < 0.001 || Math.abs(n) >= 1e6)
-      ? n.toExponential(2)
-      : new Intl.NumberFormat("en-US", {
-          maximumFractionDigits: digits,
-        }).format(n);
-}
+export { fmt } from "./logic";
 declare global {
   interface Window {
     desktop?: {
       platform: string;
+      onMenu: (handler: (command: string) => void) => () => void;
       saveFile: (args: {
         name: string;
         content: string;

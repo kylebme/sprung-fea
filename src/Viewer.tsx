@@ -31,6 +31,8 @@ type Props = {
   probeLabel: string | null;
   theme: Theme;
   draftKind: "support" | "load" | null;
+  marginMax: number;
+  yieldStrength: number | null;
 };
 const COLORS = {
   dark: {
@@ -122,6 +124,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     camera: THREE.PerspectiveCamera;
     controls: OrbitControls;
     group: THREE.Group;
+    annotations: THREE.Group;
+    markers: THREE.Group;
+    positions: Float32Array | null;
     faces: THREE.Mesh[];
     radius: number;
     center: THREE.Vector3;
@@ -209,13 +214,18 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     light.position.set(100, -100, 200);
     scene.add(light);
     const group = new THREE.Group();
-    scene.add(group);
+    const annotations = new THREE.Group();
+    const markers = new THREE.Group();
+    scene.add(group, annotations, markers);
     runtime.current = {
       renderer,
       scene,
       camera,
       controls,
       group,
+      annotations,
+      markers,
+      positions: null,
       faces: [],
       radius: 100,
       center: new THREE.Vector3(),
@@ -350,11 +360,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     r.radius = Math.hypot(...p.geometry.dimensions) / 2;
     fit();
   }, [p.geometry]);
-  useEffect(() => {
-    const r = runtime.current;
-    if (!r) return;
-    while (r.group.children.length) {
-      const child = r.group.children[0];
+  const clear = (group: THREE.Group) => {
+    while (group.children.length) {
+      const child = group.children[0];
       child.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
           obj.geometry.dispose();
@@ -364,17 +372,45 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
           mats.forEach((m) => m.dispose());
         }
       });
-      r.group.remove(child);
+      group.remove(child);
     }
-    r.faces = [];
-    r.probe = null;
-    const colors = COLORS[p.theme];
+  };
+  // Selection and condition colours change often, so they are applied to the
+  // existing face materials rather than rebuilding the scene.
+  const paint = () => {
+    const r = runtime.current;
+    if (!r) return;
+    const q = props.current;
+    const colors = COLORS[q.theme];
     const selectColor =
-      p.draftKind === "support"
+      q.draftKind === "support"
         ? colors.support
-        : p.draftKind === "load"
+        : q.draftKind === "load"
           ? colors.load
           : colors.select;
+    const supported = new Set(q.study.supports.flatMap((s) => s.faces));
+    const loaded = new Set(q.study.loads.flatMap((l) => l.faces));
+    for (const mesh of r.faces) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (mat.vertexColors) continue;
+      const id = mesh.userData.face;
+      mat.color.set(
+        q.selected.includes(id)
+          ? selectColor
+          : supported.has(id)
+            ? colors.supportFace
+            : loaded.has(id)
+              ? colors.loadFace
+              : colors.base,
+      );
+    }
+  };
+  useEffect(() => {
+    const r = runtime.current;
+    if (!r) return;
+    clear(r.group);
+    r.faces = [];
+    const colors = COLORS[p.theme];
     const surface = p.mesh?.surface || p.geometry;
     const positions = new Float32Array(surface.positions);
     let values: number[] = [];
@@ -389,11 +425,16 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
           : p.plot === "movement"
             ? p.result.movement
             : p.result.stress.map((s) =>
-                s > 0 ? Math.min(5, (p.study.material?.yield || 1) / s) : 5,
+                s > 0
+                  ? Math.min(p.marginMax, (p.yieldStrength || 1) / s)
+                  : p.marginMax,
               );
       max =
-        p.plot === "safety" ? 5 : values.reduce((a, b) => Math.max(a, b), 0);
+        p.plot === "safety"
+          ? p.marginMax
+          : values.reduce((a, b) => Math.max(a, b), 0);
     }
+    r.positions = positions;
     const vertexColors = new Float32Array(positions.length);
     if (values.length)
       values.forEach((v, i) => {
@@ -409,19 +450,8 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       g.computeVertexNormals();
       if (values.length)
         g.setAttribute("color", new THREE.BufferAttribute(vertexColors, 3));
-      const selected = p.selected.includes(face.id);
-      const supported = p.study.supports.some((s) => s.faces.includes(face.id));
-      const loaded = p.study.loads.some((l) => l.faces.includes(face.id));
       const mat = new THREE.MeshStandardMaterial({
-        color: values.length
-          ? "#ffffff"
-          : selected
-            ? selectColor
-            : supported
-              ? colors.supportFace
-              : loaded
-                ? colors.loadFace
-                : colors.base,
+        color: values.length ? "#ffffff" : colors.base,
         roughness: 0.55,
         metalness: 0.12,
         vertexColors: !!values.length,
@@ -437,16 +467,36 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       const edges = p.wireframe
         ? new THREE.WireframeGeometry(g)
         : new THREE.EdgesGeometry(g, 25);
-      const lines = new THREE.LineSegments(
-        edges,
-        new THREE.LineBasicMaterial({
-          color: values.length ? colors.resultEdge : colors.edge,
-          transparent: true,
-          opacity: p.wireframe ? 0.3 : colors.edgeOpacity,
-        }),
+      r.group.add(
+        new THREE.LineSegments(
+          edges,
+          new THREE.LineBasicMaterial({
+            color: values.length ? colors.resultEdge : colors.edge,
+            transparent: true,
+            opacity: p.wireframe ? 0.3 : colors.edgeOpacity,
+          }),
+        ),
       );
-      r.group.add(lines);
     }
+    paint();
+    highlight(props.current.hovered);
+  }, [
+    p.geometry,
+    p.mesh,
+    p.result,
+    p.plot,
+    p.deformation,
+    p.wireframe,
+    p.theme,
+    p.marginMax,
+    p.yieldStrength,
+  ]);
+  useEffect(paint, [p.selected, p.study, p.draftKind, p.theme]);
+  useEffect(() => {
+    const r = runtime.current;
+    if (!r) return;
+    clear(r.annotations);
+    const colors = COLORS[p.theme];
     if (!p.result) {
       const centers = p.geometry.faces;
       for (const s of p.study.supports)
@@ -461,12 +511,12 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
             new THREE.MeshStandardMaterial({ color: colors.support }),
           );
           ball.position.copy(c);
-          r.group.add(ball);
+          r.annotations.add(ball);
           for (let a = 0; a < 3; a++)
             if (s.axes[a]) {
               const dir = new THREE.Vector3();
               dir.setComponent(a, 1);
-              r.group.add(
+              r.annotations.add(
                 new THREE.ArrowHelper(
                   dir,
                   c,
@@ -488,7 +538,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
             const c = r.center
               .clone()
               .add(new THREE.Vector3(0, 0, r.radius * 0.55));
-            r.group.add(
+            r.annotations.add(
               new THREE.ArrowHelper(
                 dir,
                 c,
@@ -518,7 +568,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
             ...(f.anchor as [number, number, number]),
           );
           const start = c.clone().addScaledVector(dir, -r.radius * 0.25);
-          r.group.add(
+          r.annotations.add(
             new THREE.ArrowHelper(
               dir,
               start,
@@ -531,32 +581,27 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         }
       }
     }
-    if (p.probe && p.result) {
+  }, [p.geometry, p.study, p.result, p.theme]);
+  useEffect(() => {
+    const r = runtime.current;
+    if (!r) return;
+    clear(r.markers);
+    r.probe = null;
+    const surface = p.mesh?.surface || p.geometry;
+    if (p.probe && p.result && r.positions) {
       const index = surface.nodeIds.indexOf(p.probe);
       if (index >= 0) {
         const ball = new THREE.Mesh(
           new THREE.SphereGeometry(r.radius * 0.014, 16, 12),
           new THREE.MeshBasicMaterial({ color: "#ffffff", depthTest: false }),
         );
-        ball.position.fromArray(positions, index * 3);
+        ball.position.fromArray(r.positions, index * 3);
         ball.renderOrder = 5;
-        r.group.add(ball);
+        r.markers.add(ball);
         r.probe = ball.position.clone();
       }
     }
-  }, [
-    p.geometry,
-    p.mesh,
-    p.result,
-    p.study,
-    p.selected,
-    p.plot,
-    p.deformation,
-    p.wireframe,
-    p.probe,
-    p.theme,
-    p.draftKind,
-  ]);
+  }, [p.probe, p.result, p.mesh, p.geometry, p.deformation]);
   useEffect(() => highlight(p.hovered), [p.hovered, p.theme]);
   return (
     <div

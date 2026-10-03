@@ -38,7 +38,9 @@ flowchart LR
 
 | Location | Responsibility |
 |---|---|
-| [src/App.tsx](src/App.tsx) | Study state, contextual editors, condition drafts, history, recovery, job polling, result interpretation, and exports |
+| [src/App.tsx](src/App.tsx) | Application state, job polling, autosave, project save/open, exports, and layout |
+| [src/logic.ts](src/logic.ts) | Pure study logic: undo/redo history, draft previews, saved-result validation, yield-margin scale, and material edits |
+| [src/Sidebar.tsx](src/Sidebar.tsx), [src/Inspector.tsx](src/Inspector.tsx), [src/Console.tsx](src/Console.tsx), [src/StartScreen.tsx](src/StartScreen.tsx) | Study tree and face list, per-section inspector panels, output/checks console and job progress, and start screen |
 | [src/Viewer.tsx](src/Viewer.tsx) | CAD-face rendering, selection and hover, camera controls, condition annotations, mesh display, contours, deformation, and node picking |
 | [src/types.ts](src/types.ts) | Renderer domain types, material presets, and initial study values |
 | [src/api.ts](src/api.ts) | Local HTTP requests and browser/native file-save bridge |
@@ -111,13 +113,13 @@ Support reactions subtract equivalent applied loads from the constrained compone
 
 Condition editors use drafts: selecting faces and changing values does not modify the study until Save. Cancel discards the draft. Saved conditions can be named, edited, and removed. The face list exposes surface type, area, and position and highlights the corresponding model surface.
 
-Physical study edits invalidate results. Mesh-size edits invalidate both mesh and results. Camera movement, plot choice, node probing, and deformation display do not change the physical setup. Undo/redo stores up to 30 study edits; undoing a physical edit does not silently resurrect a previously computed result.
+Physical study edits invalidate results. Mesh-size edits invalidate both mesh and results. Camera movement, plot choice, node probing, and deformation display do not change the physical setup. Undo/redo stores up to 30 study edits; undoing a physical edit does not silently resurrect a previously computed result, and keeps the mesh when the element size is unchanged. In the desktop app, Edit > Undo and Redo apply to the focused text field, or otherwise to the study history. Jobs don't block the window: the view stays usable and the inspector is inert until the job finishes or is cancelled.
 
-The viewer provides stress, movement, and yield-margin plots; original, true-scale, and magnified shape display; and an explicit deformation multiplier. Clicking the model probes the nearest rendered result node. Show in view probes the extremum for the active plot; the probed value is labelled in the view. Force balance, reactions, and solver details are in the console's Checks tab.
+The viewer provides stress, movement, and yield-margin plots; original, true-scale, and magnified shape display; and an explicit deformation multiplier. Clicking the model probes the nearest rendered result node. Show in view probes the extremum for the active plot; the probed value is labelled in the view. Force balance, reactions, and solver details are in the console's Checks tab. The yield-margin scale runs from 0 to 5 when the part yields and widens (to 10, 20, 50, …) for safer parts, so variation stays visible.
 
 Refinement reduces the current mesh size to 70%, reruns the analysis, and compares maximum movement and peak stress with the previous result. One comparison is evidence of sensitivity, not an automatic convergence certificate. Sharp support edges and corners may produce increasing peak stress.
 
-Exports available in the interface are portable projects, nodal CSV, viewport PNG, solver input, and solver log. The service also exposes raw mesh and FRD artifacts.
+Exports available in the interface are portable projects, surface-node CSV, viewport PNG, solver input, FRD results, and solver log. The service also exposes the raw mesh.
 
 ## 6. Service and worker protocol
 
@@ -134,17 +136,21 @@ The service binds to `127.0.0.1`: port 4318 during normal browser development an
 | `POST /api/documents/:id/solve` | Mesh and solve the submitted study |
 | `POST /api/documents/:id/save` | Serialize the embedded STEP and study |
 | `POST /api/open` | Validate and import a portable project |
+| `GET`/`POST /api/recovery` | Read or update the autosaved study |
+| `POST /api/recovery/open` | Import the autosaved study as a new document |
 | `GET /api/documents/:id/export/:file` | Download an allowed analysis artifact |
 
-One mesh/solve job may run per document. On macOS, cancellation and service shutdown terminate worker process groups, including solver children. The renderer tracks operation sequences so an old job's completion cannot clear the busy state of a newer operation. Completed in-memory job records expire after one hour; document directories are not automatically removed.
+One mesh/solve job may run per document. On macOS, cancellation and service shutdown terminate worker process groups, including solver children. The renderer tracks operation sequences so an old job's completion cannot clear the busy state of a newer operation. Completed in-memory job records expire after one hour. Document directories are pruned at startup and hourly: the 40 most recently used are kept unless older than seven days, and documents used in the last hour or with a running job are never removed. Errors map to 400 (invalid request), 404 (missing document or artifact), 413 (too large), or 500 (logged, with a generic message).
 
-The service limits STEP uploads to 50 MB, JSON request bodies to 64 MB, and worker stdout to 100 MB. Electron disables renderer Node integration, enables context isolation and sandboxing, denies permission requests and new windows, and restricts navigation to the application origin. The service validates local hosts and request origins and rejects cross-site requests. These protections do not constitute a completed independent security audit.
+The service limits STEP uploads to 50 MB, JSON request bodies to 70 MB (enough for a 50 MB STEP encoded in a project), and worker stdout to 100 MB. Electron disables renderer Node integration, enables context isolation and sandboxing, denies permission requests and new windows, and restricts navigation to the application origin. The service validates local hosts and request origins and rejects cross-site requests. These protections do not constitute a completed independent security audit.
 
 ## 7. Persistence and recovery
 
 A `.bsim` file is JSON with `format: "bettersim"`, `version: 1`, a display name, base64 STEP bytes, and the study definition. Opening checks the format/version, study schema, STEP header, and file-size limit, then reimports the embedded geometry.
 
-Meshes and results are not embedded in the portable format; reopening regenerates them when requested. Browser local storage separately retains the most recent geometry and study for recovery. It is a convenience feature with explicit failure handling, not a substitute for saving a portable project.
+Saving after a solve also embeds the surface mesh and results with the geometry hash and study they belong to. Opening shows them again only when both match exactly; otherwise they are skipped. Solver artifacts are not embedded, so their exports need a new solve.
+
+Autosave keeps one recovery copy, STEP and study, in the service's `recovery/` directory, outside pruning (`GET`/`POST /api/recovery`, `POST /api/recovery/open`). It is a convenience, not a substitute for saving a portable project.
 
 Development document data lives in `.bettersim/`. Packaged desktop document data lives under Electron's user-data directory in `studies/`. Native analysis artifacts remain available there for diagnosis.
 
@@ -179,7 +185,8 @@ The recorded baseline passed 18 engine subsystem tests, one local-service accept
 |---|---|
 | [tests/test_engine.py](tests/test_engine.py) | Analytical bending/extension, units, face identity, supports, forces, pressures, gravity, invalid input, refinement, and nine repeated fixed-mesh solves |
 | [tests/test_complex_parts.py](tests/test_complex_parts.py) | Independent STEP exporter checks, curved geometry, quadratic mesh quality, equilibrium, load scaling, refinement, and curved pressure references |
-| [tests/server.test.mjs](tests/server.test.mjs) | Import, portable save/open, solve, exports, and request/project validation |
+| [tests/server.test.mjs](tests/server.test.mjs) | Import, portable save/open, solve, exports, request/project validation, recovery, error statuses, size limits, and pruning |
+| [tests/logic.test.ts](tests/logic.test.ts) | Undo history invariants and the guard against showing saved results for a different study |
 | [tests/e2e.spec.ts](tests/e2e.spec.ts) | Full study setup, probing, refinement, project reopening, invalidation, undo, malformed import, complex parts, and toroidal pressure reactions |
 | [tests/desktop.mjs](tests/desktop.mjs) | Packaged app with restricted PATH, bundled engine/solver, complex imports, solves, contours, and peak probes |
 
@@ -201,8 +208,8 @@ The evidence does not yet include physical correlation, an independent commercia
 
 The following is a proposed extension sequence, not functionality shipped in 0.1:
 
-1. **Strengthen the single-part release.** Expand external CAD fixtures and numerical references; add resource budgeting before meshing, document/cache cleanup, richer mesh-quality guidance, and independent solver/physical comparisons. Complete signing/notarization and public binary source distribution. Add platform-specific packaging and acceptance runs for Intel Mac, Windows, and Linux.
-2. **Separate application and solver boundaries.** Extract study transitions and editors from the large application component. Introduce explicit job/result schemas, project migrations, and a solver adapter contract around validation, deck generation, execution, and decoding. Preserve the current end-to-end tests through the refactor.
+1. **Strengthen the single-part release.** Expand external CAD fixtures and numerical references; add resource budgeting before meshing, richer mesh-quality guidance, and independent solver/physical comparisons. Complete signing/notarization and public binary source distribution. Add platform-specific packaging and acceptance runs for Intel Mac, Windows, and Linux.
+2. **Separate application and solver boundaries.** Introduce explicit job/result schemas, project migrations, and a solver adapter contract around validation, deck generation, execution, and decoding. Preserve the current end-to-end tests through the refactor.
 3. **Introduce assemblies deliberately.** Model bodies, instances, transforms, materials per body, and selections scoped by body identity. Define bonded/contact interactions and connectivity checks before exposing assembly controls. Add fixtures for disconnected bodies and invalid interactions.
 4. **Add analysis-specific models.** Thermal requires temperatures, heat inputs, and thermal materials; frequency requires eigenmodes and modal result display; buckling requires a reference load state and eigenvalue interpretation. Nonlinear and dynamic analysis require increments/time histories, solver controls, and result sequences. Fatigue requires an explicit method and validated material/load-cycle data.
 5. **Handle CAD revisions.** Introduce topology matching with confidence and unresolved-selection review. Never reuse a face number from changed geometry without verifying its meaning.

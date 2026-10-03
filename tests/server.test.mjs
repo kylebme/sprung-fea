@@ -122,3 +122,83 @@ test("STEP → portable project → reopen → real solve → export", async () 
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+test("recovery on disk, error statuses, and document pruning", async () => {
+  const dir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "bettersim-server-test-"),
+  );
+  const stale = path.join(dir, "00000000-0000-4000-8000-000000000000");
+  await fs.mkdir(stale);
+  const old = new Date(Date.now() - 30 * 24 * 3600000);
+  await fs.utimes(stale, old, old);
+  const service = await createServer({ port: 0, dataDir: dir });
+  const base = `http://127.0.0.1:${service.port}`;
+  try {
+    const imported = await request(base, "/api/sample/beam", {});
+    assert.equal(imported.sample, "beam");
+    const geo = await wait(base, imported.job);
+    assert.equal(await request(base, "/api/recovery"), null);
+    const study = {
+      material: null,
+      supports: [],
+      loads: [],
+      meshSize: geo.recommendedSize,
+      detail: "medium",
+    };
+    const saved = await request(base, "/api/recovery", {
+      id: imported.id,
+      name: "Cantilever beam.step",
+      study,
+      sample: "beam",
+    });
+    assert.ok(saved.at > 0);
+    const meta = await request(base, "/api/recovery");
+    assert.equal(meta.name, "Cantilever beam.step");
+    const restored = await request(base, "/api/recovery/open", {});
+    assert.equal(restored.sample, "beam");
+    assert.deepEqual(restored.study, study);
+    assert.equal((await wait(base, restored.job)).hash, geo.hash);
+
+    const post = (url, body) =>
+      fetch(base + url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const invalid = await post(`/api/documents/${imported.id}/solve`, {});
+    assert.equal(invalid.status, 400);
+    const missing = await post(
+      "/api/documents/11111111-1111-4111-8111-111111111111/solve",
+      study,
+    );
+    assert.equal(missing.status, 404);
+    assert.doesNotMatch((await missing.json()).error, /\//);
+    const noDeck = await fetch(
+      `${base}/api/documents/${imported.id}/export/deck`,
+    );
+    assert.equal(noDeck.status, 404);
+    const malformed = await fetch(base + "/api/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    assert.equal(malformed.status, 400);
+    const step = Buffer.alloc(48 * 1024 * 1024, 32);
+    step.write("ISO-10303-21;");
+    const large = await post("/api/open", {
+      format: "bettersim",
+      version: 1,
+      name: "large.step",
+      step: step.toString("base64"),
+      study,
+    });
+    assert.equal(large.status, 200);
+    await fetch(`${base}/api/jobs/${(await large.json()).job}`, {
+      method: "DELETE",
+    });
+    await assert.rejects(fs.access(stale));
+    await fs.access(path.join(dir, imported.id));
+  } finally {
+    await service.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

@@ -59,9 +59,21 @@ app.whenReady().then(async () => {
       },
       {
         label: "Edit",
+        // Undo and redo go to the renderer, which applies them to the text
+        // field being edited or, otherwise, to the study history.
         submenu: [
-          { role: "undo" },
-          { role: "redo" },
+          {
+            id: "undo",
+            label: "Undo",
+            accelerator: "CmdOrCtrl+Z",
+            click: () => window.webContents.send("menu", "undo"),
+          },
+          {
+            id: "redo",
+            label: "Redo",
+            accelerator: "Shift+CmdOrCtrl+Z",
+            click: () => window.webContents.send("menu", "redo"),
+          },
           { type: "separator" },
           { role: "cut" },
           { role: "copy" },

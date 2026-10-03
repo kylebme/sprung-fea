@@ -1,0 +1,93 @@
+import type { ReactNode } from "react";
+import { Box, FolderOpen, Upload } from "lucide-react";
+
+export type Recovery = { name: string; at: number; legacy?: boolean };
+
+export function StartScreen({
+  recovery,
+  busy,
+  onImport,
+  onOpen,
+  onRestore,
+  onSample,
+  children,
+}: {
+  recovery: Recovery | null;
+  busy: boolean;
+  onImport: () => void;
+  onOpen: () => void;
+  onRestore: () => void;
+  onSample: (name: "beam" | "bracket") => void;
+  children?: ReactNode;
+}) {
+  return (
+    <main className="start">
+      <div className="start-card">
+        <div className="start-left">
+          <div className="start-name">
+            <div className="mark">
+              <Box size={16} />
+            </div>
+            <div>
+              <h1>BetterSim</h1>
+              <span>0.1.0</span>
+            </div>
+          </div>
+          <button className="act" onClick={onImport} disabled={busy}>
+            <Upload size={15} />
+            Import STEP…
+            <kbd>⌘I</kbd>
+          </button>
+          <button className="act" onClick={onOpen} disabled={busy}>
+            <FolderOpen size={15} />
+            Open project…
+            <kbd>⌘O</kbd>
+          </button>
+          <p className="scope">
+            Linear static analysis of one solid part. Units: mm, N, MPa. Solves
+            locally with CalculiX.
+          </p>
+        </div>
+        <div className="start-right">
+          {recovery && (
+            <>
+              <h2>Recent</h2>
+              <div className="start-list">
+                <button onClick={onRestore} disabled={busy}>
+                  <b>{recovery.name.replace(/\.(step|stp)$/i, "")}</b>
+                  <small>
+                    {recovery.at
+                      ? "Autosaved " +
+                        new Date(recovery.at).toLocaleString([], {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })
+                      : "Autosave"}
+                  </small>
+                  <span className="r">Restore</span>
+                </button>
+              </div>
+            </>
+          )}
+          <h2>Examples</h2>
+          <div className="start-list">
+            <button onClick={() => onSample("beam")} disabled={busy}>
+              <b>Cantilever beam</b>
+              <small>100 × 20 × 10 mm · 6 faces</small>
+              <span className="r">Open</span>
+            </button>
+            <button onClick={() => onSample("bracket")} disabled={busy}>
+              <b>Mounting bracket</b>
+              <small>70 × 45 × 50 mm · 4 holes</small>
+              <span className="r">Open</span>
+            </button>
+          </div>
+          <p className="dropnote">
+            Drop a .step, .stp or .bsim file anywhere in this window.
+          </p>
+        </div>
+      </div>
+      {children}
+    </main>
+  );
+}

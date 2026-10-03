@@ -1216,35 +1216,53 @@ svg {
   font-size: 11px;
 }
 
-/* Busy and error overlays */
-.busy-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
+/* Job progress and errors */
+.job-card {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 5;
+  transform: translateX(-50%);
   display: grid;
-  place-items: center;
-  background: var(--backdrop);
-}
-.busy-card {
-  width: 340px;
-  padding: 16px;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 16px;
+  width: 360px;
+  padding: 12px 12px 12px 14px;
   background: var(--panel);
   border: 1px solid var(--line2);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: var(--shadow);
 }
-.busy-card .stage {
+.start {
+  position: relative;
+}
+.start .job-card {
+  bottom: 40px;
+}
+.job-card .stage {
   display: flex;
   align-items: center;
   gap: 8px;
   font: 11px var(--mono);
   color: var(--muted);
-  text-transform: capitalize;
 }
-.busy-card h2 {
-  margin: 6px 0 12px;
-  font-size: 14px;
+.job-card .stage span {
+  color: var(--faint);
+}
+.job-card b {
+  grid-column: 1;
   font-weight: 600;
+}
+.job-card .progress {
+  grid-column: 1;
+}
+.job-card .btn {
+  grid-column: 2;
+  grid-row: 1 / 4;
+}
+.pane.right.busy {
+  opacity: 0.55;
 }
 .progress {
   height: 3px;
@@ -1265,14 +1283,6 @@ svg {
   to {
     transform: translateX(290%);
   }
-}
-.busy-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 12px;
-  font: 11px var(--mono);
-  color: var(--muted);
 }
 .spin {
   animation: spin 0.9s linear infinite;

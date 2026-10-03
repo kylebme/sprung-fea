@@ -35,7 +35,7 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 7. Inspect stress, movement, and yield margin. Click the surface to probe a node, or show the peak. Deformation magnification is displayed explicitly.
 8. Compare with a finer mesh. Save a `.bsim` project, nodal CSV, viewport PNG, solver deck, or log.
 
-Study edits invalidate results. Undo/redo preserves setup history. Local recovery retains the most recent geometry and setup; a portable `.bsim` embeds both and can be opened on another machine. Meshes and results are regenerated when reopening a project, so stale plots are never presented as current.
+Study edits invalidate results. Undo/redo preserves setup history. Autosave retains the most recent geometry and setup. A portable `.bsim` embeds both, plus the latest results, and can be opened on another machine. Saved results are shown only when the geometry and study match exactly, so stale plots are never presented as current.
 
 ## Numerical behavior
 
@@ -55,7 +55,7 @@ This analysis assumes isotropic elastic material, slowly applied loads, and smal
 
 ```sh
 npm run test:engine  # real STEP → mesh → CalculiX; analytical and conservation checks
-npm test            # local-service subsystem: save/open/solve/export and request validation
+npm test            # local-service subsystem (save/open/solve/export, recovery, validation) and study-logic invariants
 npm run test:e2e    # real browser interaction and solves
 npm run test:all
 npm run test:desktop # packaged .app, using only its bundled engine and solver
