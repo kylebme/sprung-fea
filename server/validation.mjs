@@ -1,4 +1,21 @@
 export const SOLVERS = ["spooles", "iterative-scaling", "iterative-cholesky"];
+/** Load kinds; body loads act on the whole part rather than faces. */
+export const LOADS = [
+  "force",
+  "pressure",
+  "gravity",
+  "remote",
+  "moment",
+  "bearing",
+  "rotation",
+];
+const BODY_LOADS = ["gravity", "rotation"];
+const vector = (v, name) => {
+  if (!Array.isArray(v) || v.length !== 3)
+    throw new RequestError(`A ${name} must have three components.`);
+  v.forEach((x) => number(x, `${name[0].toUpperCase() + name.slice(1)} component`));
+  return v;
+};
 /** Analysis types the engine implements (engine/analyses.py). */
 export const ANALYSES = ["static"];
 // Errors caused by the request itself; the service reports them as 400.
@@ -83,15 +100,18 @@ export function validateStudy(s) {
       );
   }
   for (const c of s.loads) {
-    if (!["force", "pressure", "gravity"].includes(c.kind))
+    if (!LOADS.includes(c.kind))
       throw new RequestError("Unsupported load type.");
-    if (c.kind !== "gravity" && !c.faces.length)
+    if (!BODY_LOADS.includes(c.kind) && !c.faces.length)
       throw new RequestError("A surface load must select at least one face.");
     if (c.kind === "pressure") number(c.magnitude, "Pressure");
-    else {
-      if (!Array.isArray(c.vector) || c.vector.length !== 3)
-        throw new RequestError("A load must have three components.");
-      c.vector.forEach((v) => number(v, "Load component"));
+    else if (c.kind === "rotation") {
+      number(c.magnitude, "Rotational speed");
+      vector(c.axis, "rotation axis");
+      vector(c.point, "axis position");
+    } else {
+      vector(c.vector, "load");
+      if (c.kind === "remote") vector(c.point, "load position");
     }
   }
   return s;

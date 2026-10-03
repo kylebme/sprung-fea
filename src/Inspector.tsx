@@ -16,6 +16,8 @@ import { editMaterial, fmt, type Draft } from "./logic";
 import {
   DETAILS,
   DETAIL_NAMES,
+  LOAD_KINDS,
+  isBodyLoad,
   PLOTS,
   SOLVERS,
   facesLabel,
@@ -29,6 +31,7 @@ import {
   type Axis,
   type Filters,
   type Load,
+  type LoadKind,
   type Material,
   type Mesh,
   type Part,
@@ -206,7 +209,7 @@ export function ConditionsPanel({
               {c.name}
               <span className="val">
                 {kind === "load" ? loadValue(c as Load) + " · " : ""}
-                {(c as Load).kind === "gravity"
+                {kind === "load" && isBodyLoad(c as Load)
                   ? "whole part"
                   : facesLabel(c.faces)}
               </span>
@@ -224,7 +227,7 @@ export function ConditionsPanel({
           <p className="note" style={{ marginTop: 0 }}>
             {kind === "support"
               ? "Supports hold faces in place. A study needs at least one."
-              : "Loads are forces, pressures or gravity acting on the part."}
+              : "Loads are forces, pressures, moments, gravity or rotation acting on the part."}
           </p>
         )}
       </div>
@@ -252,6 +255,7 @@ export function ConditionEditor({
   exists,
   selected,
   selectedArea,
+  center,
   onChange,
   onRemoveFace,
   onCancel,
@@ -262,6 +266,8 @@ export function ConditionEditor({
   exists: boolean;
   selected: number[];
   selectedArea: number;
+  /** Area-weighted center of the selected faces, and of the part. */
+  center: { selection: number[] | null; part: number[] };
   onChange: (changes: Record<string, unknown>) => void;
   onRemoveFace: (id: number) => void;
   onCancel: () => void;
@@ -269,15 +275,18 @@ export function ConditionEditor({
   onDelete: () => void;
 }) {
   const v = draft.value;
-  const gravity = draft.kind === "load" && draft.value.kind === "gravity";
+  const body = draft.kind === "load" && isBodyLoad(draft.value);
+  const zero = (v?: number[]) => !v || v.every((x) => x === 0);
   const invalid =
     !v.name.trim() ||
-    (!selected.length && !gravity) ||
+    (!selected.length && !body) ||
     (draft.kind === "support" && !draft.value.axes.some(Boolean)) ||
     (draft.kind === "load" &&
       (draft.value.kind === "pressure"
         ? draft.value.magnitude === 0
-        : draft.value.vector.every((x) => x === 0)));
+        : draft.value.kind === "rotation"
+          ? draft.value.magnitude === 0 || zero(draft.value.axis)
+          : zero(draft.value.vector)));
   return (
     <>
       <Head
@@ -296,10 +305,10 @@ export function ConditionEditor({
         {draft.kind === "support" ? (
           <SupportFields support={draft.value} onChange={onChange} />
         ) : (
-          <LoadFields load={draft.value} onChange={onChange} />
+          <LoadFields load={draft.value} center={center} onChange={onChange} />
         )}
       </div>
-      {!gravity && (
+      {!body && (
         <div className="sec">
           <h4>
             Faces
@@ -414,89 +423,215 @@ function SupportFields({
   );
 }
 
+/** Editing positions and directions: three inputs labelled "<axis> <name>". */
+function VectorField({
+  label,
+  name,
+  value,
+  onChange,
+  action,
+}: {
+  label: string;
+  name: string;
+  value: number[];
+  onChange: (v: number[]) => void;
+  action?: { label: string; onClick: () => void };
+}) {
+  return (
+    <div className="field">
+      <span>
+        {label}
+        {action && (
+          <button className="link field-action" onClick={action.onClick}>
+            {action.label}
+          </button>
+        )}
+      </span>
+      <div className="vec">
+        {["X", "Y", "Z"].map((a, i) => (
+          <label key={a}>
+            <span>{a}</span>
+            <input
+              aria-label={a + " " + name}
+              type="number"
+              value={value[i]}
+              onChange={(e) =>
+                onChange(
+                  value.map((x, j) => (j === i ? Number(e.target.value) : x)),
+                )
+              }
+            />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const round = (v: number[]) => v.map((x) => Number(x.toPrecision(6)));
+const FORCE_LIKE = ["force", "remote", "bearing"];
+
+/** The changes for switching a load to another kind, keeping what still fits. */
+function switchKind(
+  load: Load,
+  kind: LoadKind,
+  center: { selection: number[] | null; part: number[] },
+): Partial<Load> {
+  const names = LOAD_KINDS.map((k) => k.name);
+  const name = names.includes(load.name)
+    ? LOAD_KINDS.find((k) => k.id === kind)!.name
+    : load.name;
+  const vector =
+    FORCE_LIKE.includes(kind) && FORCE_LIKE.includes(load.kind)
+      ? load.vector
+      : kind === "gravity"
+        ? [0, 0, -9.81]
+        : kind === "moment"
+          ? [0, 0, 10000]
+          : [0, 0, -100];
+  const changes: Partial<Load> = { kind, name, vector };
+  if (kind === "remote") changes.point = round(center.selection || center.part);
+  if (kind === "rotation") {
+    changes.magnitude = 1000;
+    changes.axis = [0, 0, 1];
+    changes.point = round(center.part);
+  }
+  if (kind === "pressure") changes.magnitude = 1;
+  return changes;
+}
+
 function LoadFields({
   load,
+  center,
   onChange,
 }: {
   load: Load;
+  center: { selection: number[] | null; part: number[] };
   onChange: (changes: Record<string, unknown>) => void;
 }) {
+  const kind = LOAD_KINDS.find((k) => k.id === load.kind)!;
+  const forceLike = FORCE_LIKE.includes(load.kind);
   return (
     <>
       <div className="field">
         <span>Type</span>
-        <div className="seg">
-          {(["force", "pressure", "gravity"] as const).map((k) => (
+        <div className="seg wrap" role="group" aria-label="Load type">
+          {LOAD_KINDS.map((k) => (
             <button
-              key={k}
-              className={load.kind === k ? "on" : ""}
+              key={k.id}
+              className={load.kind === k.id ? "on" : ""}
+              aria-pressed={load.kind === k.id}
               onClick={() =>
-                load.kind !== k &&
-                onChange({
-                  kind: k,
-                  name: ["Force", "Pressure", "Gravity"].includes(load.name)
-                    ? k[0].toUpperCase() + k.slice(1)
-                    : load.name,
-                  vector: k === "gravity" ? [0, 0, -9.81] : [0, 0, -100],
-                })
+                load.kind !== k.id && onChange(switchKind(load, k.id, center))
               }
             >
-              {k[0].toUpperCase() + k.slice(1)}
+              {k.name}
             </button>
           ))}
         </div>
       </div>
-      {load.kind === "pressure" ? (
+      {load.kind === "pressure" && (
+        <NumberField
+          label="Pressure"
+          value={load.magnitude}
+          unit="MPa"
+          onChange={(v) => onChange({ magnitude: v })}
+        />
+      )}
+      {load.kind === "rotation" && (
         <>
           <NumberField
-            label="Pressure"
+            label="Speed"
             value={load.magnitude}
-            unit="MPa"
+            unit="rpm"
             onChange={(v) => onChange({ magnitude: v })}
           />
-          <p className="note">Positive pressure pushes into the surface.</p>
-        </>
-      ) : (
-        <>
           <div className="field">
-            <span>
-              {load.kind === "gravity"
-                ? "Acceleration, m/s²"
-                : "Total force, N"}
-            </span>
-            <div className="vec">
-              {["X", "Y", "Z"].map((a, i) => (
-                <label key={a}>
-                  <span>{a}</span>
-                  <input
-                    aria-label={
-                      a + (load.kind === "gravity" ? " acceleration" : " force")
-                    }
-                    type="number"
-                    value={load.vector[i]}
-                    onChange={(e) =>
-                      onChange({
-                        vector: load.vector.map((x, j) =>
-                          j === i ? Number(e.target.value) : x,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-              ))}
+            <span>Axis direction</span>
+            <div className="seg" role="group" aria-label="Rotation axis">
+              {["X", "Y", "Z"].map((a, i) => {
+                const axis = [0, 0, 0].map((_, j) => +(i === j));
+                const on = load.axis?.every((v, j) => v === axis[j]);
+                return (
+                  <button
+                    key={a}
+                    className={on ? "on" : ""}
+                    aria-pressed={!!on}
+                    onClick={() => onChange({ axis })}
+                  >
+                    {a}
+                  </button>
+                );
+              })}
             </div>
           </div>
-          <Row label="Magnitude">
-            {fmt(Math.hypot(...load.vector))}
-            <em>{load.kind === "gravity" ? "m/s²" : "N"}</em>
-          </Row>
-          <p className="note">
-            {load.kind === "force"
-              ? "Split across the selected faces by area."
-              : "Acts on the whole part using the material density."}
-          </p>
+          <VectorField
+            label="Custom direction"
+            name="axis"
+            value={load.axis || [0, 0, 1]}
+            onChange={(axis) => onChange({ axis })}
+          />
+          <VectorField
+            label="Axis passes through, mm"
+            name="axis position"
+            value={load.point || center.part}
+            onChange={(point) => onChange({ point })}
+            action={{
+              label: "Part center",
+              onClick: () => onChange({ point: round(center.part) }),
+            }}
+          />
         </>
       )}
+      {(forceLike || load.kind === "gravity" || load.kind === "moment") && (
+        <>
+          <VectorField
+            label={
+              load.kind === "gravity"
+                ? "Acceleration, m/s²"
+                : load.kind === "moment"
+                  ? "Moment, N·mm"
+                  : "Total force, N"
+            }
+            name={
+              load.kind === "gravity"
+                ? "acceleration"
+                : load.kind === "moment"
+                  ? "moment"
+                  : "force"
+            }
+            value={load.vector}
+            onChange={(vector) => onChange({ vector })}
+          />
+          <Row label="Magnitude">
+            {fmt(Math.hypot(...load.vector))}
+            <em>
+              {load.kind === "gravity"
+                ? "m/s²"
+                : load.kind === "moment"
+                  ? "N·mm"
+                  : "N"}
+            </em>
+          </Row>
+        </>
+      )}
+      {load.kind === "remote" && (
+        <VectorField
+          label="Acts at, mm"
+          name="position"
+          value={load.point || center.part}
+          onChange={(point) => onChange({ point })}
+          action={
+            center.selection
+              ? {
+                  label: "Face center",
+                  onClick: () => onChange({ point: round(center.selection!) }),
+                }
+              : undefined
+          }
+        />
+      )}
+      <p className="note">{kind.note}</p>
     </>
   );
 }

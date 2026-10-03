@@ -1,5 +1,13 @@
 import { fmt } from "./logic";
-import type { Analysis, Load, Plot, Solver, Study, Support } from "./types";
+import type {
+  Analysis,
+  Load,
+  LoadKind,
+  Plot,
+  Solver,
+  Study,
+  Support,
+} from "./types";
 
 export const DETAILS = [
   { id: "coarse", name: "Coarse", factor: 1.5 },
@@ -57,10 +65,53 @@ export const STAGES: Record<string, string> = {
 export const stripExt = (name: string) => name.replace(/\.(step|stp)$/i, "");
 export const facesLabel = (faces: number[]) =>
   faces.length === 1 ? "Face " + faces[0] : faces.length + " faces";
+/** Load kinds in the order the editor offers them, with their help text. */
+export const LOAD_KINDS: { id: LoadKind; name: string; note: string }[] = [
+  {
+    id: "force",
+    name: "Force",
+    note: "One total force, split across the selected faces by area.",
+  },
+  {
+    id: "pressure",
+    name: "Pressure",
+    note: "Positive pressure pushes into the surface.",
+  },
+  {
+    id: "gravity",
+    name: "Gravity",
+    note: "Acts on the whole part using the material density.",
+  },
+  {
+    id: "remote",
+    name: "Remote force",
+    note: "A force acting at a point off the faces, such as the end of a lever. The selected faces carry it; its offset adds a moment.",
+  },
+  {
+    id: "moment",
+    name: "Moment",
+    note: "A twisting load about the X, Y and Z directions, carried by the selected faces.",
+  },
+  {
+    id: "bearing",
+    name: "Bearing",
+    note: "A shaft or pin pressing on a cylindrical face. It pushes on the half that faces the load, so act across the axis.",
+  },
+  {
+    id: "rotation",
+    name: "Rotation",
+    note: "The whole part spins about an axis, using the material density.",
+  },
+];
+export const BODY_LOADS: LoadKind[] = ["gravity", "rotation"];
+export const isBodyLoad = (l: Load) => BODY_LOADS.includes(l.kind);
 export const loadValue = (l: Load) =>
   l.kind === "pressure"
     ? fmt(l.magnitude) + " MPa"
-    : fmt(Math.hypot(...l.vector)) + (l.kind === "gravity" ? " m/s²" : " N");
+    : l.kind === "rotation"
+      ? fmt(l.magnitude) + " rpm"
+      : fmt(Math.hypot(...l.vector)) +
+        (l.kind === "gravity" ? " m/s²" : l.kind === "moment" ? " N·mm" : " N");
 export const blankSupport = (): Support => ({
   id: crypto.randomUUID(),
   name: "Fixed",

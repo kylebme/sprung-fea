@@ -32,13 +32,29 @@ export type Support = {
   faces: number[];
   axes: boolean[];
 };
+/**
+ * Loads. `vector` is a force (N), acceleration (m/s²) or moment (N·mm);
+ * `magnitude` a pressure (MPa) or rotational speed (rpm). A remote force acts
+ * at `point`; a rotation turns about `axis` through `point`. Gravity and
+ * rotation act on the whole part and select no faces.
+ */
+export type LoadKind =
+  | "force"
+  | "pressure"
+  | "gravity"
+  | "remote"
+  | "moment"
+  | "bearing"
+  | "rotation";
 export type Load = {
   id: string;
   name: string;
-  kind: "force" | "pressure" | "gravity";
+  kind: LoadKind;
   faces: number[];
   vector: number[];
   magnitude: number;
+  point?: number[];
+  axis?: number[];
 };
 /** CalculiX equation solver: direct SPOOLES or preconditioned conjugate gradients. */
 export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";

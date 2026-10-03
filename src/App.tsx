@@ -41,6 +41,7 @@ import {
   STAGES,
   blankLoad,
   blankSupport,
+  isBodyLoad,
   stripExt,
 } from "./labels";
 import { StartScreen, type Recovery } from "./StartScreen";
@@ -605,11 +606,11 @@ export default function App() {
       setSelected([]);
     }
   };
-  const isGravity = draft?.kind === "load" && draft.value.kind === "gravity";
+  const isBody = draft?.kind === "load" && isBodyLoad(draft.value);
   const commitDraft = () => {
     if (!draft) return;
-    const faces = isGravity ? [] : selected;
-    if (!faces.length && !isGravity) return;
+    const faces = isBody ? [] : selected;
+    if (!faces.length && !isBody) return;
     const value = { ...draft.value, faces, name: draft.value.name.trim() };
     const key = draft.kind === "support" ? "supports" : "loads";
     const list = study[key] as (Support | Load)[];
@@ -644,10 +645,23 @@ export default function App() {
     () => previewStudy(study, draft, selected),
     [study, draft, selected],
   );
-  const selectedArea =
-    part?.geometry.faces
-      .filter((f) => selected.includes(f.id))
-      .reduce((sum, f) => sum + f.area, 0) || 0;
+  const selectedFaces =
+    part?.geometry.faces.filter((f) => selected.includes(f.id)) || [];
+  const selectedArea = selectedFaces.reduce((sum, f) => sum + f.area, 0);
+  const center = {
+    selection: selectedArea
+      ? [0, 1, 2].map(
+          (i) =>
+            selectedFaces.reduce((sum, f) => sum + f.center[i] * f.area, 0) /
+            selectedArea,
+        )
+      : null,
+    part: part
+      ? [0, 1, 2].map(
+          (i) => (part.geometry.bounds[i] + part.geometry.bounds[i + 3]) / 2,
+        )
+      : [0, 0, 0],
+  };
   // The displayed frame of the result, and what it can show.
   const shown = useMemo(
     () => (result ? atFrame(result.view, frame) : null),
@@ -725,6 +739,7 @@ export default function App() {
           ).some((c) => c.id === draft.value.id)}
           selected={selected}
           selectedArea={selectedArea}
+          center={center}
           onChange={(changes) =>
             setDraft((d) =>
               d ? ({ ...d, value: { ...d.value, ...changes } } as Draft) : null,
@@ -1057,6 +1072,11 @@ export default function App() {
                         ? " · " + result.frames[frame]?.label
                         : ""}
                     </span>
+                  </>
+                ) : draft && isBody ? (
+                  <>
+                    <b>{draft.value.name || "Load"}</b>
+                    <span>acts on the whole part</span>
                   </>
                 ) : draft ? (
                   <>

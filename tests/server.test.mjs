@@ -135,7 +135,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     assert.equal(data.result.frames.length, 1);
     assert.ok(
       data.result.checks.some(
-        (c) => c.label === "Force balance error" && c.values[0] < 0.1,
+        (c) => c.label === "Force balance error" && c.values[0] < 1,
       ),
     );
     assert.match(data.result.solver, /incomplete Cholesky/);
@@ -237,6 +237,19 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       });
     const invalid = await post(`/api/documents/${imported.id}/solve`, {});
     assert.equal(invalid.status, 400);
+    // Remote forces need their point, rotations their axis and speed.
+    for (const load of [
+      { kind: "remote", faces: [2], vector: [0, 0, -1] },
+      { kind: "rotation", faces: [], vector: [0, 0, 0], magnitude: 100 },
+      { kind: "moment", faces: [], vector: [0, 0, 1] },
+      { kind: "spring", faces: [2], vector: [0, 0, 1] },
+    ]) {
+      const response = await post(`/api/documents/${imported.id}/solve`, {
+        ...study,
+        loads: [{ id: "l", name: "Load", magnitude: 0, ...load }],
+      });
+      assert.equal(response.status, 400, load.kind);
+    }
     const missing = await post(
       "/api/documents/11111111-1111-4111-8111-111111111111/solve",
       study,

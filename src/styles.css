@@ -1361,3 +1361,16 @@ svg {
   gap: 6px;
   margin-top: 12px;
 }
+.seg.wrap {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, 1fr);
+}
+.seg.wrap button {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+}
+.field-action {
+  float: right;
+}

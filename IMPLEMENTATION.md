@@ -17,7 +17,7 @@ Implemented analysis inputs are:
 - One solid imported from `.step` or `.stp`, with dimensions and CAD surfaces available for inspection.
 - A homogeneous isotropic elastic material, including density and optional yield strength.
 - Fixed supports or supports that block selected global X/Y/Z translations on CAD faces.
-- A total vector force distributed over selected faces, normal pressure, and gravity.
+- A total vector force distributed over selected faces, normal pressure, gravity, a remote force acting at a point off the faces, a moment, a bearing load on cylindrical faces, and rotation about an axis.
 - Curvature-aware quadratic tetrahedral meshing, with detail presets and an explicit target size.
 
 Results include equivalent stress, displacement magnitude, yield margin, support reactions, force balance, interpolated and nodal probes, section planes, iso-surfaces, thresholds, and a finer-mesh comparison. All numerical results come from the actual solver pipeline.
@@ -103,6 +103,12 @@ Gmsh connectivity is converted to CalculiX C3D10 ordering by exchanging the fina
 Vector force means **one total force across all selected faces**. Seven-point triangle quadrature integrates the quadratic face shape functions and distributes consistent nodal forces, normalized by the combined loaded area. Selecting another face does not multiply the specified total.
 
 Pressure maps each CAD boundary triangle to the appropriate tetrahedron face and writes CalculiX pressure loads. Positive pressure acts into the solid. Overlapping pressure definitions add. Gravity definitions also add and use the material density.
+
+Remote forces and moments are carried by the selected faces as a deformable connection, the distribution of an RBE3 element or distributing coupling, computed in the engine rather than with solver constraints. The force becomes a uniform traction acting at the faces' area centroid C; the moment (including the moment (P − C) × F of a force acting at a remote point P) becomes a traction **a** × (**x** − C) that varies linearly over the faces, with **a** = J⁻¹M and J = ∫(|r|²I − r rᵀ) dA. Integrating these tractions against the quadratic face shape functions gives nodal forces whose resultant force and moment are exactly the specified ones. Faces that cannot resist a moment (J singular) are rejected.
+
+A bearing load presses on the half of the selected cylinder that faces the load. The pressure varies as the cosine of the angle between the surface normal and the load direction, and is scaled so its resultant along the load equals the force. The engine finds the cylinder axis from the surface normals, rejects non-cylindrical faces, and rejects forces with a component along the axis. A bore split into two CAD faces can be selected as one bearing.
+
+Rotation is a centrifugal body load, `*DLOAD CENTRIF` with ω² in rad²/s² about an axis through a point, entered in rpm. Only one rotation per study is allowed. Its equivalent nodal forces use the same four-point tetrahedron rule as CalculiX, so reaction recovery stays exact.
 
 Equivalent applied nodal contributions are retained for force, pressure, and gravity. They are required when interpreting the solver's nodal force output at supported nodes.
 

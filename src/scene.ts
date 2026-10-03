@@ -171,6 +171,9 @@ export class Scene {
   private probeFilter: Obj;
   private marker: Obj;
   private glyphs: { source: Obj; data: Obj; actor: Obj }[];
+  /** Lines from remote load points to the faces that carry them. */
+  private links: Obj;
+  private linksActor: Obj;
   private fieldArrays: Record<string, Obj> = {};
   private pickPoint: Obj;
   private pickData: Obj;
@@ -304,7 +307,10 @@ export class Scene {
     const octahedron = make("vtkSphereSource");
     octahedron.setThetaResolution(4);
     octahedron.setPhiResolution(3);
-    this.glyphs = [arrow, arrow, octahedron].map((source) => {
+    const ball = make("vtkSphereSource");
+    ball.setThetaResolution(12);
+    ball.setPhiResolution(8);
+    this.glyphs = [arrow, arrow, octahedron, ball].map((source) => {
       const data = make("vtkPolyData");
       const glyph = make("vtkGlyph3D");
       glyph.setInputData(data);
@@ -316,6 +322,12 @@ export class Scene {
       actor.getMapper().scalarVisibilityOff();
       return { source: glyph, data, actor };
     });
+
+    this.links = make("vtkPolyData");
+    this.linksActor = this.actor(this.mapper({ data: this.links }));
+    this.linksActor.getMapper().scalarVisibilityOff();
+    this.linksActor.pickableOff();
+    this.linksActor.getProperty().setLineWidth(1.5);
 
     this.listen();
   }
@@ -638,7 +650,9 @@ export class Scene {
     const r = this.radius;
     const loads: number[][] = [],
       supports: number[][] = [],
-      markers: number[][] = [];
+      markers: number[][] = [],
+      points: number[][] = [],
+      links: number[] = [];
     if (!s.plot) {
       const faces = new Map(s.faces.map((f) => [f.id, f]));
       for (const c of s.study.supports)
@@ -656,6 +670,40 @@ export class Scene {
           const dir = unit(l.vector);
           if (Math.hypot(...l.vector))
             loads.push([...add(this.center, [0, 0, r * 0.55]), ...dir]);
+          continue;
+        }
+        if (l.kind === "rotation") {
+          // The spin axis: an arrow along it through the chosen point.
+          if (!l.axis || !l.point || !Math.hypot(...l.axis)) continue;
+          const u = unit(l.axis);
+          loads.push([...add(l.point, u, -r * 0.5), ...u]);
+          loads.push([...add(l.point, u, r * 0.25), ...u]);
+          points.push([...l.point, 0, 0, 1]);
+          continue;
+        }
+        if (l.kind === "remote" && l.point) {
+          // The force acts at its point, linked to the faces carrying it.
+          if (Math.hypot(...l.vector)) {
+            const u = unit(l.vector);
+            loads.push([...add(l.point, u, -r * 0.25), ...u]);
+          }
+          points.push([...l.point, 0, 0, 1]);
+          for (const id of l.faces) {
+            const f = faces.get(id);
+            if (f) links.push(...l.point, ...f.anchor);
+          }
+          continue;
+        }
+        if (l.kind === "moment") {
+          // A double-headed arrow along the moment axis.
+          if (!Math.hypot(...l.vector)) continue;
+          const u = unit(l.vector);
+          for (const id of l.faces) {
+            const f = faces.get(id);
+            if (!f) continue;
+            loads.push([...add(f.anchor, u, -r * 0.25), ...u]);
+            loads.push([...add(f.anchor, u, -r * 0.33), ...u]);
+          }
           continue;
         }
         for (const id of l.faces) {
@@ -676,7 +724,21 @@ export class Scene {
       { items: loads, color: colors.load, size: r * 0.25 },
       { items: supports, color: colors.support, size: r * 0.13 },
       { items: markers, color: colors.support, size: r * 0.05 },
+      { items: points, color: colors.load, size: r * 0.06 },
     ];
+    const pts = this.vtk.vtkPoints();
+    const coords = this.array(Float64Array.from(links), 3);
+    pts.setData(coords);
+    this.links.setPoints(pts);
+    const lines = this.cells(
+      Int32Array.from({ length: links.length / 3 }, (_, i) => i),
+      2,
+    );
+    this.links.setLines(lines);
+    this.links.modified();
+    for (const o of [pts, coords, lines]) o.$delete();
+    this.linksActor.getProperty().setColor(...rgb(colors.load));
+    this.linksActor.setVisibility(links.length ? 1 : 0);
     sets.forEach(({ items, color, size }, i) => {
       const g = this.glyphs[i];
       const pts = this.vtk.vtkPoints();
