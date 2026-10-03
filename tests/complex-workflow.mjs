@@ -11,9 +11,9 @@ export async function configureComplexPart(page, name) {
     .locator('input[type=file][accept=".step,.stp"]')
     .setInputFiles(path.resolve(`samples/${name}.step`));
   const geometry = (await (await imported).json()).data;
-  await expect(
-    page.getByRole("heading", { name: "Your part, ready." }),
-  ).toBeVisible({ timeout: 60000 });
+  await expect(page.getByRole("heading", { name })).toBeVisible({
+    timeout: 60000,
+  });
   const planeAt = (axis, value) => {
     const planes = geometry.faces.filter(
       (f) => f.type === "Plane" && Math.abs(f.center[axis] - value) < 1e-4,
@@ -50,18 +50,21 @@ export async function configureComplexPart(page, name) {
     },
   };
   const c = cases[name];
-  await page
-    .getByRole("button", { name: "Choose a material", exact: true })
-    .click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await page.getByRole("button", { name: "Set material" }).click();
   await page.getByRole("button", { name: /Aluminum 6061-T6/ }).click();
-  await page.getByRole("button", { name: "Use this material" }).click();
-  await page.getByRole("button", { name: "Add support", exact: true }).click();
+  await page.getByRole("button", { name: "Apply material" }).click();
+  await inspector
+    .getByRole("button", { name: "Add support", exact: true })
+    .click();
   await page
     .getByRole("button", { name: new RegExp(`^Face ${c.support()}\\b`) })
     .click();
   await page.getByRole("button", { name: "Save support" }).click();
-  await page.getByRole("button", { name: /Loads Apply a load/ }).click();
-  await page.getByRole("button", { name: "Add load", exact: true }).click();
+  await page.getByRole("button", { name: "Loads", exact: true }).click();
+  await inspector
+    .getByRole("button", { name: "Add load", exact: true })
+    .click();
   await page
     .getByRole("button", { name: new RegExp(`^Face ${c.load()}\\b`) })
     .click();
@@ -71,8 +74,7 @@ export async function configureComplexPart(page, name) {
       .fill(String(c.vector[i]));
   }
   await page.getByRole("button", { name: "Save load" }).click();
-  await page.getByRole("button", { name: /Mesh Balanced/ }).click();
-  await page.getByText("Advanced mesh settings", { exact: true }).click();
-  await page.getByLabel(/^Target element size/).fill(String(c.size));
+  await page.getByRole("button", { name: /^Mesh\s*Medium/ }).click();
+  await page.getByLabel(/^Element size/).fill(String(c.size));
   return geometry;
 }

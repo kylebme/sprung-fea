@@ -65,7 +65,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
         },
       ],
       meshSize: 4,
-      detail: "balanced",
+      detail: "medium",
     };
     const project = await request(
       base,
@@ -80,6 +80,12 @@ test("STEP → portable project → reopen → real solve → export", async () 
     const reopened = await wait(base, opened.job);
     assert.equal(reopened.hash, geo.hash);
     assert.deepEqual(opened.study, study);
+    const legacy = await request(base, "/api/open", {
+      ...project,
+      study: { ...study, detail: "balanced" },
+    });
+    assert.equal(legacy.study.detail, "medium");
+    await wait(base, legacy.job);
     const solving = await request(
       base,
       "/api/documents/" + opened.id + "/solve",

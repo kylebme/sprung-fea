@@ -30,7 +30,9 @@ export function validateStudy(s) {
     s.loads.length > 100
   )
     throw Error("This project contains an invalid study setup.");
-  if (!["quick", "balanced", "fine", "custom"].includes(s.detail))
+  // Projects saved before 0.2 used Quick/Balanced for Coarse/Medium.
+  s.detail = { quick: "coarse", balanced: "medium" }[s.detail] || s.detail;
+  if (!["coarse", "medium", "fine", "custom"].includes(s.detail))
     throw Error("The mesh detail setting is invalid.");
   number(s.meshSize, "Mesh size", { positive: true });
   if (s.material) {

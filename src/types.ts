@@ -43,7 +43,7 @@ export type Study = {
   supports: Support[];
   loads: Load[];
   meshSize: number;
-  detail: "quick" | "balanced" | "fine" | "custom";
+  detail: "coarse" | "medium" | "fine" | "custom";
 };
 export type Mesh = {
   surface: Surface;
@@ -110,7 +110,7 @@ export const emptyStudy = (): Study => ({
   supports: [],
   loads: [],
   meshSize: 0,
-  detail: "balanced",
+  detail: "medium",
 });
 export function fmt(n: number, digits = 3) {
   return !Number.isFinite(n)

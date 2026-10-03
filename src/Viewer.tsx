@@ -8,6 +8,7 @@ import {
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { Geometry, Mesh, Result, Study, Plot } from "./types";
+export type Theme = "light" | "dark";
 export type ViewerHandle = {
   fit: () => void;
   view: (v: string) => void;
@@ -27,7 +28,76 @@ type Props = {
   deformation: number;
   wireframe: boolean;
   probe: number | null;
+  probeLabel: string | null;
+  theme: Theme;
+  draftKind: "support" | "load" | null;
 };
+const COLORS = {
+  dark: {
+    base: "#8b959e",
+    edge: "#07090b",
+    edgeOpacity: 0.55,
+    resultEdge: "#000000",
+    hover: "#4d9bff",
+    support: "#33b596",
+    supportFace: "#4d9a87",
+    load: "#f0a03c",
+    loadFace: "#b08050",
+    select: "#4d9bff",
+  },
+  light: {
+    base: "#c3ccd3",
+    edge: "#4a5a66",
+    edgeOpacity: 0.4,
+    resultEdge: "#203349",
+    hover: "#2f6fd8",
+    support: "#12866b",
+    supportFace: "#8fc4b6",
+    load: "#c9700c",
+    loadFace: "#e8bf93",
+    select: "#2f6fd8",
+  },
+};
+const AXES: [string, number[], string][] = [
+  ["X", [1, 0, 0], "#e5484d"],
+  ["Y", [0, 1, 0], "#3dae6b"],
+  ["Z", [0, 0, 1], "#3f74e0"],
+];
+function axisTriad() {
+  const scene = new THREE.Scene();
+  for (const [name, dir, color] of AXES) {
+    const v = new THREE.Vector3(...(dir as [number, number, number]));
+    scene.add(
+      new THREE.ArrowHelper(v, new THREE.Vector3(), 1, color, 0.22, 0.1),
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = color;
+    ctx.font = "600 44px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(name, 32, 34);
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(canvas),
+        depthTest: false,
+      }),
+    );
+    sprite.position.copy(v.multiplyScalar(1.38));
+    sprite.scale.setScalar(0.55);
+    scene.add(sprite);
+  }
+  const camera = new THREE.OrthographicCamera(
+    -1.35,
+    1.35,
+    1.35,
+    -1.35,
+    0.1,
+    10,
+  );
+  return { scene, camera };
+}
 export const palette = [
   "#2352a1",
   "#279abe",
@@ -55,7 +125,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     faces: THREE.Mesh[];
     radius: number;
     center: THREE.Vector3;
+    probe: THREE.Vector3 | null;
   } | null>(null);
+  const label = useRef<HTMLDivElement>(null);
   const props = useRef(p);
   props.current = p;
   const [failure, setFailure] = useState("");
@@ -88,6 +160,17 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     r.camera.updateProjectionMatrix();
     r.controls.update();
   };
+  const highlight = (face: number | null) => {
+    for (const mesh of runtime.current?.faces || []) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      mat.emissive.set(
+        mesh.userData.face === face
+          ? COLORS[props.current.theme].hover
+          : "#000000",
+      );
+      mat.emissiveIntensity = 0.16;
+    }
+  };
   useImperativeHandle(ref, () => ({
     fit: () => fit(),
     view: fit,
@@ -113,7 +196,8 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       return;
     }
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-    renderer.setClearColor("#f3f5f7", 0);
+    renderer.setClearColor("#000000", 0);
+    renderer.autoClear = false;
     el.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10000);
@@ -135,7 +219,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       faces: [],
       radius: 100,
       center: new THREE.Vector3(),
+      probe: null,
     };
+    const triad = axisTriad();
     const resize = new ResizeObserver(() => {
       const { width, height } = el.getBoundingClientRect();
       renderer.setSize(width, height);
@@ -169,11 +255,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         props.current.onHover(next);
         renderer.domElement.style.cursor = next ? "pointer" : "grab";
       }
-      for (const mesh of runtime.current?.faces || []) {
-        const mat = mesh.material as THREE.MeshStandardMaterial;
-        mat.emissive.set(mesh.userData.face === next ? "#1c443e" : "#000000");
-        mat.emissiveIntensity = 0.18;
-      }
+      highlight(next);
     };
     const pointerUp = (e: PointerEvent) => {
       if (
@@ -217,7 +299,29 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     const render = () => {
       frame = requestAnimationFrame(render);
       controls.update();
+      const { width, height } = el.getBoundingClientRect();
+      renderer.setViewport(0, 0, width, height);
+      renderer.clear();
       renderer.render(scene, camera);
+      const size = 84;
+      renderer.clearDepth();
+      renderer.setScissorTest(true);
+      renderer.setScissor(6, 6, size, size);
+      renderer.setViewport(6, 6, size, size);
+      triad.camera.position.set(0, 0, 4).applyQuaternion(camera.quaternion);
+      triad.camera.quaternion.copy(camera.quaternion);
+      renderer.render(triad.scene, triad.camera);
+      renderer.setScissorTest(false);
+      const tag = label.current;
+      const point = runtime.current?.probe;
+      if (tag) {
+        const v = point?.clone().project(camera);
+        tag.hidden = !v || v.z > 1 || !props.current.probeLabel;
+        if (v) {
+          tag.style.left = ((v.x + 1) / 2) * width + "px";
+          tag.style.top = ((1 - v.y) / 2) * height + "px";
+        }
+      }
     };
     render();
     return () => {
@@ -263,6 +367,14 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       r.group.remove(child);
     }
     r.faces = [];
+    r.probe = null;
+    const colors = COLORS[p.theme];
+    const selectColor =
+      p.draftKind === "support"
+        ? colors.support
+        : p.draftKind === "load"
+          ? colors.load
+          : colors.select;
     const surface = p.mesh?.surface || p.geometry;
     const positions = new Float32Array(surface.positions);
     let values: number[] = [];
@@ -282,13 +394,13 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       max =
         p.plot === "safety" ? 5 : values.reduce((a, b) => Math.max(a, b), 0);
     }
-    const colors = new Float32Array(positions.length);
+    const vertexColors = new Float32Array(positions.length);
     if (values.length)
       values.forEach((v, i) => {
         const c = contour(p.plot === "safety" ? 1 - v / max : v / max);
-        colors[i * 3] = c.r;
-        colors[i * 3 + 1] = c.g;
-        colors[i * 3 + 2] = c.b;
+        vertexColors[i * 3] = c.r;
+        vertexColors[i * 3 + 1] = c.g;
+        vertexColors[i * 3 + 2] = c.b;
       });
     for (const face of surface.faces) {
       const g = new THREE.BufferGeometry();
@@ -296,7 +408,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       g.setIndex(face.indices);
       g.computeVertexNormals();
       if (values.length)
-        g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        g.setAttribute("color", new THREE.BufferAttribute(vertexColors, 3));
       const selected = p.selected.includes(face.id);
       const supported = p.study.supports.some((s) => s.faces.includes(face.id));
       const loaded = p.study.loads.some((l) => l.faces.includes(face.id));
@@ -304,12 +416,12 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         color: values.length
           ? "#ffffff"
           : selected
-            ? "#5bbaa7"
+            ? selectColor
             : supported
-              ? "#8dbeb5"
+              ? colors.supportFace
               : loaded
-                ? "#e6b88d"
-                : "#becbd4",
+                ? colors.loadFace
+                : colors.base,
         roughness: 0.55,
         metalness: 0.12,
         vertexColors: !!values.length,
@@ -328,9 +440,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       const lines = new THREE.LineSegments(
         edges,
         new THREE.LineBasicMaterial({
-          color: values.length ? "#203349" : "#516775",
+          color: values.length ? colors.resultEdge : colors.edge,
           transparent: true,
-          opacity: p.wireframe ? 0.22 : 0.4,
+          opacity: p.wireframe ? 0.3 : colors.edgeOpacity,
         }),
       );
       r.group.add(lines);
@@ -346,7 +458,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
           );
           const ball = new THREE.Mesh(
             new THREE.OctahedronGeometry(r.radius * 0.025),
-            new THREE.MeshStandardMaterial({ color: "#158477" }),
+            new THREE.MeshStandardMaterial({ color: colors.support }),
           );
           ball.position.copy(c);
           r.group.add(ball);
@@ -359,7 +471,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
                   dir,
                   c,
                   r.radius * 0.13,
-                  0x158477,
+                  colors.support,
                   r.radius * 0.035,
                   r.radius * 0.02,
                 ),
@@ -381,7 +493,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
                 dir,
                 c,
                 r.radius * 0.3,
-                0xc9793e,
+                colors.load,
                 r.radius * 0.06,
                 r.radius * 0.03,
               ),
@@ -411,7 +523,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
               dir,
               start,
               r.radius * 0.25,
-              0xc9793e,
+              colors.load,
               r.radius * 0.06,
               r.radius * 0.03,
             ),
@@ -429,6 +541,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         ball.position.fromArray(positions, index * 3);
         ball.renderOrder = 5;
         r.group.add(ball);
+        r.probe = ball.position.clone();
       }
     }
   }, [
@@ -441,16 +554,10 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     p.deformation,
     p.wireframe,
     p.probe,
+    p.theme,
+    p.draftKind,
   ]);
-  useEffect(() => {
-    for (const mesh of runtime.current?.faces || []) {
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissive.set(
-        mesh.userData.face === p.hovered ? "#1c443e" : "#000000",
-      );
-      mat.emissiveIntensity = 0.18;
-    }
-  }, [p.hovered]);
+  useEffect(() => highlight(p.hovered), [p.hovered, p.theme]);
   return (
     <div
       className="three-host"
@@ -458,6 +565,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       aria-label="Interactive 3D part. Drag to rotate, scroll to zoom, click a face to select."
     >
       {failure && <div className="viewer-error">{failure}</div>}
+      <div className="probe-label" ref={label} hidden>
+        {p.probeLabel}
+      </div>
     </div>
   );
 });

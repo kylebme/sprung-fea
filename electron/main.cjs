@@ -1,4 +1,11 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  ipcMain,
+  nativeTheme,
+} = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 let engine, window;
@@ -23,7 +30,7 @@ app.whenReady().then(async () => {
     minWidth: 1040,
     minHeight: 720,
     title: "BetterSim",
-    backgroundColor: "#f3f5f7",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0d0f11" : "#f3f4f6",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),

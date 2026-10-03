@@ -8,7 +8,7 @@ This document describes the implemented application, its numerical and persisten
 
 BetterSim performs linear static structural analysis of one STEP solid using CalculiX. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and Three.js provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
 
-The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A left-hand study checklist, central model view, and contextual editor keep these dependencies visible. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
+The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A study tree with the part's face list on the left, the model view in the center, and an inspector on the right keep these dependencies visible. A collapsible console under the view holds job output and solver checks. Light and dark themes follow the system setting until the user picks one. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
 
 Official SolidWorks documentation informed the workflow decisions before the interface was implemented. BetterSim uses an original layout, styling, assets, and integration code.
 
@@ -83,7 +83,7 @@ Gmsh imports the same STEP source, applies curvature-aware size controls, genera
 
 Minimum signed element quality must be positive. The current limit is 150,000 volume elements; a requested size below one five-hundredth of the longest part dimension is rejected. The element-count limit is checked after generation, so it is not a hard preallocation memory bound.
 
-Quick, Balanced, and Fine use target-size multipliers of 1.5, 1, and 0.65 relative to the recommendation. An explicit size selects Custom. A solve generates its mesh automatically; mesh preview is a separate operation.
+Coarse, Medium, and Fine use target-size multipliers of 1.5, 1, and 0.65 relative to the recommendation. An explicit size selects Custom. A solve generates its mesh automatically; mesh preview is a separate operation.
 
 ### Physical validation
 
@@ -113,7 +113,7 @@ Condition editors use drafts: selecting faces and changing values does not modif
 
 Physical study edits invalidate results. Mesh-size edits invalidate both mesh and results. Camera movement, plot choice, node probing, and deformation display do not change the physical setup. Undo/redo stores up to 30 study edits; undoing a physical edit does not silently resurrect a previously computed result.
 
-The viewer provides stress, movement, and yield-margin plots; original, true-scale, and magnified shape display; and an explicit deformation multiplier. Clicking the model probes the nearest rendered result node. Show Peak selects the extremum for the active plot.
+The viewer provides stress, movement, and yield-margin plots; original, true-scale, and magnified shape display; and an explicit deformation multiplier. Clicking the model probes the nearest rendered result node. Show in view probes the extremum for the active plot; the probed value is labelled in the view. Force balance, reactions, and solver details are in the console's Checks tab.
 
 Refinement reduces the current mesh size to 70%, reruns the analysis, and compares maximum movement and peak stress with the previous result. One comparison is evidence of sensitivity, not an automatic convergence certificate. Sharp support edges and corners may produce increasing peak stress.
 

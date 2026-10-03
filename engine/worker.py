@@ -66,7 +66,7 @@ def surface_data(quadratic=False):
 
 
 def import_part(folder):
-    emit('importing', 'Reading STEP surfaces')
+    emit('importing', 'Reading STEP geometry')
     solid = initialize(folder / 'part.step')
     bbox = gmsh.model.getBoundingBox(*solid)
     dims = [bbox[i+3]-bbox[i] for i in range(3)]
@@ -82,7 +82,7 @@ def import_part(folder):
 
 
 def mesh_part(folder, study):
-    emit('meshing', 'Building a curved, high-quality solid mesh')
+    emit('meshing', 'Meshing')
     initialize(folder/'part.step')
     geo = json.loads((folder/'geometry.json').read_text())
     size = float(study.get('meshSize') or geo['recommendedSize'])
@@ -325,9 +325,9 @@ def parse_frd(path):
 
 def solve(folder, study):
     mesh=json.loads((folder/'mesh.json').read_text())
-    emit('checking','Checking supports and load definitions')
+    emit('checking','Checking supports and loads')
     fixed=write_deck(folder,study,mesh)
-    emit('solving','CalculiX is solving the elastic response')
+    emit('solving','Solving with CalculiX')
     start=time.monotonic()
     # The native SPOOLES MT build can produce nondeterministic factorization.
     # Pin every CCX/BLAS stage to one thread for reproducible results.
@@ -338,7 +338,7 @@ def solve(folder, study):
     (folder/'solver.log').write_text(process.stdout)
     if process.returncode != 0 or '*ERROR' in process.stdout or not (folder/'analysis.frd').exists():
         raise ValueError('CalculiX could not solve this study. Check supports, mesh quality, and the solver log.\n'+process.stdout[-2500:])
-    emit('reading','Preparing stress and movement contours')
+    emit('reading','Reading results')
     fields=parse_frd(folder/'analysis.frd')
     ids=mesh['surface']['nodeIds']
     if any(n not in fields['DISP'] or n not in fields['STRESS'] for n in ids):

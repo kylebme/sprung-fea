@@ -14,7 +14,7 @@ A single STEP solid, isotropic linear elastic material, fixed or global-directio
 
 ## Analytical reference
 
-For the 100 × 20 × 10 mm cantilever, E = 68,900 MPa, with a total 100 N downward force at its free end, Euler–Bernoulli bending predicts about 0.2903 mm displacement. The balanced quadratic solid mesh gives about 0.2881 mm, within 1%. This comparison permits the expected local clamp/Poisson effects of a three-dimensional solid model. Axial loading is checked against FL/(EA), within 1.5%. Gravity's reaction is checked against a 0.054 kg part at 9.81 m/s², giving 0.52974 N. These are subsystem references, not validation of every possible CAD geometry or support idealization.
+For the 100 × 20 × 10 mm cantilever, E = 68,900 MPa, with a total 100 N downward force at its free end, Euler–Bernoulli bending predicts about 0.2903 mm displacement. The medium quadratic solid mesh gives about 0.2881 mm, within 1%. This comparison permits the expected local clamp/Poisson effects of a three-dimensional solid model. Axial loading is checked against FL/(EA), within 1.5%. Gravity's reaction is checked against a 0.054 kg part at 9.81 m/s², giving 0.52974 N. These are subsystem references, not validation of every possible CAD geometry or support idealization.
 
 ## Complex CAD corpus
 

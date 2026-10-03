@@ -23,8 +23,8 @@
     "format": "prettier --write src server electron scripts/*.mjs tests/*.mjs tests/*.ts *.ts *.json index.html"
   },
   "dependencies": {
-    "@fontsource/dm-sans": "^5.3.0",
-    "@fontsource/manrope": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "multer": "^2.0.2",

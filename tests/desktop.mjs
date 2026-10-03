@@ -13,29 +13,21 @@ try {
   const page = await app.firstWindow();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(page.getByRole("heading", { name: "BetterSim" })).toBeVisible();
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
   await expect(
-    page.getByRole("heading", {
-      name: "Understand your part. Build with confidence.",
-    }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", {
-      name: "Cantilever beam A simple, verifiable first study",
-    })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Your part, ready." }),
+    page.getByRole("heading", { name: "Cantilever beam" }),
   ).toBeVisible({ timeout: 30000 });
   await page.getByRole("button", { name: "Use example setup" }).click();
-  await page.getByRole("button", { name: "Run analysis", exact: true }).click();
+  await inspector.getByRole("button", { name: "Solve", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "A clearer picture." }),
+    page.getByRole("heading", { name: "von Mises stress" }),
   ).toBeVisible({ timeout: 60000 });
-  await expect(
-    page.getByRole("button", { name: /Largest movement/ }),
-  ).toContainText("0.288");
-  await page.getByRole("button", { name: "Show peak" }).click();
-  await expect(page.locator(".probe-card")).toContainText("Node ");
+  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await expect(inspector.locator(".big")).toContainText("0.288");
+  await page.getByRole("button", { name: "Show in view" }).click();
+  await expect(page.locator(".probe-card")).toContainText("Node");
   await page.screenshot({ path: "output/playwright/desktop.png" });
   for (const name of [
     "bearing-block",
@@ -44,14 +36,12 @@ try {
     "tube-elbow",
   ]) {
     await configureComplexPart(page, name);
-    await page
-      .getByRole("button", { name: "Run analysis", exact: true })
-      .click();
+    await inspector.getByRole("button", { name: "Solve", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "A clearer picture." }),
+      page.getByRole("heading", { name: "von Mises stress" }),
     ).toBeVisible({ timeout: 90000 });
-    await page.getByRole("button", { name: "Show peak" }).click();
-    await expect(page.locator(".probe-card")).toContainText("Node ");
+    await page.getByRole("button", { name: "Show in view" }).click();
+    await expect(page.locator(".probe-card")).toContainText("Node");
     await page.screenshot({ path: `output/playwright/desktop-${name}.png` });
   }
   const health = await page.evaluate(

@@ -29,9 +29,9 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 1. Open the cantilever beam example, or import `.step`/`.stp` containing one solid.
 2. Check the dimensions shown after import. Working units are **mm, N, MPa**; STEP length units are converted to mm by OpenCASCADE.
 3. Choose a material. The built-in values are representative; enter the actual material specification when needed.
-4. Add a support and select CAD faces in the model or face list. "Held in place" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
+4. Add a support and select CAD faces in the model or face list. "Fixed" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
 5. Add force, pressure, or gravity. Vector force is **one total force distributed over all selected faces**. Positive pressure pushes inward; gravity uses m/s² and material density.
-6. Start with the Balanced mesh. Preview it or run directly; Solve meshes automatically.
+6. Start with the Medium mesh. Preview it or run directly; Solve meshes automatically.
 7. Inspect stress, movement, and yield margin. Click the surface to probe a node, or show the peak. Deformation magnification is displayed explicitly.
 8. Compare with a finer mesh. Save a `.bsim` project, nodal CSV, viewport PNG, solver deck, or log.
 

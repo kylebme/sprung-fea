@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   build: {
+    // The service's CSP allows fonts only from 'self', so never inline them.
+    assetsInlineLimit: (file) =>
+      /\.(woff2?|ttf)$/.test(file) ? false : undefined,
     rollupOptions: {
       output: {
         manualChunks: {

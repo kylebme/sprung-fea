@@ -17,7 +17,7 @@ BetterSim is GPL-3.0-or-later. Its original interface and integration code are i
 | CadQuery 2.7.0 (optional development only) | Reproducible complex STEP test fixtures | Apache-2.0 | https://github.com/CadQuery/cadquery |
 | Vite | Frontend build and development | MIT | https://github.com/vitejs/vite |
 | Express / Multer | Local service and file import | MIT | https://github.com/expressjs |
-| DM Sans / Manrope | Bundled offline fonts | SIL OFL-1.1 | https://github.com/googlefonts/dm-fonts and https://github.com/sharanda/manrope |
+| Inter / JetBrains Mono | Bundled offline fonts | SIL OFL-1.1 | https://github.com/rsms/inter and https://github.com/JetBrains/JetBrainsMono |
 | ARPACK-NG | CalculiX linear algebra dependency | BSD-3-Clause | https://github.com/opencollab/arpack-ng |
 | OpenBLAS | Linear algebra | BSD-3-Clause | https://github.com/OpenMathLib/OpenBLAS |
 | GCC runtime | Fortran, OpenMP, quadmath | GPL-3.0 with GCC Runtime Library Exception where applicable; LGPL for quadmath | https://gcc.gnu.org/ |
