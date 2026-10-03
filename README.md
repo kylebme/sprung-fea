@@ -33,7 +33,7 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 3. Choose a material. The built-in values are representative; enter the actual material specification when needed.
 4. Add a support and select CAD faces in the model or face list. "Fixed" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
 5. Add force, pressure, or gravity. Vector force is **one total force distributed over all selected faces**. Positive pressure pushes inward; gravity uses m/s² and material density.
-6. Start with the Medium mesh. Preview it or run directly; Solve meshes automatically.
+6. Start with the Medium mesh. Preview it or run directly; Solve meshes automatically. The direct solver (SPOOLES) is the default; for large meshes choose an iterative solver (incomplete Cholesky or diagonal scaling), which needs far less memory. Mesh size and element count are not limited by the app.
 7. Inspect stress, movement, and yield margin. Click the part, or a section through it, to probe interpolated values, or show the peak node. Cut the part with a section plane, show an iso-surface, or threshold the critical region. Deformation magnification is displayed explicitly.
 8. Compare with a finer mesh. Save a `.bsim` project, nodal CSV, viewport PNG, solver deck, or log.
 
@@ -46,7 +46,7 @@ Study edits invalidate results. Undo/redo preserves setup history. Autosave reta
 - Vector loads use consistent quadratic surface integration, not equal per-node force splitting.
 - Normal pressures map CAD faces to CalculiX element faces; overlapping pressures and gravity loads add.
 - A six-mode rigid-motion rank check rejects unstable support definitions. No automatic soft springs.
-- The Mac solver is pinned to a single thread for repeatable SPOOLES factorization.
+- Meshing, assembly, the direct solver and stress recovery use multiple threads (Auto: performance cores; 1 or All selectable in the Mesh panel). OpenMP stays single-threaded, because combined with CalculiX's own threads it produced nondeterministic stresses and reactions; with that pinned, repeated solves are bit-identical. Iterative solves are rejected if CalculiX stops short of its convergence tolerance.
 - Mesh inversion checks, finite-value validation, cancellation, diagnostics, and retained solver artifacts.
 - CalculiX RF output is corrected for applied nodal loads before reporting support reactions. Force balance is available in result interpretation.
 - Stress contours use the solver's averaged nodal stress tensor, converted to von Mises stress.

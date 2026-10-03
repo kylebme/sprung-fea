@@ -67,6 +67,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
       ],
       meshSize: 4,
       detail: "medium",
+      solver: "iterative-cholesky",
     };
     const project = await request(
       base,
@@ -81,18 +82,33 @@ test("STEP → portable project → reopen → real solve → export", async () 
     const reopened = await wait(base, opened.job);
     assert.equal(reopened.hash, geo.hash);
     assert.deepEqual(opened.study, study);
+    const { solver, ...older } = study;
     const legacy = await request(base, "/api/open", {
       ...project,
-      study: { ...study, detail: "balanced" },
+      study: { ...older, detail: "balanced" },
     });
     assert.equal(legacy.study.detail, "medium");
+    // Studies from before solver choice used the direct solver.
+    assert.equal(legacy.study.solver, "spooles");
     await wait(base, legacy.job);
+    const { cpus } = await request(base, "/api/health");
+    assert.ok(cpus.logical >= cpus.performance && cpus.performance >= 1);
+    const tooMany = await fetch(
+      `${base}/api/documents/${opened.id}/solve?threads=${cpus.logical + 1}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(study),
+      },
+    );
+    assert.equal(tooMany.status, 400);
     const solving = await request(
       base,
-      "/api/documents/" + opened.id + "/solve",
+      "/api/documents/" + opened.id + "/solve?threads=" + cpus.logical,
       study,
     );
     const data = await wait(base, solving.job);
+    assert.equal(data.result.threads, cpus.logical);
     assert.ok(
       data.result.summary.maxMovement > 0.28 &&
         data.result.summary.maxMovement < 0.3,
@@ -100,6 +116,8 @@ test("STEP → portable project → reopen → real solve → export", async () 
     // The viewer's binary contract: the client decoder reads what the
     // engine wrote, and its fields agree with the solver summary.
     assert.equal(data.result.stress, undefined);
+    assert.match(data.result.solver, /incomplete Cholesky/);
+    assert.ok(data.result.iterations > 0);
     const response = await fetch(
       base + "/api/documents/" + opened.id + "/view",
     );
@@ -122,6 +140,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     ).text();
     assert.ok(deck.includes("TYPE=C3D10"));
     assert.ok(deck.includes("*CLOAD"));
+    assert.ok(deck.includes("*STATIC, SOLVER=ITERATIVE CHOLESKY"));
     const foreign = await fetch(base + "/api/sample/beam", {
       method: "POST",
       headers: { Origin: "https://unrelated.example" },
@@ -176,7 +195,7 @@ test("recovery on disk, error statuses, and document pruning", async () => {
     assert.equal(meta.name, "Cantilever beam.step");
     const restored = await request(base, "/api/recovery/open", {});
     assert.equal(restored.sample, "beam");
-    assert.deepEqual(restored.study, study);
+    assert.deepEqual(restored.study, { ...study, solver: "spooles" });
     assert.equal((await wait(base, restored.job)).hash, geo.hash);
 
     const post = (url, body) =>

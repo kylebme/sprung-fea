@@ -269,6 +269,73 @@ test("result filters: section area, section probing, iso-surface, threshold, and
   );
   expect(errors).toEqual([]);
 });
+test("iterative solver: choose, solve, report iterations, and keep the choice", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("http://127.0.0.1:5173");
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
+  await page.getByRole("button", { name: "Use example setup" }).click();
+  const solvers = page.getByRole("group", { name: "Solver" });
+  await expect(
+    solvers.getByRole("button", { name: /^Direct \(SPOOLES\)/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await solvers
+    .getByRole("button", { name: /^Iterative, incomplete Cholesky/ })
+    .click();
+  await page
+    .getByRole("group", { name: "Threads" })
+    .getByRole("button", { name: "1", exact: true })
+    .click();
+  // Autosave runs after the job finishes; wait for it before reloading.
+  const autosaved = page.waitForResponse(
+    (r) => r.url().includes("/api/recovery") && r.request().method() === "POST",
+    { timeout: 60000 },
+  );
+  await inspector(page)
+    .getByRole("button", { name: "Solve", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "von Mises stress" }),
+  ).toBeVisible({ timeout: 60000 });
+  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  // Same answer as the direct solver.
+  await expect(inspector(page).locator(".big")).toContainText("0.288");
+  await page.getByRole("button", { name: "Checks", exact: true }).click();
+  await expect(page.locator(".console")).toContainText(
+    "CalculiX, iterative, incomplete Cholesky",
+  );
+  await expect(
+    page.locator(".check-row").filter({ hasText: "Solver iterations" }),
+  ).toContainText(/\d/);
+  await expect(
+    page.locator(".check-row").filter({ hasText: "Threads" }),
+  ).toContainText("1");
+  // Autosave keeps the solver choice with the rest of the study.
+  await autosaved;
+  await page.reload();
+  await page
+    .getByRole("button", { name: /^Cantilever beam.*Restore$/ })
+    .click();
+  await page.getByRole("button", { name: /^Mesh\s/ }).click();
+  await expect(
+    page
+      .getByRole("group", { name: "Solver" })
+      .getByRole("button", { name: /^Iterative, incomplete Cholesky/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  // The thread count is a machine preference, kept across reloads.
+  await expect(
+    page
+      .getByRole("group", { name: "Threads" })
+      .getByRole("button", { name: "1", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page
+    .getByRole("group", { name: "Threads" })
+    .getByRole("button", { name: /^Auto/ })
+    .click();
+  expect(errors).toEqual([]);
+});
 test("invalid STEP reports an actionable import error", async ({ page }) => {
   await page.goto("http://127.0.0.1:5173");
   await page.locator('input[type=file][accept=".step,.stp"]').setInputFiles({

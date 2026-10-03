@@ -1,5 +1,6 @@
 """Isolated Gmsh / CalculiX worker. JSON protocol; stdout is reserved for result."""
 import sys, os, json, math, hashlib, shutil, subprocess, re, time
+from collections import deque
 from pathlib import Path
 import numpy as np
 import gmsh
@@ -9,10 +10,16 @@ def emit(stage, message):
     print(json.dumps({'stage': stage, 'message': message}), file=sys.stderr, flush=True)
 
 
+def threads():
+    """Thread count chosen by the service (BETTERSIM_THREADS), else all cores."""
+    value=os.environ.get('BETTERSIM_THREADS','')
+    return max(1,int(value)) if value.isdigit() else (os.cpu_count() or 1)
+
+
 def initialize(step):
     gmsh.initialize()
     gmsh.option.setNumber('General.Terminal', 0)
-    gmsh.option.setNumber('General.NumThreads', 2)
+    gmsh.option.setNumber('General.NumThreads', threads())
     gmsh.option.setString('Geometry.OCCTargetUnit', 'MM')
     gmsh.model.occ.importShapes(str(step))
     gmsh.model.occ.synchronize()
@@ -137,9 +144,6 @@ def mesh_part(folder, study):
     size = float(study.get('meshSize') or geo['recommendedSize'])
     if not math.isfinite(size) or size <= 0:
         raise ValueError('Mesh size must be a positive number in mm.')
-    # Avoid accidentally allocating millions of elements with a typo.
-    if size < max(geo['dimensions']) / 500:
-        raise ValueError('Mesh size is too small for this part. Start above one five-hundredth of its longest dimension.')
     size_settings(size)
     gmsh.model.mesh.generate(3)
     gmsh.model.mesh.setOrder(2)
@@ -149,8 +153,6 @@ def mesh_part(folder, study):
         raise ValueError('This part did not produce a quadratic tetrahedral mesh.')
     tags, conn = gmsh.model.mesh.getElementsByType(11)
     conn = np.asarray(conn).reshape(-1, 10)
-    if len(tags) > 150000:
-        raise ValueError('This mesh exceeds the first-version limit of 150,000 elements. Use a larger mesh size.')
     surface = surface_data(True)
     faces = {}
     for _, tag in gmsh.model.getEntities(2):
@@ -170,6 +172,37 @@ def mesh_part(folder, study):
     return mesh
 
 
+# CalculiX linear equation solvers available in the bundled build. PARDISO
+# and PaStiX need libraries this build does not link.
+SOLVERS={'spooles':('SPOOLES','SPOOLES direct'),
+         'iterative-scaling':('ITERATIVE SCALING','iterative, diagonal scaling'),
+         'iterative-cholesky':('ITERATIVE CHOLESKY','iterative, incomplete Cholesky')}
+
+
+def solver_of(study):
+    name=study.get('solver') or 'spooles'
+    if name not in SOLVERS:
+        raise ValueError('Choose the direct solver or one of the iterative solvers.')
+    return name
+
+
+def read_log(path):
+    """Errors, the last lines, and the final conjugate-gradient residual of a
+    CalculiX log. Read line by line: iterative solves log every iteration."""
+    error=False;tail=deque(maxlen=40);last=None
+    pattern=re.compile(r'iteration=\s*(\d+), error=\s*(\S+), limit=\s*(\S+)')
+    with open(path) as log:
+        for line in log:
+            error|='*ERROR' in line
+            tail.append(line)
+            match=pattern.match(line.strip())
+            if match: last=match
+    iterative=None
+    if last:
+        iterative={'iterations':int(last[1]),'error':float(last[2]),'limit':float(last[3])}
+    return error,''.join(tail),iterative
+
+
 def finite(value, name, positive=False):
     n = float(value)
     if not math.isfinite(n) or (positive and n <= 0):
@@ -178,6 +211,7 @@ def finite(value, name, positive=False):
 
 
 def validate(study, mesh):
+    solver_of(study)
     material = study.get('material')
     if not material:
         raise ValueError('Choose a material first.')
@@ -291,7 +325,7 @@ def write_deck(folder, study, mesh):
     lines += ['*NSET, NSET=HELD']
     held=sorted(set(n for n,_ in fixed))
     lines += [', '.join(map(str,held[i:i+16])) for i in range(0,len(held),16)]
-    lines += ['*STEP','*STATIC']
+    lines += ['*STEP','*STATIC, SOLVER='+SOLVERS[solver_of(study)][0]]
     cload={}
     dload=[]
     applied={}
@@ -377,15 +411,28 @@ def solve(folder, study):
     fixed=write_deck(folder,study,mesh)
     emit('solving','Solving with CalculiX')
     start=time.monotonic()
-    # The native SPOOLES MT build can produce nondeterministic factorization.
-    # Pin every CCX/BLAS stage to one thread for reproducible results.
+    # Assembly, SPOOLES factorization and stress recovery use CalculiX's own
+    # thread controls, which gave bit-identical results over 20 repeated
+    # solves at 8 threads. OpenMP must stay at one thread: OMP_NUM_THREADS or
+    # NUMBER_OF_CPUS above 1 together with any CCX_NPROC above 1 made stress
+    # and reactions vary between identical runs, sometimes grossly (a 1000 N
+    # reaction reported as 866 N). CalculiX's iterative solvers iterate on
+    # one thread regardless.
+    n=str(threads())
     env={k:v for k,v in os.environ.items() if not k.startswith('CCX_NPROC')}
     env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS='1',OPENBLAS_NUM_THREADS='1',
-               CCX_NPROC_RESULTS='1',CCX_NPROC_STIFFNESS='1',CCX_NPROC_EQUATION_SOLVER='1')
-    process=subprocess.run([find_ccx(),'-i','analysis'],cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,env=env,timeout=240)
-    (folder/'solver.log').write_text(process.stdout)
-    if process.returncode != 0 or '*ERROR' in process.stdout or not (folder/'analysis.frd').exists():
-        raise ValueError('CalculiX could not solve this study. Check supports, mesh quality, and the solver log.\n'+process.stdout[-2500:])
+               CCX_NPROC_RESULTS=n,CCX_NPROC_STIFFNESS=n,CCX_NPROC_EQUATION_SOLVER=n)
+    # No time limit: large models can solve for a long time, and the user can
+    # cancel the job.
+    with open(folder/'solver.log','w') as log:
+        process=subprocess.run([find_ccx(),'-i','analysis'],cwd=folder,stdout=log,stderr=subprocess.STDOUT,env=env)
+    error,tail,iterative=read_log(folder/'solver.log')
+    if process.returncode != 0 or error or not (folder/'analysis.frd').exists():
+        raise ValueError('CalculiX could not solve this study. Check supports, mesh quality, and the solver log.\n'+tail[-2500:])
+    # CalculiX returns its last iterate without an error when conjugate
+    # gradients stop short of the tolerance, so check the final residual.
+    if iterative and not iterative['error']<=iterative['limit']:
+        raise ValueError(f"The iterative solver did not converge: residual {iterative['error']:.3g} is above the limit {iterative['limit']:.3g} after {iterative['iterations']} iterations. Use the direct solver, or check that the supports hold the part.\n"+tail[-2500:])
     emit('reading','Reading results')
     fields=parse_frd(folder/'analysis.frd')
     ids=mesh['surface']['nodeIds']
@@ -415,7 +462,8 @@ def solve(folder, study):
     result={'displacements':displacements,'stress':stress,'movement':movement,'summary':{'maxStress':max_stress,'maxMovement':max_move,
             'minSafety':yield_strength/max_stress if yield_strength and max_stress else None,'reactions':reactions.tolist(),
             'appliedForce':total_load.tolist(),'forceBalanceError':float(balance),'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))], 'seconds':time.monotonic()-start},
-            'warnings':warnings,'solver':'CalculiX','meshSize':mesh['size'], 'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']}
+            'warnings':warnings,'solver':'CalculiX, '+SOLVERS[solver_of(study)][1],
+            'iterations':iterative['iterations'] if iterative else None,'threads':threads(),'meshSize':mesh['size'], 'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']}
     (folder/'result.json').write_text(json.dumps(result))
     view=mesh_view(mesh)
     view.update(displacement=('f8',displacements),vonMises=('f8',stress))

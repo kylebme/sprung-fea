@@ -61,6 +61,8 @@ import {
   type ResultInfo,
   type Study,
   type Support,
+  type Threads,
+  type Cpus,
 } from "./types";
 import {
   decodeView,
@@ -142,6 +144,17 @@ export default function App() {
       ? "orthographic"
       : "perspective",
   );
+  const [threads, setThreads] = useState<Threads>(() => {
+    const saved = readStorage("bettersim-threads");
+    return saved === "single" || saved === "all" ? saved : "auto";
+  });
+  const [cpus, setCpus] = useState<Cpus | null>(null);
+  const chooseThreads = (next: Threads) => {
+    try {
+      localStorage.setItem("bettersim-threads", next);
+    } catch {}
+    setThreads(next);
+  };
   const chooseProjection = (next: Projection) => {
     try {
       localStorage.setItem("bettersim-projection", next);
@@ -179,6 +192,11 @@ export default function App() {
     } catch {}
     setTheme(next);
   };
+  useEffect(() => {
+    api("/health")
+      .then((h) => setCpus(h.cpus))
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     api("/recovery")
       .then((meta: Recovery | null) => {
@@ -443,7 +461,12 @@ export default function App() {
       update(next);
     }
     try {
-      const j = await post("/documents/" + part.id + "/" + action, next);
+      const count =
+        threads === "single" ? 1 : threads === "all" && cpus ? cpus.logical : 0;
+      const j = await post(
+        `/documents/${part.id}/${action}${count ? "?threads=" + count : ""}`,
+        next,
+      );
       const data = await poll(j.job, action === "mesh" ? "meshing" : "solve");
       if (!data) return;
       const view = await fetchView(part.id);
@@ -742,6 +765,9 @@ export default function App() {
             canSolve={ready && !job && study.meshSize > 0}
             busy={!!job}
             onChange={update}
+            threads={threads}
+            cpus={cpus}
+            onThreads={chooseThreads}
             onPreview={() => run("mesh")}
             onSolve={() => run("solve")}
           />

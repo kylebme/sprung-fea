@@ -17,6 +17,7 @@ import {
   DETAILS,
   DETAIL_NAMES,
   PLOTS,
+  SOLVERS,
   facesLabel,
   loadValue,
   stripExt,
@@ -35,6 +36,8 @@ import {
   type Result,
   type Study,
   type Support,
+  type Threads,
+  type Cpus,
 } from "./types";
 
 export function PartPanel({
@@ -505,7 +508,10 @@ export function MeshPanel({
   missing,
   canSolve,
   busy,
+  threads,
+  cpus,
   onChange,
+  onThreads,
   onPreview,
   onSolve,
 }: {
@@ -515,7 +521,10 @@ export function MeshPanel({
   missing: string[];
   canSolve: boolean;
   busy: boolean;
+  threads: Threads;
+  cpus: Cpus | null;
   onChange: (study: Study) => void;
+  onThreads: (threads: Threads) => void;
   onPreview: () => void;
   onSolve: () => void;
 }) {
@@ -553,6 +562,53 @@ export function MeshPanel({
         />
         <p className="note">
           Quadratic tetrahedra (C3D10), refined on curved faces.
+        </p>
+      </div>
+      <div className="sec">
+        <h4>Solver</h4>
+        <div className="presets" role="group" aria-label="Solver">
+          {SOLVERS.map((s) => (
+            <button
+              key={s.id}
+              aria-pressed={study.solver === s.id}
+              className={study.solver === s.id ? "on" : ""}
+              onClick={() => onChange({ ...study, solver: s.id })}
+            >
+              <span>
+                {s.name}
+                <small>{s.note}</small>
+              </span>
+              {study.solver === s.id && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+        <div className="field" style={{ marginTop: 10 }}>
+          <span>Threads</span>
+          <div className="seg" role="group" aria-label="Threads">
+            {(
+              [
+                ["auto", "Auto", cpus?.performance],
+                ["single", "1", null],
+                ["all", "All", cpus?.logical],
+              ] as const
+            ).map(([id, name, count]) => (
+              <button
+                key={id}
+                aria-pressed={threads === id}
+                className={threads === id ? "on" : ""}
+                onClick={() => onThreads(id)}
+              >
+                {name}
+                {count ? ` · ${count}` : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="note">
+          Auto uses the performance cores. Threads speed up meshing, assembly,
+          the direct solver and stress recovery without changing results;
+          iterative solvers iterate on one thread. Saved on this computer, not
+          in the study.
         </p>
       </div>
       {mesh && (

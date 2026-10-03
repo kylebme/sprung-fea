@@ -1,5 +1,5 @@
 import { fmt } from "./logic";
-import type { Load, Plot, Study, Support } from "./types";
+import type { Load, Plot, Solver, Study, Support } from "./types";
 
 export const DETAILS = [
   { id: "coarse", name: "Coarse", factor: 1.5 },
@@ -12,6 +12,23 @@ export const DETAIL_NAMES: Record<Study["detail"], string> = {
   fine: "Fine",
   custom: "Custom",
 };
+export const SOLVERS: { id: Solver; name: string; note: string }[] = [
+  {
+    id: "spooles",
+    name: "Direct (SPOOLES)",
+    note: "Exact factorization. Most robust; memory grows quickly with mesh size.",
+  },
+  {
+    id: "iterative-cholesky",
+    name: "Iterative, incomplete Cholesky",
+    note: "Conjugate gradients with a strong preconditioner. Much less memory for large meshes.",
+  },
+  {
+    id: "iterative-scaling",
+    name: "Iterative, diagonal scaling",
+    note: "Conjugate gradients with the least memory. Needs more iterations.",
+  },
+];
 export const PLOTS: Record<Plot, { name: string; unit: string }> = {
   stress: { name: "von Mises stress", unit: "MPa" },
   movement: { name: "Displacement", unit: "mm" },

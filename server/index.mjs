@@ -1,13 +1,30 @@
 import express from "express";
 import { validateStudy, RequestError } from "./validation.mjs";
 import multer from "multer";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import os from "node:os";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/**
+ * Logical cores, and performance cores where the platform reports them
+ * (Apple Silicon). Automatic thread counts use performance cores, since
+ * efficiency cores slow down a parallel factorization that waits for them.
+ */
+function cores() {
+  const logical = os.availableParallelism();
+  let performance = logical;
+  if (process.platform === "darwin")
+    try {
+      performance =
+        Number(execFileSync("sysctl", ["-n", "hw.perflevel0.physicalcpu"])) ||
+        logical;
+    } catch {}
+  return { logical, performance: Math.min(performance, logical) };
+}
 export async function createServer({
   port = 4318,
   dataDir = path.join(root, ".bettersim"),
@@ -93,7 +110,8 @@ export async function createServer({
     }
   };
   const recoveryDir = path.join(dataDir, "recovery");
-  const run = (cmd, dir, study = {}) => {
+  const cpus = cores();
+  const run = (cmd, dir, study = {}, threads = cpus.performance) => {
     const id = randomUUID();
     const job = {
       id,
@@ -112,6 +130,7 @@ export async function createServer({
       {
         env: {
           ...process.env,
+          BETTERSIM_THREADS: String(threads),
           ...(workerExecutable
             ? {
                 BETTERSIM_CCX: path.join(
@@ -134,10 +153,6 @@ export async function createServer({
     child.stdin.end(JSON.stringify(study));
     child.stdout.on("data", (chunk) => {
       out += chunk;
-      if (out.length > 100 * 1024 * 1024) {
-        child.kill();
-        job.error = "This job exceeded the supported model size.";
-      }
     });
     child.stderr.on("data", (chunk) => {
       errors += chunk;
@@ -188,6 +203,7 @@ export async function createServer({
     res.json({
       ok: true,
       engine: existsSync(workerExecutable || python),
+      cpus,
       platform: process.platform,
     }),
   );
@@ -317,7 +333,17 @@ export async function createServer({
         .status(409)
         .json({ error: "A job is already running for this part." });
     validateStudy(req.body);
-    const job = run(action, dir, req.body);
+    // Threads are a machine preference, not part of the study: CalculiX
+    // gives identical results with any count.
+    let threads = cpus.performance;
+    if (req.query.threads !== undefined) {
+      threads = Number(req.query.threads);
+      if (!Number.isInteger(threads) || threads < 1 || threads > cpus.logical)
+        throw new RequestError(
+          `Threads must be a whole number from 1 to ${cpus.logical}.`,
+        );
+    }
+    const job = run(action, dir, req.body, threads);
     jobs.get(job).document = id;
     res.json({ job });
   });

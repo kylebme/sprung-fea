@@ -84,7 +84,7 @@ Surface annotations use anchors on the actual CAD surfaces, including curved fac
 
 Gmsh imports the same STEP source, applies curvature-aware size controls, generates a tetrahedral volume mesh, raises it to second order, and optimizes the curved elements. The worker accepts ten-node tetrahedra and records quadratic surface triangles for load integration and selection mappings.
 
-Minimum signed element quality must be positive. The current limit is 150,000 volume elements; a requested size below one five-hundredth of the longest part dimension is rejected. The element-count limit is checked after generation, so it is not a hard preallocation memory bound.
+Minimum signed element quality must be positive. There is no limit on element count or element size; any positive size is meshed. Practical limits are memory and time: Gmsh and the worker hold the mesh in memory, the direct solver's factorization grows quickly with model size, and the viewer holds the volume mesh in a 32-bit WebAssembly heap (4 GB).
 
 Coarse, Medium, and Fine use target-size multipliers of 1.5, 1, and 0.65 relative to the recommendation. An explicit size selects Custom. A solve generates its mesh automatically; mesh preview is a separate operation.
 
@@ -104,7 +104,17 @@ Equivalent applied nodal contributions are retained for force, pressure, and gra
 
 ### Solve and result decoding
 
-CalculiX runs as a native subprocess with a 240-second timeout. Solver, assembly, result, and BLAS stages are pinned to one thread because the tested native multithreaded SPOOLES build produced intermittent differences for identical input. Gmsh meshing uses two threads and may produce slightly different meshes between runs.
+CalculiX runs as a native subprocess with no time limit; long jobs can be cancelled. Its output streams to `solver.log` rather than memory, because iterative solves log every iteration.
+
+The study chooses the linear equation solver, written to the deck as `*STATIC, SOLVER=…`:
+
+| Study value | CalculiX solver | Use |
+|---|---|---|
+| `spooles` (default) | `SPOOLES` | Direct sparse factorization. Most robust, equilibrium to round-off; memory grows quickly with model size |
+| `iterative-cholesky` | `ITERATIVE CHOLESKY` | Conjugate gradients with incomplete-Cholesky preconditioning. Much less memory |
+| `iterative-scaling` | `ITERATIVE SCALING` | Conjugate gradients with diagonal scaling. Least memory; most iterations |
+
+PARDISO and PaStiX are not offered: the bundled CalculiX build does not link them. CalculiX returns the last conjugate-gradient iterate without an error when it stops short of its tolerance, so the worker reads the final residual and limit from the log and rejects an unconverged solve. Iterative results match the direct solver within about 10⁻⁴ of peak displacement and 0.1% of peak stress on the test beam, and equilibrium closes to about 0.1% (incomplete Cholesky uses a looser CalculiX tolerance). The result records the solver and iteration count, shown in the console's Checks tab. Studies saved before solver choice use SPOOLES. Threads are a per-machine preference, not part of the study, because they do not change results: **Auto** (default) uses the performance cores (all logical cores where the platform does not distinguish them), **1** uses a single thread, and **All** uses every logical core. The renderer stores the choice locally and sends it with each mesh or solve request (`?threads=N`, validated against the core count reported by `GET /api/health`). The worker applies it to Gmsh meshing and to CalculiX stiffness assembly, SPOOLES factorization and stress recovery (`CCX_NPROC_STIFFNESS`, `CCX_NPROC_EQUATION_SOLVER`, `CCX_NPROC_RESULTS`). OpenMP stays at one thread (`OMP_NUM_THREADS=1`, `NUMBER_OF_CPUS=1`): in repeated identical solves, CalculiX's own thread controls at up to 8 threads gave bit-identical displacement, stress and nodal forces, but OpenMP above one thread combined with any of them made stress and reactions vary between runs, once reporting an 866 N reaction for a 1000 N load. Earlier versions pinned every stage to one thread because of that interaction. CalculiX's iterative solvers iterate on one thread regardless. Gmsh meshes can differ slightly between runs with more than one thread; with one thread they are repeatable. The result records the thread count, shown in the Checks tab.
 
 The worker retains the input deck, mesh, FRD output, DAT output, and solver log. It reads displacement, stress, and nodal force fields from FRD and rejects incomplete displacement or stress results. Equivalent stress is calculated from the averaged nodal stress tensor; movement is the displacement-vector magnitude.
 
@@ -146,7 +156,7 @@ The service binds to `127.0.0.1`: port 4318 during normal browser development an
 
 One mesh/solve job may run per document. On macOS, cancellation and service shutdown terminate worker process groups, including solver children. The renderer tracks operation sequences so an old job's completion cannot clear the busy state of a newer operation. Completed in-memory job records expire after one hour. Document directories are pruned at startup and hourly: the 40 most recently used are kept unless older than seven days, and documents used in the last hour or with a running job are never removed. Errors map to 400 (invalid request), 404 (missing document or artifact), 413 (too large), or 500 (logged, with a generic message).
 
-The service limits STEP uploads to 50 MB, JSON request bodies to 70 MB (enough for a 50 MB STEP encoded in a project), and worker stdout to 100 MB. Electron disables renderer Node integration, enables context isolation and sandboxing, denies permission requests and new windows, and restricts navigation to the application origin. The service validates local hosts and request origins and rejects cross-site requests. Its Content Security Policy allows `'wasm-unsafe-eval'` and `'unsafe-eval'` for scripts because VTK.wasm's Emscripten glue generates functions at runtime; this is a deliberate relaxation, explained in [vtk-wasm.md](docs/vtk-wasm.md). These protections do not constitute a completed independent security audit.
+The service limits STEP uploads to 50 MB, JSON request bodies to 70 MB (enough for a 50 MB STEP encoded in a project), and does not cap worker output; nodal arrays travel in `view.bin`, not on stdout. Electron disables renderer Node integration, enables context isolation and sandboxing, denies permission requests and new windows, and restricts navigation to the application origin. The service validates local hosts and request origins and rejects cross-site requests. Its Content Security Policy allows `'wasm-unsafe-eval'` and `'unsafe-eval'` for scripts because VTK.wasm's Emscripten glue generates functions at runtime; this is a deliberate relaxation, explained in [vtk-wasm.md](docs/vtk-wasm.md). These protections do not constitute a completed independent security audit.
 
 ## 7. Persistence and recovery
 

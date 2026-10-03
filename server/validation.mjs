@@ -1,3 +1,4 @@
+export const SOLVERS = ["spooles", "iterative-scaling", "iterative-cholesky"];
 // Errors caused by the request itself; the service reports them as 400.
 export class RequestError extends Error {
   status = 400;
@@ -39,6 +40,10 @@ export function validateStudy(s) {
   if (!["coarse", "medium", "fine", "custom"].includes(s.detail))
     throw new RequestError("The mesh detail setting is invalid.");
   number(s.meshSize, "Mesh size", { positive: true });
+  // Studies saved before solver choice used the direct solver.
+  s.solver ??= "spooles";
+  if (!SOLVERS.includes(s.solver))
+    throw new RequestError("The solver setting is invalid.");
   if (s.material) {
     const m = s.material;
     text(m.name, "Material name");

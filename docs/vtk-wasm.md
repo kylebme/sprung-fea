@@ -21,7 +21,7 @@ The browser build has everything the result filters need. Each was checked in a 
 | Picking | `vtkCellPicker` (cell, position, parametric coordinates) | Works |
 | Screen projection | `vtkRenderer` world-to-display | Works |
 
-So **no native VTK backend was added and the remote session is not used.** The Python engine is unchanged in its role (CAD, meshing, solving) and gains no VTK dependency. A remote session would have added a second native process, a scene synchronization protocol, and server-side rendering state per document, with nothing the browser cannot already do for single-part models of up to 150,000 elements.
+So **no native VTK backend was added and the remote session is not used.** The Python engine is unchanged in its role (CAD, meshing, solving) and gains no VTK dependency. A remote session would have added a second native process, a scene synchronization protocol, and server-side rendering state per document, with nothing the browser cannot already do for single-part models. The app no longer caps element count, so the 4 GB WebAssembly heap is the practical display limit.
 
 Revisit this if a future need cannot run in the browser: models beyond the memory of a 32-bit WebAssembly heap (4 GB), or filters absent from the bundle. If that happens, move all scene construction to the native side and use the remote session for every view, as originally intended, rather than splitting features between modes.
 

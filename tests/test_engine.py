@@ -103,6 +103,30 @@ class Pipeline(unittest.TestCase):
             if line.startswith('*'):break
             node,axis,value=line.split(',');force[int(axis)-1]+=float(value)
         np.testing.assert_allclose(force,[20,-30,-40],atol=1e-8)
+    def test_iterative_solvers_match_direct(self):
+        direct=worker.solve(self.folder,study())
+        self.assertIsNone(direct['iterations'])
+        for name in ['iterative-scaling','iterative-cholesky']:
+            with self.subTest(solver=name):
+                s=study();s['solver']=name
+                result=worker.solve(self.folder,s)
+                self.assertIn('ITERATIVE',(self.folder/'analysis.inp').read_text())
+                self.assertGreater(result['iterations'],0)
+                np.testing.assert_allclose(result['displacements'],direct['displacements'],rtol=0,atol=1e-4*direct['summary']['maxMovement'])
+                self.assertLess(abs(result['summary']['maxStress']/direct['summary']['maxStress']-1),1e-3)
+                # Conjugate gradients stop at CalculiX's tolerance: equilibrium
+                # closes to about 0.1%, not to round-off as with SPOOLES.
+                self.assertLess(result['summary']['forceBalanceError'],1e-3)
+    def test_unconverged_iterative_solve_is_detected(self):
+        # CalculiX reports no error when conjugate gradients stop short.
+        log=self.folder/'cg.log'
+        log.write_text(' Solving the system of equations using the iterative solver\niteration= 0, error= 0.000000e+00, limit=1.0e-05\niteration= 9, error= 3.0e-03, limit=1.0e-05\n')
+        error,_,iterative=worker.read_log(log)
+        self.assertFalse(error)
+        self.assertEqual(iterative['iterations'],9)
+        self.assertGreater(iterative['error'],iterative['limit'])
+        with self.assertRaisesRegex(ValueError,'solver'):
+            s=study();s['solver']='pardiso';worker.validate(s,self.mesh)
     def test_rigid_motion_is_rejected(self):
         s=study();s['supports'][0]['axes']=[False,False,True]
         with self.assertRaisesRegex(ValueError,'still move freely'):worker.validate(s,self.mesh)

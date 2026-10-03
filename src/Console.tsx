@@ -87,6 +87,13 @@ export function Console({
           ) : result && s ? (
             <>
               <CheckRow label="Solver" value={result.solver} />
+              <CheckRow label="Threads" value={fmt(result.threads)} />
+              {result.iterations !== null && (
+                <CheckRow
+                  label="Solver iterations"
+                  value={fmt(result.iterations)}
+                />
+              )}
               <CheckRow
                 label="Mesh"
                 value={`${fmt(result.elementCount)} C3D10 · ${fmt(result.nodeCount)} nodes · ${fmt(result.meshSize, 3)} mm`}

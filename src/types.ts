@@ -39,12 +39,21 @@ export type Load = {
   vector: number[];
   magnitude: number;
 };
+/** CalculiX equation solver: direct SPOOLES or preconditioned conjugate gradients. */
+export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
+/**
+ * Threads for meshing and solving, a per-machine preference outside the
+ * study: Auto uses performance cores, All every logical core.
+ */
+export type Threads = "auto" | "single" | "all";
+export type Cpus = { logical: number; performance: number };
 export type Study = {
   material: Material | null;
   supports: Support[];
   loads: Load[];
   meshSize: number;
   detail: "coarse" | "medium" | "fine" | "custom";
+  solver: Solver;
 };
 export type MeshInfo = {
   size: number;
@@ -69,6 +78,9 @@ export type ResultInfo = {
   summary: Summary;
   warnings: string[];
   solver: string;
+  /** Conjugate-gradient iterations, or null for the direct solver. */
+  iterations: number | null;
+  threads: number;
   meshSize: number;
   nodeCount: number;
   elementCount: number;
@@ -132,6 +144,7 @@ export const emptyStudy = (): Study => ({
   loads: [],
   meshSize: 0,
   detail: "medium",
+  solver: "spooles",
 });
 export { fmt } from "./logic";
 declare global {
