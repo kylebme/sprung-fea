@@ -17,7 +17,7 @@ export type SceneState = {
   study: Study;
   selected: number[];
   hovered: number | null;
-  draftKind: "support" | "load" | null;
+  draftKind: "support" | "load" | "mass" | null;
   /** The plotted result, or null before solving. */
   plot: Plot | null;
   deformation: number;
@@ -56,6 +56,8 @@ const COLORS = {
     supportFace: "#4d9a87",
     load: "#f0a03c",
     loadFace: "#b08050",
+    mass: "#b08cf0",
+    massFace: "#8f7ab8",
     select: "#4d9bff",
     ghost: "#aab3bb",
     viewA: "#1d2227",
@@ -70,6 +72,8 @@ const COLORS = {
     supportFace: "#8fc4b6",
     load: "#c9700c",
     loadFace: "#e8bf93",
+    mass: "#7a4fc9",
+    massFace: "#c9b6ea",
     select: "#2f6fd8",
     ghost: "#7f8b95",
     viewA: "#ffffff",
@@ -138,6 +142,8 @@ export class Scene {
   private cleanup: (() => void)[] = [];
   private center = [0, 0, 0];
   private radius = 1;
+  /** Radius of the region the camera was last fitted to. */
+  private framed = 1;
   private size = { width: 1, height: 1, scale: 1 };
 
   // Long-lived VTK objects; per-model data is swapped inside them.
@@ -171,9 +177,8 @@ export class Scene {
   private probeFilter: Obj;
   private marker: Obj;
   private glyphs: { source: Obj; data: Obj; actor: Obj }[];
-  /** Lines from remote load points to the faces that carry them. */
-  private links: Obj;
-  private linksActor: Obj;
+  /** Lines from remote load points and point masses to their faces. */
+  private links: { data: Obj; actor: Obj }[];
   private fieldArrays: Record<string, Obj> = {};
   private pickPoint: Obj;
   private pickData: Obj;
@@ -310,7 +315,7 @@ export class Scene {
     const ball = make("vtkSphereSource");
     ball.setThetaResolution(12);
     ball.setPhiResolution(8);
-    this.glyphs = [arrow, arrow, octahedron, ball].map((source) => {
+    this.glyphs = [arrow, arrow, octahedron, ball, ball].map((source) => {
       const data = make("vtkPolyData");
       const glyph = make("vtkGlyph3D");
       glyph.setInputData(data);
@@ -323,11 +328,14 @@ export class Scene {
       return { source: glyph, data, actor };
     });
 
-    this.links = make("vtkPolyData");
-    this.linksActor = this.actor(this.mapper({ data: this.links }));
-    this.linksActor.getMapper().scalarVisibilityOff();
-    this.linksActor.pickableOff();
-    this.linksActor.getProperty().setLineWidth(1.5);
+    this.links = [0, 1].map(() => {
+      const data = make("vtkPolyData");
+      const actor = this.actor(this.mapper({ data }));
+      actor.getMapper().scalarVisibilityOff();
+      actor.pickableOff();
+      actor.getProperty().setLineWidth(1.5);
+      return { data, actor };
+    });
 
     this.listen();
   }
@@ -428,6 +436,12 @@ export class Scene {
       // Matches the viewport's CSS gradient tokens (--view-a, --view-b).
       this.renderer.setBackground(...rgb(COLORS[next.theme].viewB));
       this.renderer.setBackground2(...rgb(COLORS[next.theme].viewA));
+    }
+    if (changed("study") && !changed("bounds")) {
+      // A point placed beyond the framed region: zoom out to include it,
+      // keeping the view direction.
+      const radius = this.extent().radius;
+      if (radius > this.framed * 1.05) this.reframe();
     }
     if (changed("bounds")) {
       // Gmsh order: xmin, ymin, zmin, xmax, ymax, zmax.
@@ -607,9 +621,12 @@ export class Scene {
         ? colors.support
         : s.draftKind === "load"
           ? colors.load
-          : colors.select;
+          : s.draftKind === "mass"
+            ? colors.mass
+            : colors.select;
     const supported = new Set(s.study.supports.flatMap((c) => c.faces));
     const loaded = new Set(s.study.loads.flatMap((c) => c.faces));
+    const massed = new Set(s.study.masses.flatMap((c) => c.faces));
     const byFace = new Map<number, number[]>();
     for (const f of s.faces) {
       let c = rgb(
@@ -619,7 +636,9 @@ export class Scene {
             ? colors.supportFace
             : loaded.has(f.id)
               ? colors.loadFace
-              : colors.base,
+              : massed.has(f.id)
+                ? colors.massFace
+                : colors.base,
       );
       if (f.id === s.hovered) c = mix(c, rgb(colors.hover), 0.35);
       byFace.set(
@@ -652,7 +671,9 @@ export class Scene {
       supports: number[][] = [],
       markers: number[][] = [],
       points: number[][] = [],
-      links: number[] = [];
+      links: number[] = [],
+      masses: number[][] = [],
+      massLinks: number[] = [];
     if (!s.plot) {
       const faces = new Map(s.faces.map((f) => [f.id, f]));
       for (const c of s.study.supports)
@@ -719,26 +740,40 @@ export class Scene {
           loads.push([...add(f.anchor, u, -r * 0.25), ...u]);
         }
       }
+      for (const m of s.study.masses) {
+        masses.push([...m.point, 0, 0, 1]);
+        for (const id of m.faces) {
+          const f = faces.get(id);
+          if (f) massLinks.push(...m.point, ...f.anchor);
+        }
+      }
     }
     const sets = [
       { items: loads, color: colors.load, size: r * 0.25 },
       { items: supports, color: colors.support, size: r * 0.13 },
       { items: markers, color: colors.support, size: r * 0.05 },
       { items: points, color: colors.load, size: r * 0.06 },
+      { items: masses, color: colors.mass, size: r * 0.1 },
     ];
-    const pts = this.vtk.vtkPoints();
-    const coords = this.array(Float64Array.from(links), 3);
-    pts.setData(coords);
-    this.links.setPoints(pts);
-    const lines = this.cells(
-      Int32Array.from({ length: links.length / 3 }, (_, i) => i),
-      2,
-    );
-    this.links.setLines(lines);
-    this.links.modified();
-    for (const o of [pts, coords, lines]) o.$delete();
-    this.linksActor.getProperty().setColor(...rgb(colors.load));
-    this.linksActor.setVisibility(links.length ? 1 : 0);
+    [
+      { data: links, color: colors.load },
+      { data: massLinks, color: colors.mass },
+    ].forEach(({ data, color }, i) => {
+      const link = this.links[i];
+      const pts = this.vtk.vtkPoints();
+      const coords = this.array(Float64Array.from(data), 3);
+      pts.setData(coords);
+      link.data.setPoints(pts);
+      const lines = this.cells(
+        Int32Array.from({ length: data.length / 3 }, (_, k) => k),
+        2,
+      );
+      link.data.setLines(lines);
+      link.data.modified();
+      for (const o of [pts, coords, lines]) o.$delete();
+      link.actor.getProperty().setColor(...rgb(color));
+      link.actor.setVisibility(data.length ? 1 : 0);
+    });
     sets.forEach(({ items, color, size }, i) => {
       const g = this.glyphs[i];
       const pts = this.vtk.vtkPoints();
@@ -872,14 +907,59 @@ export class Scene {
     };
     const dir = unit(directions[view] || directions.iso);
     const aspect = this.size.width / this.size.height;
-    const half = (this.radius * 1.16) / Math.min(1, aspect);
+    const { center, radius } = this.extent();
+    const half = (radius * 1.16) / Math.min(1, aspect);
     const distance = half / Math.tan(((VIEW_ANGLE / 2) * Math.PI) / 180);
     const c = this.camera;
-    c.setFocalPoint(...this.center);
-    c.setPosition(...add(this.center, dir, distance));
+    c.setFocalPoint(...center);
+    c.setPosition(...add(center, dir, distance));
     c.setViewUp(...(view === "top" ? [0, 1, 0] : [0, 0, 1]));
     c.setParallelScale(half);
+    this.framed = radius;
     this.invalidate();
+  }
+
+  /** Fits the extent while keeping the current view direction and up. */
+  private reframe() {
+    const c = this.camera;
+    const aspect = this.size.width / this.size.height;
+    const { center, radius } = this.extent();
+    const half = (radius * 1.16) / Math.min(1, aspect);
+    const distance = half / Math.tan(((VIEW_ANGLE / 2) * Math.PI) / 180);
+    c.setFocalPoint(...center);
+    c.setPosition(...add(center, c.getDirectionOfProjection(), -distance));
+    c.setParallelScale(half);
+    this.framed = radius;
+    this.invalidate();
+  }
+
+  /**
+   * The part's bounding sphere, grown to include points placed off the part
+   * (remote load points, point masses, rotation axes) so Fit shows them.
+   */
+  private extent() {
+    const study = this.state?.study;
+    const points = study
+      ? [
+          ...study.loads.flatMap((l) =>
+            (l.kind === "remote" || l.kind === "rotation") && l.point
+              ? [l.point]
+              : [],
+          ),
+          ...study.masses.map((m) => m.point),
+        ]
+      : [];
+    let center = this.center,
+      radius = this.radius;
+    for (const p of points) {
+      const d = Math.hypot(...add(p, center, -1));
+      if (!(d > radius)) continue;
+      // Smallest sphere holding the current sphere and the point.
+      const grown = (radius + d) / 2;
+      center = add(center, add(p, center, -1), (grown - radius) / d);
+      radius = grown;
+    }
+    return { center, radius };
   }
 
   /** Swaps projection while keeping the view direction and visible size. */

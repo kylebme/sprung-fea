@@ -20,6 +20,8 @@
   --load: #f0a03c;
   --load-soft: rgba(240, 160, 60, 0.12);
   --load-line: rgba(240, 160, 60, 0.35);
+  --mass: #b08cf0;
+  --mass-soft: rgba(176, 140, 240, 0.14);
   --danger: #f06a6a;
   --view-a: #1d2227;
   --view-b: #121518;
@@ -48,6 +50,8 @@
   --load: #c9700c;
   --load-soft: rgba(201, 112, 12, 0.1);
   --load-line: rgba(201, 112, 12, 0.4);
+  --mass: #7a4fc9;
+  --mass-soft: rgba(122, 79, 201, 0.1);
   --danger: #d23c3c;
   --view-a: #ffffff;
   --view-b: #e8ebee;
@@ -328,6 +332,9 @@ svg {
 .swatch.support {
   background: var(--support);
 }
+.swatch.mass {
+  background: var(--mass);
+}
 .swatch.load {
   background: var(--load);
 }
@@ -387,6 +394,9 @@ svg {
 .face-row.selected.load {
   background: var(--load-soft);
 }
+.face-row.selected.mass {
+  background: var(--mass-soft);
+}
 .face-row.selected.support {
   background: var(--support-soft);
 }
@@ -402,6 +412,9 @@ svg {
 }
 .face-row .tag.support {
   color: var(--support);
+}
+.face-row .tag.mass {
+  color: var(--mass);
 }
 .face-row .tag.load {
   color: var(--load);
@@ -894,6 +907,10 @@ svg {
 .chip.load {
   background: var(--load-soft);
   border-color: var(--load-line);
+}
+.chip.mass {
+  background: var(--mass-soft);
+  border-color: var(--mass);
 }
 .chip.support {
   background: var(--support-soft);

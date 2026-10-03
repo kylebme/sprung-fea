@@ -1,13 +1,25 @@
 // Pure study logic. Only type imports, so Node can run the unit tests directly.
 import type {
+  Condition,
+  ConditionKind,
   Face,
   Load,
   Material,
   MeshInfo,
+  PointMass,
   ResultInfo,
   Study,
   Support,
 } from "./types";
+
+/** The study list holding each kind of condition. */
+export const LISTS = {
+  support: "supports",
+  load: "loads",
+  mass: "masses",
+} as const satisfies Record<ConditionKind, keyof Study>;
+export const conditionsOf = (study: Study, kind: ConditionKind) =>
+  study[LISTS[kind]] as Condition[];
 
 /** Fills settings that older projects lack with the values they implied. */
 export function normalizeStudy(study: Study): Study {
@@ -15,6 +27,7 @@ export function normalizeStudy(study: Study): Study {
     ...study,
     analysis: study.analysis ?? "static",
     solver: study.solver ?? "spooles",
+    masses: study.masses ?? [],
   };
 }
 
@@ -127,7 +140,9 @@ export function faceHint(face: Face) {
 }
 
 export type Draft =
-  { kind: "support"; value: Support } | { kind: "load"; value: Load };
+  | { kind: "support"; value: Support }
+  | { kind: "load"; value: Load }
+  | { kind: "mass"; value: PointMass };
 
 /** The study as it would be if the draft condition were saved now. */
 export function previewStudy(
@@ -136,13 +151,10 @@ export function previewStudy(
   selected: number[],
 ): Study {
   if (!draft) return study;
-  const key = draft.kind === "support" ? "supports" : "loads";
   return {
     ...study,
-    [key]: [
-      ...(study[key] as (Support | Load)[]).filter(
-        (c) => c.id !== draft.value.id,
-      ),
+    [LISTS[draft.kind]]: [
+      ...conditionsOf(study, draft.kind).filter((c) => c.id !== draft.value.id),
       { ...draft.value, faces: selected },
     ],
   };

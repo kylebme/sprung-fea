@@ -25,6 +25,8 @@ import { api, post, saveFile } from "./api";
 import {
   fmt,
   history,
+  conditionsOf,
+  LISTS,
   marginScale,
   meshStillValid,
   normalizeResult,
@@ -40,6 +42,7 @@ import {
   PLOTS,
   STAGES,
   blankLoad,
+  blankMass,
   blankSupport,
   isBodyLoad,
   stripExt,
@@ -69,7 +72,8 @@ import {
   type Result,
   type ResultInfo,
   type Study,
-  type Support,
+  type Condition,
+  type ConditionKind,
   type Threads,
   type Cpus,
 } from "./types";
@@ -580,26 +584,27 @@ export default function App() {
     setSection(s);
     setDraft(null);
   };
-  const edit = (kind: "support" | "load", value: Support | Load) => {
+  const edit = (kind: ConditionKind, value: Condition) => {
     if (job) return;
-    setSection(kind === "support" ? "supports" : "loads");
+    setSection(LISTS[kind]);
     setDraft({ kind, value: structuredClone(value) } as Draft);
     setSelected(value.faces);
   };
-  const add = (kind: "support" | "load") => {
+  const add = (kind: ConditionKind) => {
     if (job) return;
-    setSection(kind === "support" ? "supports" : "loads");
+    setSection(LISTS[kind]);
     setDraft(
       kind === "support"
         ? { kind, value: blankSupport() }
-        : { kind, value: blankLoad() },
+        : kind === "load"
+          ? { kind, value: blankLoad() }
+          : { kind, value: blankMass(center.selection || center.part) },
     );
   };
-  const remove = (kind: "support" | "load", id: string) => {
-    const key = kind === "support" ? "supports" : "loads";
+  const remove = (kind: ConditionKind, id: string) => {
     update({
       ...study,
-      [key]: (study[key] as (Support | Load)[]).filter((c) => c.id !== id),
+      [LISTS[kind]]: conditionsOf(study, kind).filter((c) => c.id !== id),
     });
     if (draft?.value.id === id) {
       setDraft(null);
@@ -612,11 +617,10 @@ export default function App() {
     const faces = isBody ? [] : selected;
     if (!faces.length && !isBody) return;
     const value = { ...draft.value, faces, name: draft.value.name.trim() };
-    const key = draft.kind === "support" ? "supports" : "loads";
-    const list = study[key] as (Support | Load)[];
+    const list = conditionsOf(study, draft.kind);
     update({
       ...study,
-      [key]: list.some((c) => c.id === value.id)
+      [LISTS[draft.kind]]: list.some((c) => c.id === value.id)
         ? list.map((c) => (c.id === value.id ? value : c))
         : [...list, value],
     });
@@ -733,10 +737,9 @@ export default function App() {
       return (
         <ConditionEditor
           draft={draft}
-          exists={(draft.kind === "support"
-            ? study.supports
-            : study.loads
-          ).some((c) => c.id === draft.value.id)}
+          exists={conditionsOf(study, draft.kind).some(
+            (c) => c.id === draft.value.id,
+          )}
           selected={selected}
           selectedArea={selectedArea}
           center={center}
@@ -775,12 +778,15 @@ export default function App() {
           />
         );
       case "supports":
-      case "loads": {
-        const kind = section === "supports" ? "support" : "load";
+      case "loads":
+      case "masses": {
+        const kind = (
+          { supports: "support", loads: "load", masses: "mass" } as const
+        )[section];
         return (
           <ConditionsPanel
             kind={kind}
-            list={kind === "support" ? study.supports : study.loads}
+            list={conditionsOf(study, kind)}
             selectedCount={selected.length}
             onAdd={() => add(kind)}
             onEdit={(c) => edit(kind, c)}

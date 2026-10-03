@@ -16,7 +16,9 @@ import { editMaterial, fmt, type Draft } from "./logic";
 import {
   DETAILS,
   DETAIL_NAMES,
+  CONDITIONS,
   LOAD_KINDS,
+  conditionValue,
   isBodyLoad,
   PLOTS,
   SOLVERS,
@@ -30,8 +32,11 @@ import {
   MATERIALS,
   type Axis,
   type Filters,
+  type Condition,
+  type ConditionKind,
   type Load,
   type LoadKind,
+  type PointMass,
   type Material,
   type Mesh,
   type Part,
@@ -188,17 +193,18 @@ export function ConditionsPanel({
   onEdit,
   onRemove,
 }: {
-  kind: "support" | "load";
-  list: (Support | Load)[];
+  kind: ConditionKind;
+  list: Condition[];
   selectedCount: number;
   onAdd: () => void;
-  onEdit: (c: Support | Load) => void;
+  onEdit: (c: Condition) => void;
   onRemove: (id: string) => void;
 }) {
+  const labels = CONDITIONS[kind];
   return (
     <>
       <Head
-        small={kind === "support" ? "Supports" : "Loads"}
+        small={labels.group}
         title={list.length ? list.length + " defined" : "None"}
       />
       <div className="sec">
@@ -208,7 +214,7 @@ export function ConditionsPanel({
               <span className={"swatch " + kind} />
               {c.name}
               <span className="val">
-                {kind === "load" ? loadValue(c as Load) + " · " : ""}
+                {kind !== "support" ? conditionValue(kind, c) + " · " : ""}
                 {kind === "load" && isBodyLoad(c as Load)
                   ? "whole part"
                   : facesLabel(c.faces)}
@@ -225,9 +231,7 @@ export function ConditionsPanel({
         ))}
         {!list.length && (
           <p className="note" style={{ marginTop: 0 }}>
-            {kind === "support"
-              ? "Supports hold faces in place. A study needs at least one."
-              : "Loads are forces, pressures, moments, gravity or rotation acting on the part."}
+            {labels.empty}
           </p>
         )}
       </div>
@@ -237,7 +241,7 @@ export function ConditionsPanel({
           onClick={onAdd}
         >
           <Plus size={14} />
-          {kind === "support" ? "Add support" : "Add load"}
+          {labels.add}
         </button>
         {selectedCount > 0 && (
           <p className="note">
@@ -280,6 +284,9 @@ export function ConditionEditor({
   const invalid =
     !v.name.trim() ||
     (!selected.length && !body) ||
+    (draft.kind === "mass" &&
+      (!(draft.value.mass > 0) ||
+        draft.value.point.some((x) => !isFinite(x)))) ||
     (draft.kind === "support" && !draft.value.axes.some(Boolean)) ||
     (draft.kind === "load" &&
       (draft.value.kind === "pressure"
@@ -304,8 +311,10 @@ export function ConditionEditor({
         </label>
         {draft.kind === "support" ? (
           <SupportFields support={draft.value} onChange={onChange} />
-        ) : (
+        ) : draft.kind === "load" ? (
           <LoadFields load={draft.value} center={center} onChange={onChange} />
+        ) : (
+          <MassFields mass={draft.value} center={center} onChange={onChange} />
         )}
       </div>
       {!body && (
@@ -352,6 +361,46 @@ export function ConditionEditor({
           </button>
         )}
       </div>
+    </>
+  );
+}
+
+function MassFields({
+  mass,
+  center,
+  onChange,
+}: {
+  mass: PointMass;
+  center: { selection: number[] | null; part: number[] };
+  onChange: (changes: Record<string, unknown>) => void;
+}) {
+  return (
+    <>
+      <NumberField
+        label="Mass"
+        value={mass.mass}
+        unit="kg"
+        onChange={(v) => onChange({ mass: v })}
+      />
+      <VectorField
+        label="Center of mass, mm"
+        name="center of mass"
+        value={mass.point}
+        onChange={(point) => onChange({ point })}
+        action={
+          center.selection
+            ? {
+                label: "Face center",
+                onClick: () => onChange({ point: round(center.selection!) }),
+              }
+            : undefined
+        }
+      />
+      <p className="note">
+        Stands in for a component that is not modeled, such as a motor bolted to
+        the selected faces. It adds its weight under gravity and its load under
+        rotation. Treated as a point: its own rotational inertia is ignored.
+      </p>
     </>
   );
 }

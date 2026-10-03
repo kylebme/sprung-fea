@@ -34,6 +34,15 @@ def nodal(frame, label, ids, count, what):
     return np.array([data[n][:count] for n in ids])
 
 
+def mass_check(study, model):
+    """Mass of the meshed part plus point masses, so density and units can be
+    checked at a glance."""
+    part=model.volume()*study['material']['density']*1e-9
+    extra=sum(float(m['mass']) for m in study.get('masses') or [])
+    label='Mass, part + point masses' if extra else 'Mass'
+    return {'label':label,'values':[part+extra],'unit':'kg','digits':4}
+
+
 class Analysis:
     id=''
     name=''
@@ -48,6 +57,11 @@ class Analysis:
 
     def results(self, folder, study, model, frames, context):
         """Returns (result, view frames)."""
+        raise NotImplementedError
+
+    def key_results(self, result):
+        """The few numbers a mesh convergence study follows: {id, label,
+        unit, value}, with `peak` set for local peaks that may not converge."""
         raise NotImplementedError
 
 
@@ -98,11 +112,17 @@ class Static(Analysis):
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))]}
         result={'frames':[{'label':'Static load','value':None,'unit':''}],'fields':['displacement','vonMises'],
                 'summary':summary,'warnings':warnings,'charts':[],
-                'checks':[{'label':'Applied force X, Y, Z','values':total_load.tolist(),'unit':'N'},
+                'checks':[mass_check(study,model),
+                          {'label':'Applied force X, Y, Z','values':total_load.tolist(),'unit':'N'},
                           {'label':'Reaction X, Y, Z','values':reactions.tolist(),'unit':'N'},
                           {'label':'Force balance error','values':[balance*100],'unit':'%'}],
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
         return result,[{'displacement':displacements,'vonMises':stress}]
+
+    def key_results(self, result):
+        s=result['summary']
+        return [{'id':'maxMovement','label':'Maximum displacement','unit':'mm','value':s['maxMovement']},
+                {'id':'maxStress','label':'Peak stress','unit':'MPa','value':s['maxStress'],'peak':True}]
 
 
 ANALYSES={a.id:a for a in [Static()]}

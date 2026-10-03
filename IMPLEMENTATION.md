@@ -18,6 +18,7 @@ Implemented analysis inputs are:
 - A homogeneous isotropic elastic material, including density and optional yield strength.
 - Fixed supports or supports that block selected global X/Y/Z translations on CAD faces.
 - A total vector force distributed over selected faces, normal pressure, gravity, a remote force acting at a point off the faces, a moment, a bearing load on cylindrical faces, and rotation about an axis.
+- Point masses: a rigid mass at a center of mass, carried by selected faces, standing in for components that are not modeled.
 - Curvature-aware quadratic tetrahedral meshing, with detail presets and an explicit target size.
 
 Results include equivalent stress, displacement magnitude, yield margin, support reactions, force balance, interpolated and nodal probes, section planes, iso-surfaces, thresholds, and a finer-mesh comparison. All numerical results come from the actual solver pipeline.
@@ -67,8 +68,9 @@ The study model avoids CalculiX deck syntax. The engine keeps three boundaries: 
 | Face | CAD entity ID, surface type, area, center, surface anchor, normal, and rendering triangle indices |
 | Material | Name, elastic modulus, Poisson ratio, density, and optional yield strength |
 | Support | Stable condition ID, name, selected face IDs, and three blocked/free translation flags |
+| Point mass | Stable condition ID, name, selected face IDs, mass (kg), and center of mass (mm) |
 | Load | Stable condition ID, name, kind, selected faces, vector components, and pressure magnitude |
-| Study | Analysis type, material, supports, loads, mesh size, detail preset, and equation solver |
+| Study | Analysis type, material, supports, loads, point masses, mesh size, detail preset, and equation solver |
 | Mesh | Nodes, quadratic tetrahedra, CAD face-to-node/triangle mappings, element count, size, and minimum quality |
 | Result | Schema version, analysis type, frames, nodal fields per frame, analysis summary, check rows, charts, warnings, and solver/mesh metadata |
 
@@ -107,6 +109,8 @@ Pressure maps each CAD boundary triangle to the appropriate tetrahedron face and
 Remote forces and moments are carried by the selected faces as a deformable connection, the distribution of an RBE3 element or distributing coupling, computed in the engine rather than with solver constraints. The force becomes a uniform traction acting at the faces' area centroid C; the moment (including the moment (P − C) × F of a force acting at a remote point P) becomes a traction **a** × (**x** − C) that varies linearly over the faces, with **a** = J⁻¹M and J = ∫(|r|²I − r rᵀ) dA. Integrating these tractions against the quadratic face shape functions gives nodal forces whose resultant force and moment are exactly the specified ones. Faces that cannot resist a moment (J singular) are rejected.
 
 A bearing load presses on the half of the selected cylinder that faces the load. The pressure varies as the cosine of the angle between the surface normal and the load direction, and is scaled so its resultant along the load equals the force. The engine finds the cylinder axis from the surface normals, rejects non-cylindrical faces, and rejects forces with a component along the axis. A bore split into two CAD faces can be selected as one bearing.
+
+A point mass is carried by its faces the same way as a remote force. In a static study it contributes its weight (mass × gravity) and its centrifugal force (mass × ω² × distance from the axis), each acting at its center of mass. Its own rotational inertia is not modeled. The Checks tab reports the mass of the meshed part plus point masses.
 
 Rotation is a centrifugal body load, `*DLOAD CENTRIF` with ω² in rad²/s² about an axis through a point, entered in rpm. Only one rotation per study is allowed. Its equivalent nodal forces use the same four-point tetrahedron rule as CalculiX, so reaction recovery stays exact.
 

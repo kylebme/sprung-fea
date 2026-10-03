@@ -13,7 +13,9 @@ const BODY_LOADS = ["gravity", "rotation"];
 const vector = (v, name) => {
   if (!Array.isArray(v) || v.length !== 3)
     throw new RequestError(`A ${name} must have three components.`);
-  v.forEach((x) => number(x, `${name[0].toUpperCase() + name.slice(1)} component`));
+  v.forEach((x) =>
+    number(x, `${name[0].toUpperCase() + name.slice(1)} component`),
+  );
   return v;
 };
 /** Analysis types the engine implements (engine/analyses.py). */
@@ -77,16 +79,24 @@ export function validateStudy(s) {
     number(m.density, "Density", { positive: true });
     if (m.yield !== null) number(m.yield, "Yield strength", { positive: true });
   }
-  for (const c of [...s.supports, ...s.loads]) {
+  // Studies saved before point masses have none.
+  s.masses ??= [];
+  if (!Array.isArray(s.masses) || s.masses.length > 100)
+    throw new RequestError("This project contains an invalid study setup.");
+  const conditions = [...s.supports, ...s.loads, ...s.masses];
+  for (const c of conditions) {
     text(c.id, "Condition identifier");
     text(c.name, "Condition name");
     faces(c.faces);
   }
-  if (
-    new Set([...s.supports, ...s.loads].map((c) => c.id)).size !==
-    s.supports.length + s.loads.length
-  )
+  if (new Set(conditions.map((c) => c.id)).size !== conditions.length)
     throw new RequestError("Condition identifiers must be unique.");
+  for (const m of s.masses) {
+    if (!m.faces.length)
+      throw new RequestError("A point mass must select at least one face.");
+    number(m.mass, "Point mass", { positive: true });
+    vector(m.point, "center of mass");
+  }
   for (const c of s.supports) {
     if (
       !Array.isArray(c.axes) ||

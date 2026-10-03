@@ -56,6 +56,21 @@ export type Load = {
   point?: number[];
   axis?: number[];
 };
+/**
+ * A rigid point mass (kg) at `point` (mm), such as a motor or a bolted-on
+ * component, carried by the selected faces. Its own rotational inertia is
+ * not modeled.
+ */
+export type PointMass = {
+  id: string;
+  name: string;
+  faces: number[];
+  mass: number;
+  point: number[];
+};
+/** Conditions applied to faces, edited through drafts. */
+export type ConditionKind = "support" | "load" | "mass";
+export type Condition = Support | Load | PointMass;
 /** CalculiX equation solver: direct SPOOLES or preconditioned conjugate gradients. */
 export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
 /**
@@ -71,6 +86,7 @@ export type Study = {
   material: Material | null;
   supports: Support[];
   loads: Load[];
+  masses: PointMass[];
   meshSize: number;
   detail: "coarse" | "medium" | "fine" | "custom";
   solver: Solver;
@@ -99,7 +115,12 @@ export type Summary = {
 /** One result frame: a load step, mode, increment or frequency. */
 export type FrameInfo = { label: string; value: number | null; unit: string };
 /** A row of the console's Checks tab. */
-export type Check = { label: string; values: number[]; unit: string };
+export type Check = {
+  label: string;
+  values: number[];
+  unit: string;
+  digits?: number;
+};
 export type Chart = {
   id: string;
   title: string;
@@ -180,6 +201,7 @@ export const emptyStudy = (): Study => ({
   material: null,
   supports: [],
   loads: [],
+  masses: [],
   meshSize: 0,
   detail: "medium",
   solver: "spooles",

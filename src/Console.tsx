@@ -104,7 +104,7 @@ export function Console({
                   label={c.label}
                   value={
                     c.values
-                      .map((v) => fmt(v, c.unit === "%" ? 4 : 2))
+                      .map((v) => fmt(v, c.digits ?? (c.unit === "%" ? 4 : 2)))
                       .join(", ") + (c.unit === "%" ? "%" : " " + c.unit)
                   }
                 />

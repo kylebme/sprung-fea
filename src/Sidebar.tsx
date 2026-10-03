@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import {
   Activity,
   Anchor,
@@ -6,14 +7,31 @@ import {
   Grid3X3,
   Layers,
   Search,
+  Weight,
 } from "lucide-react";
-import { faceHint, fmt, type Draft } from "./logic";
-import { DETAIL_NAMES, PLOTS, facesLabel, loadValue, stripExt } from "./labels";
+import { LISTS, conditionsOf, faceHint, fmt, type Draft } from "./logic";
+import {
+  CONDITIONS,
+  DETAIL_NAMES,
+  PLOTS,
+  conditionValue,
+  facesLabel,
+  stripExt,
+} from "./labels";
 import { Group, Node, listKeys } from "./ui";
-import type { Load, Mesh, Part, Plot, Result, Study, Support } from "./types";
+import type {
+  Condition,
+  ConditionKind,
+  Mesh,
+  Part,
+  Plot,
+  Result,
+  Study,
+} from "./types";
 
 export type Section =
-  "part" | "material" | "supports" | "loads" | "mesh" | "results";
+  "part" | "material" | "supports" | "loads" | "masses" | "mesh" | "results";
+const ICONS = { support: Anchor, load: ArrowDown, mass: Weight };
 
 export function StudyTree({
   part,
@@ -41,16 +59,14 @@ export function StudyTree({
   plots: Plot[];
   busy: boolean;
   onSection: (s: Section) => void;
-  onAdd: (kind: "support" | "load") => void;
-  onEdit: (kind: "support" | "load", c: Support | Load) => void;
+  onAdd: (kind: ConditionKind) => void;
+  onEdit: (kind: ConditionKind, c: Condition) => void;
   onPlot: (p: Plot) => void;
 }) {
   const isNew =
     draft &&
-    !(draft.kind === "support" ? study.supports : study.loads).some(
-      (c) => c.id === draft.value.id,
-    );
-  const draftRow = (kind: "support" | "load") =>
+    !conditionsOf(study, draft.kind).some((c) => c.id === draft.value.id);
+  const draftRow = (kind: ConditionKind) =>
     isNew &&
     draft.kind === kind && (
       <Node
@@ -80,50 +96,36 @@ export function StudyTree({
         onClick={() => onSection("material")}
         disabled={busy}
       />
-      <Group
-        icon={Anchor}
-        label="Supports"
-        active={section === "supports" && !draft}
-        onClick={() => onSection("supports")}
-        onAdd={() => onAdd("support")}
-        addLabel="Add support"
-        disabled={busy}
-      />
-      {study.supports.map((s) => (
-        <Node
-          key={s.id}
-          depth={2}
-          swatch="support"
-          label={s.name}
-          value={facesLabel(s.faces)}
-          active={draft?.value.id === s.id}
-          onClick={() => onEdit("support", s)}
-          disabled={busy}
-        />
+      {(["support", "load", "mass"] as const).map((kind) => (
+        <Fragment key={kind}>
+          <Group
+            icon={ICONS[kind]}
+            label={CONDITIONS[kind].group}
+            active={section === LISTS[kind] && !draft}
+            onClick={() => onSection(LISTS[kind])}
+            onAdd={() => onAdd(kind)}
+            addLabel={CONDITIONS[kind].add}
+            disabled={busy}
+          />
+          {conditionsOf(study, kind).map((c) => (
+            <Node
+              key={c.id}
+              depth={2}
+              swatch={kind}
+              label={c.name}
+              value={
+                kind === "support"
+                  ? facesLabel(c.faces)
+                  : conditionValue(kind, c)
+              }
+              active={draft?.value.id === c.id}
+              onClick={() => onEdit(kind, c)}
+              disabled={busy}
+            />
+          ))}
+          {draftRow(kind)}
+        </Fragment>
       ))}
-      {draftRow("support")}
-      <Group
-        icon={ArrowDown}
-        label="Loads"
-        active={section === "loads" && !draft}
-        onClick={() => onSection("loads")}
-        onAdd={() => onAdd("load")}
-        addLabel="Add load"
-        disabled={busy}
-      />
-      {study.loads.map((l) => (
-        <Node
-          key={l.id}
-          depth={2}
-          swatch="load"
-          label={l.name}
-          value={loadValue(l)}
-          active={draft?.value.id === l.id}
-          onClick={() => onEdit("load", l)}
-          disabled={busy}
-        />
-      ))}
-      {draftRow("load")}
       <Node
         depth={1}
         icon={Grid3X3}
@@ -187,19 +189,18 @@ export function FaceList({
   study: Study;
   selected: number[];
   hover: number | null;
-  draftKind: "support" | "load" | null;
+  draftKind: ConditionKind | null;
   disabled: boolean;
   query: string;
   onQuery: (q: string) => void;
   onSelect: (id: number) => void;
   onHover: (id: number | null) => void;
 }) {
-  const use = new Map<number, { kind: "support" | "load"; name: string }>();
-  for (const s of study.supports)
-    for (const f of s.faces) use.set(f, { kind: "support", name: s.name });
-  for (const l of study.loads)
-    for (const f of l.faces)
-      if (!use.has(f)) use.set(f, { kind: "load", name: l.name });
+  const use = new Map<number, { kind: ConditionKind; name: string }>();
+  for (const kind of ["support", "load", "mass"] as const)
+    for (const c of conditionsOf(study, kind))
+      for (const f of c.faces)
+        if (!use.has(f)) use.set(f, { kind, name: c.name });
   const q = query.trim().toLowerCase();
   return (
     <div className="faces">

@@ -92,6 +92,10 @@ class Model:
         self.coords=coords
         self._faces=None
 
+    def volume(self):
+        """Volume of the meshed part in mm³, by the four-point rule."""
+        return sum(w for c in self.mesh['elements'] for _,_,w in tetra_points(np.array([self.nodes[n] for n in c])))
+
     def face_triangles(self, face):
         return self.mesh['faces'][str(face)]['triangles']
 
@@ -148,7 +152,9 @@ def validate(study, mesh):
         raise ValueError('Add a support to hold the part in place.')
     if not loads:
         raise ValueError('Add a force, pressure, or gravity load.')
-    check_faces(supports+[l for l in loads if l.get('kind') not in BODY_LOADS], mesh)
+    masses = study.get('masses') or []
+    check_faces(supports+[l for l in loads if l.get('kind') not in BODY_LOADS]+masses, mesh)
+    check_masses(masses)
     model=Model(mesh)
     fixed=fixed_dofs(supports,model)
     rigid_motions(fixed,model)
@@ -192,6 +198,12 @@ def rigid_motions(fixed, model):
     rank = np.linalg.matrix_rank(np.asarray(rows), tol=1e-8) if rows else 0
     if rank < 6:
         raise ValueError(f'The part can still move freely ({6-rank} rigid motions). Block additional directions or choose another support face.')
+
+
+def check_masses(masses):
+    for m in masses:
+        finite(m.get('mass'),'Point mass',True)
+        vector(m.get('point'),'center of mass')
 
 
 def check_loads(loads):
@@ -343,6 +355,17 @@ def build_loads(study, model, density):
             if area<=0: raise ValueError('The loaded face has no usable area.')
             for n,w in weights.items():
                 loading.add_nodal(n,np.asarray(l['vector'],float)*w/area)
+    for m in study.get('masses') or []:
+        # A point mass feels the body loads at its own position.
+        point=np.asarray(m['point'],float)
+        acceleration=loading.gravity.copy()
+        if loading.rotation:
+            omega,origin,axis=loading.rotation
+            r=point-origin;r-=np.dot(r,axis)*axis
+            acceleration+=omega**2*r
+        if np.any(acceleration):
+            force=float(m['mass'])*1e-3*acceleration
+            for n,f in distribute(model,m['faces'],force,np.zeros(3),point).items(): loading.add_nodal(n,f)
     for (n,a),v in loading.nodal.items():
         force=np.zeros(3);force[a]=v;loading.add_applied(n,force)
     if np.any(loading.gravity) or loading.rotation:

@@ -66,6 +66,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
           magnitude: 1,
         },
       ],
+      masses: [],
       meshSize: 4,
       detail: "medium",
       solver: "iterative-cholesky",
@@ -83,7 +84,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     const reopened = await wait(base, opened.job);
     assert.equal(reopened.hash, geo.hash);
     assert.deepEqual(opened.study, study);
-    const { solver, analysis, ...older } = study;
+    const { solver, analysis, masses, ...older } = study;
     const legacy = await request(base, "/api/open", {
       ...project,
       study: { ...older, detail: "balanced" },
@@ -93,6 +94,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     // from before analysis types were linear static.
     assert.equal(legacy.study.solver, "spooles");
     assert.equal(legacy.study.analysis, "static");
+    assert.deepEqual(legacy.study.masses, []);
     const unknown = await fetch(base + "/api/open", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -226,6 +228,7 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       ...study,
       solver: "spooles",
       analysis: "static",
+      masses: [],
     });
     assert.equal((await wait(base, restored.job)).hash, geo.hash);
 
@@ -249,6 +252,18 @@ test("recovery on disk, error statuses, and document pruning", async () => {
         loads: [{ id: "l", name: "Load", magnitude: 0, ...load }],
       });
       assert.equal(response.status, 400, load.kind);
+    }
+    // Point masses need a positive mass, a center and faces.
+    for (const mass of [
+      { faces: [2], mass: 0, point: [0, 0, 0] },
+      { faces: [], mass: 1, point: [0, 0, 0] },
+      { faces: [2], mass: 1, point: [0, 0] },
+    ]) {
+      const response = await post(`/api/documents/${imported.id}/solve`, {
+        ...study,
+        masses: [{ id: "m", name: "Mass", ...mass }],
+      });
+      assert.equal(response.status, 400, JSON.stringify(mass));
     }
     const missing = await post(
       "/api/documents/11111111-1111-4111-8111-111111111111/solve",

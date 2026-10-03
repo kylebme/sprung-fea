@@ -76,6 +76,32 @@ class Loads(unittest.TestCase):
         mid=np.isclose(nodes[:,0],50)
         self.assertLess(abs(np.mean(np.asarray(result['stress'])[mid])/(root*.75)-1),.05)
 
+    def test_point_mass_weight_acts_at_its_center_of_mass(self):
+        # A 10 kg component whose center sits 50 mm past the free end.
+        s=study({'kind':'gravity','faces':[],'vector':[0,0,-9.81]})
+        s['masses']=[{'id':'m','name':'Motor','faces':[2],'mass':10,'point':[150,10,5]}]
+        result=worker.solve(self.folder,s)
+        beam=2700e-12*20000*9810
+        np.testing.assert_allclose(result['summary']['reactions'],[0,0,98.1+beam],atol=.01)
+        total,moment,_,_=applied(self.folder)
+        # The component's weight acts at its center: moment about the origin
+        # is its position × weight, plus the beam's own weight at x = 50.
+        np.testing.assert_allclose(moment,np.cross([150,10,5],[0,0,-98.1])+np.cross([50,10,5],[0,0,-beam]),rtol=1e-6,atol=1e-6)
+        mass=next(c for c in result['checks'] if c['label'].startswith('Mass'))
+        self.assertAlmostEqual(mass['values'][0],10+.054,places=6)
+        # Like a 98.1 N remote force at the same point, plus self weight.
+        expected=-(98.1*L**3/(3*E*I)+98.1*50*L**2/(2*E*I)+beam/L*L**4/(8*E*I))
+        self.assertLess(abs(tip(result,self.mesh)/expected-1),.04)
+
+    def test_point_mass_under_rotation_pulls_outward(self):
+        rpm=1000;omega=rpm*2*math.pi/60
+        s=study({'kind':'rotation','faces':[],'magnitude':rpm,'axis':[0,0,1],'point':[0,10,5]})
+        s['masses']=[{'id':'m','name':'Tip mass','faces':[2],'mass':2,'point':[100,10,5]}]
+        result=worker.solve(self.folder,s)
+        expected=2e-3*omega**2*100+2700e-12*20000*omega**2*50
+        np.testing.assert_allclose(result['summary']['reactions'],[-expected,0,0],rtol=1e-6,atol=1e-3)
+        self.assertLess(result['summary']['forceBalanceError'],1e-6)
+
     def test_invalid_remote_and_rotation_inputs(self):
         cases=[{'kind':'remote','faces':[2],'vector':[0,0,-1]},
                {'kind':'moment','faces':[2],'vector':[0,0,0]},
@@ -84,6 +110,11 @@ class Loads(unittest.TestCase):
         for load in cases:
             with self.subTest(load=load['kind']),self.assertRaises(ValueError):
                 worker.write_deck(self.folder,study(load),self.mesh)
+        for mass in [{'faces':[2],'mass':0,'point':[0,0,0]},{'faces':[],'mass':1,'point':[0,0,0]},
+                     {'faces':[2],'mass':1,'point':[0,0]}]:
+            s=study({'kind':'gravity','faces':[],'vector':[0,0,-9.81]});s['masses']=[{'id':'m','name':'M',**mass}]
+            with self.subTest(mass=mass),self.assertRaises(ValueError):
+                worker.write_deck(self.folder,s,self.mesh)
 
 class Bearing(unittest.TestCase):
     def test_bearing_load_pushes_on_the_loaded_half_of_a_bore(self):

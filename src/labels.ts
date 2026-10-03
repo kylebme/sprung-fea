@@ -1,8 +1,11 @@
 import { fmt } from "./logic";
 import type {
   Analysis,
+  Condition,
+  ConditionKind,
   Load,
   LoadKind,
+  PointMass,
   Plot,
   Solver,
   Study,
@@ -112,6 +115,42 @@ export const loadValue = (l: Load) =>
       ? fmt(l.magnitude) + " rpm"
       : fmt(Math.hypot(...l.vector)) +
         (l.kind === "gravity" ? " m/s²" : l.kind === "moment" ? " N·mm" : " N");
+export const massValue = (m: PointMass) => fmt(m.mass) + " kg";
+export const CONDITIONS: Record<
+  ConditionKind,
+  { group: string; add: string; empty: string }
+> = {
+  support: {
+    group: "Supports",
+    add: "Add support",
+    empty: "Supports hold faces in place. A study needs at least one.",
+  },
+  load: {
+    group: "Loads",
+    add: "Add load",
+    empty:
+      "Loads are forces, pressures, moments, gravity or rotation acting on the part.",
+  },
+  mass: {
+    group: "Masses",
+    add: "Add mass",
+    empty:
+      "Point masses stand in for parts that are not modeled, such as a motor bolted to a face.",
+  },
+};
+export const conditionValue = (kind: ConditionKind, c: Condition) =>
+  kind === "load"
+    ? loadValue(c as Load)
+    : kind === "mass"
+      ? massValue(c as PointMass)
+      : "";
+export const blankMass = (point: number[]): PointMass => ({
+  id: crypto.randomUUID(),
+  name: "Point mass",
+  faces: [],
+  mass: 1,
+  point,
+});
 export const blankSupport = (): Support => ({
   id: crypto.randomUUID(),
   name: "Fixed",
