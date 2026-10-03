@@ -14,7 +14,13 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { Viewer, palette, type ViewerHandle, type Theme } from "./Viewer";
+import {
+  Viewer,
+  palette,
+  type Projection,
+  type ViewerHandle,
+  type Theme,
+} from "./Viewer";
 import { api, post, saveFile } from "./api";
 import {
   fmt,
@@ -99,6 +105,17 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(
     () => (readStorage("bettersim-theme") as Theme | null) || systemTheme(),
   );
+  const [projection, setProjection] = useState<Projection>(() =>
+    readStorage("bettersim-projection") === "orthographic"
+      ? "orthographic"
+      : "perspective",
+  );
+  const chooseProjection = (next: Projection) => {
+    try {
+      localStorage.setItem("bettersim-projection", next);
+    } catch {}
+    setProjection(next);
+  };
   const [log, setLog] = useState<LogEntry[]>([]),
     [consoleOpen, setConsoleOpen] = useState(false),
     [consoleTab, setConsoleTab] = useState<"output" | "checks">("output");
@@ -941,6 +958,7 @@ export default function App() {
                 probe={probe}
                 probeLabel={probeLabel}
                 theme={theme}
+                projection={projection}
                 draftKind={draft?.kind || null}
                 marginMax={marginMax}
                 yieldStrength={yieldStrength}
@@ -988,6 +1006,24 @@ export default function App() {
                   ] as const
                 ).map(([v, name]) => (
                   <button key={v} onClick={() => viewer.current?.view(v)}>
+                    {name}
+                  </button>
+                ))}
+                <span className="div" />
+                {(
+                  [
+                    ["perspective", "Persp", "Perspective"],
+                    ["orthographic", "Ortho", "Orthographic"],
+                  ] as const
+                ).map(([mode, name, full]) => (
+                  <button
+                    key={mode}
+                    className={projection === mode ? "on" : ""}
+                    aria-pressed={projection === mode}
+                    aria-label={full}
+                    title={full}
+                    onClick={() => chooseProjection(mode)}
+                  >
                     {name}
                   </button>
                 ))}

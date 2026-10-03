@@ -6,9 +6,13 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 import type { Geometry, Mesh, Result, Study, Plot } from "./types";
 export type Theme = "light" | "dark";
+export type Projection = "perspective" | "orthographic";
+type Camera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+const FOV = 35;
+const halfFov = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 export type ViewerHandle = {
   fit: () => void;
   view: (v: string) => void;
@@ -30,6 +34,7 @@ type Props = {
   probe: number | null;
   probeLabel: string | null;
   theme: Theme;
+  projection: Projection;
   draftKind: "support" | "load" | null;
   marginMax: number;
   yieldStrength: number | null;
@@ -121,8 +126,13 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
   const runtime = useRef<{
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    controls: OrbitControls;
+    camera: Camera;
+    perspective: THREE.PerspectiveCamera;
+    orthographic: THREE.OrthographicCamera;
+    /** Half the visible height of the orthographic view at zoom 1. */
+    orthoHalf: number;
+    aspect: number;
+    controls: TrackballControls;
     group: THREE.Group;
     annotations: THREE.Group;
     markers: THREE.Group;
@@ -136,6 +146,16 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
   const props = useRef(p);
   props.current = p;
   const [failure, setFailure] = useState("");
+  const frameOrtho = (
+    cam: THREE.OrthographicCamera,
+    half: number,
+    aspect: number,
+  ) => {
+    cam.left = -half * aspect;
+    cam.right = half * aspect;
+    cam.top = half;
+    cam.bottom = -half;
+  };
   const fit = (v = "iso") => {
     const r = runtime.current;
     if (!r) return;
@@ -148,21 +168,70 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     const dir = new THREE.Vector3(
       ...((directions[v] || directions.iso) as [number, number, number]),
     ).normalize();
-    r.camera.up.set(0, 0, v === "top" ? 0 : 1);
-    if (v === "top") r.camera.up.set(0, 1, 0);
-    r.camera.position
-      .copy(r.center)
-      .addScaledVector(
-        dir,
-        (r.radius /
-          (Math.sin(THREE.MathUtils.degToRad(r.camera.fov / 2)) *
-            Math.min(1, r.camera.aspect))) *
-          1.16,
-      );
+    const cam = r.camera;
+    if (v === "top") cam.up.set(0, 1, 0);
+    else cam.up.set(0, 0, 1);
+    // Half the visible height needed to show the bounding sphere.
+    const half = (r.radius * 1.16) / Math.min(1, r.aspect);
+    if (cam instanceof THREE.PerspectiveCamera) {
+      cam.position.copy(r.center).addScaledVector(dir, half / halfFov);
+      cam.near = r.radius / 1000;
+      cam.far = r.radius * 1000;
+    } else {
+      r.orthoHalf = half;
+      frameOrtho(cam, half, r.aspect);
+      cam.zoom = 1;
+      cam.position.copy(r.center).addScaledVector(dir, r.radius * 4);
+      cam.near = r.radius / 1000;
+      cam.far = r.radius * 1000;
+    }
     r.controls.target.copy(r.center);
-    r.camera.near = r.radius / 1000;
-    r.camera.far = r.radius * 1000;
-    r.camera.updateProjectionMatrix();
+    cam.lookAt(r.center);
+    cam.updateProjectionMatrix();
+    r.controls.update();
+  };
+  const makeControls = (cam: Camera, dom: HTMLElement) => {
+    // Trackball rotation has no fixed up axis, unlike a turntable.
+    const controls = new TrackballControls(cam, dom);
+    controls.rotateSpeed = 3.5;
+    controls.zoomSpeed = 1.2;
+    controls.panSpeed = 0.8;
+    controls.staticMoving = false;
+    controls.dynamicDampingFactor = 0.2;
+    controls.keys = ["", "", ""];
+    return controls;
+  };
+  /** Swaps cameras while keeping the view direction and visible size. */
+  const project = (mode: Projection) => {
+    const r = runtime.current;
+    if (!r) return;
+    const from = r.camera;
+    const to = mode === "orthographic" ? r.orthographic : r.perspective;
+    if (from === to) return;
+    const target = r.controls.target.clone();
+    const offset = from.position.clone().sub(target);
+    const distance = offset.length();
+    const dir = offset.normalize();
+    to.up.copy(from.up);
+    if (to instanceof THREE.OrthographicCamera) {
+      r.orthoHalf = distance * halfFov;
+      frameOrtho(to, r.orthoHalf, r.aspect);
+      to.zoom = 1;
+      to.position
+        .copy(target)
+        .addScaledVector(dir, Math.max(distance, r.radius * 4));
+    } else {
+      const half = r.orthoHalf / (from as THREE.OrthographicCamera).zoom;
+      to.position.copy(target).addScaledVector(dir, half / halfFov);
+    }
+    to.near = r.radius / 1000;
+    to.far = r.radius * 1000;
+    to.lookAt(target);
+    to.updateProjectionMatrix();
+    r.controls.dispose();
+    r.camera = to;
+    r.controls = makeControls(to, r.renderer.domElement);
+    r.controls.target.copy(target);
     r.controls.update();
   };
   const highlight = (face: number | null) => {
@@ -205,14 +274,22 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     renderer.autoClear = false;
     el.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10000);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.12;
+    const perspective = new THREE.PerspectiveCamera(FOV, 1, 0.01, 10000);
+    const orthographic = new THREE.OrthographicCamera(
+      -1,
+      1,
+      1,
+      -1,
+      0.01,
+      10000,
+    );
+    const controls = makeControls(perspective, renderer.domElement);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x637080, 2.5));
+    // A headlight follows the camera, so free rotation never shows an unlit side.
     const light = new THREE.DirectionalLight(0xffffff, 3);
-    light.position.set(100, -100, 200);
-    scene.add(light);
+    scene.add(light, light.target);
+    const right = new THREE.Vector3(),
+      up = new THREE.Vector3();
     const group = new THREE.Group();
     const annotations = new THREE.Group();
     const markers = new THREE.Group();
@@ -220,7 +297,11 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     runtime.current = {
       renderer,
       scene,
-      camera,
+      camera: perspective,
+      perspective,
+      orthographic,
+      orthoHalf: 1,
+      aspect: 1,
       controls,
       group,
       annotations,
@@ -232,12 +313,23 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       probe: null,
     };
     const triad = axisTriad();
+    let sized = false;
     const resize = new ResizeObserver(() => {
+      const r = runtime.current!;
       const { width, height } = el.getBoundingClientRect();
+      if (!width || !height) return;
       renderer.setSize(width, height);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      fit();
+      r.aspect = width / height;
+      perspective.aspect = r.aspect;
+      perspective.updateProjectionMatrix();
+      frameOrtho(orthographic, r.orthoHalf, r.aspect);
+      orthographic.updateProjectionMatrix();
+      r.controls.handleResize();
+      // Frame the part once; later resizes (console, window) keep the view.
+      if (!sized) {
+        sized = true;
+        fit();
+      }
     });
     resize.observe(el);
     const raycaster = new THREE.Raycaster();
@@ -250,7 +342,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
         (-(event.clientY - rect.top) / rect.height) * 2 + 1,
       );
-      raycaster.setFromCamera(pointer, camera);
+      raycaster.setFromCamera(pointer, runtime.current!.camera);
       return raycaster.intersectObjects(runtime.current?.faces || [])[0];
     };
     const pointerDown = (e: PointerEvent) => {
@@ -308,7 +400,16 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     let frame = 0;
     const render = () => {
       frame = requestAnimationFrame(render);
-      controls.update();
+      const r = runtime.current!;
+      const camera = r.camera;
+      r.controls.update();
+      right.setFromMatrixColumn(camera.matrixWorld, 0);
+      up.setFromMatrixColumn(camera.matrixWorld, 1);
+      light.position
+        .copy(camera.position)
+        .addScaledVector(right, r.radius)
+        .addScaledVector(up, r.radius * 1.5);
+      light.target.position.copy(r.controls.target);
       const { width, height } = el.getBoundingClientRect();
       renderer.setViewport(0, 0, width, height);
       renderer.clear();
@@ -323,7 +424,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       renderer.render(triad.scene, triad.camera);
       renderer.setScissorTest(false);
       const tag = label.current;
-      const point = runtime.current?.probe;
+      const point = r.probe;
       if (tag) {
         const v = point?.clone().project(camera);
         tag.hidden = !v || v.z > 1 || !props.current.probeLabel;
@@ -337,7 +438,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     return () => {
       cancelAnimationFrame(frame);
       resize.disconnect();
-      controls.dispose();
+      runtime.current?.controls.dispose();
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
           obj.geometry.dispose();
@@ -352,6 +453,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       runtime.current = null;
     };
   }, []);
+  useEffect(() => project(p.projection), [p.projection]);
   useEffect(() => {
     const r = runtime.current;
     if (!r) return;

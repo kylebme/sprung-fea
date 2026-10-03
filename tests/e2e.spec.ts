@@ -153,6 +153,51 @@ test("autosave restores the last study after a reload", async ({ page }) => {
     page.getByRole("button", { name: "Use example setup" }),
   ).toBeVisible();
 });
+test("free rotation and orthographic projection keep picking working", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("http://127.0.0.1:5173");
+  await page.evaluate(() => localStorage.removeItem("bettersim-projection"));
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
+  await page.getByRole("button", { name: "Use example setup" }).click();
+  await inspector(page)
+    .getByRole("button", { name: "Solve", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "von Mises stress" }),
+  ).toBeVisible({ timeout: 60000 });
+  await expect(
+    page.getByRole("button", { name: "Perspective" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  const box = (await page.locator("canvas").boundingBox())!;
+  const cx = box.x + box.width / 2,
+    cy = box.y + box.height / 2;
+  // Drag across and back so the trackball ends near the starting view.
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 120, cy - 80, { steps: 8 });
+  await page.mouse.move(cx, cy, { steps: 8 });
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Fit part to view" }).click();
+  await page.getByRole("button", { name: "Orthographic" }).click();
+  await expect(
+    page.getByRole("button", { name: "Orthographic" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(500);
+  await page.mouse.click(cx, cy);
+  await expect(page.locator(".probe-card")).toContainText("Node");
+  await page.screenshot({ path: "output/playwright/orthographic.png" });
+  expect(
+    await page.evaluate(() => localStorage.getItem("bettersim-projection")),
+  ).toBe("orthographic");
+  await page.getByRole("button", { name: "Perspective" }).click();
+  await page.getByRole("button", { name: "Clear" }).click();
+  await page.mouse.click(cx, cy);
+  await expect(page.locator(".probe-card")).toContainText("Node");
+  expect(errors).toEqual([]);
+});
 test("invalid STEP reports an actionable import error", async ({ page }) => {
   await page.goto("http://127.0.0.1:5173");
   await page.locator('input[type=file][accept=".step,.stp"]').setInputFiles({
