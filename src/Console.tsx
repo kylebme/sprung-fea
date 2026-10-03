@@ -36,10 +36,11 @@ export function Console({
   onTab: (tab: "output" | "checks") => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
-  useEffect(
-    () => end.current?.scrollIntoView({ block: "end" }),
-    [log, open, tab],
-  );
+  // Braces matter: scrollIntoView returns a Promise in current Chromium, and
+  // React would treat a returned value as the effect's cleanup function.
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [log, open, tab]);
   const last = log.at(-1);
   const s = result?.summary;
   return (

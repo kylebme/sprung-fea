@@ -453,7 +453,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       runtime.current = null;
     };
   }, []);
-  useEffect(() => project(p.projection), [p.projection]);
+  useEffect(() => {
+    project(p.projection);
+  }, [p.projection]);
   useEffect(() => {
     const r = runtime.current;
     if (!r) return;
@@ -593,7 +595,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     p.marginMax,
     p.yieldStrength,
   ]);
-  useEffect(paint, [p.selected, p.study, p.draftKind, p.theme]);
+  useEffect(() => {
+    paint();
+  }, [p.selected, p.study, p.draftKind, p.theme]);
   useEffect(() => {
     const r = runtime.current;
     if (!r) return;
@@ -704,7 +708,9 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       }
     }
   }, [p.probe, p.result, p.mesh, p.geometry, p.deformation]);
-  useEffect(() => highlight(p.hovered), [p.hovered, p.theme]);
+  useEffect(() => {
+    highlight(p.hovered);
+  }, [p.hovered, p.theme]);
   return (
     <div
       className="three-host"

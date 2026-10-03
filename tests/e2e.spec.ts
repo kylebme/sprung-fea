@@ -57,6 +57,15 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   await page.getByRole("button", { name: "Yield margin", exact: true }).click();
   // Minimum margin is 9.3, so the scale widens beyond the 0–5 default.
   await expect(page.locator(".legend")).toContainText("20+");
+  // Switching console tabs re-runs its scroll effect; it must not crash.
+  await page.getByRole("button", { name: "Checks", exact: true }).click();
+  await expect(page.getByText("Force balance error")).toBeVisible();
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+  await page.getByRole("button", { name: "Checks", exact: true }).click();
+  await page.getByRole("button", { name: "Hide console" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Yield margin" }),
+  ).toBeVisible();
   const csvPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Surface CSV" }).click();
   const csv = await csvPromise;
