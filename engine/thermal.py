@@ -10,7 +10,7 @@ import calculix
 from model import (Model, finite, check_faces, fixed_dofs, rigid_motions, check_loads,
                    check_masses, build_loads, triangle_weights, triangle_shape, tetra_points,
                    QUAD, BODY_LOADS)
-from analyses import (Analysis, nodal, von_mises, mass_check, static_checks)
+from analyses import (Analysis, nodal, von_mises, mass_check, static_checks, measures, STRESS_FIELDS)
 
 THERMAL_KINDS={'temperature','heat','convection','generation'}
 REFERENCE=20.
@@ -233,7 +233,7 @@ class ThermalStress(Analysis):
         lines+=calculix.boundary_lines(fixed)
         lines+=['*STEP','*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE','1., 1.']+heat_lines(heat)
         lines+=calculix.load_lines(loading)
-        lines+=['*NODE FILE','U, NT, RF, RFL','*EL FILE','S, HFL','*END STEP']
+        lines+=['*NODE FILE','U, NT, RF, RFL','*EL FILE','S, E, HFL','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
         return {'heat':heat,'fixed':fixed,'loading':loading}
 
@@ -241,7 +241,8 @@ class ThermalStress(Analysis):
         frame=frames[-1];ids=model.ids
         temperature=nodal(frame,'NDTEMP',ids,1,'temperature')[:,0]
         displacements=nodal(frame,'DISP',ids,3,'displacement and stress')
-        stress=np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'displacement and stress')])
+        fields=measures(frame,ids)
+        stress=fields['vonMises']
         movement=np.linalg.norm(displacements,axis=1)
         balance=heat_balance(context['heat'],frame,model,temperature)
         checks,reactions,total,force_error=static_checks(frame,context['fixed'],context['loading'])
@@ -255,11 +256,11 @@ class ThermalStress(Analysis):
                  'reactions':reactions.tolist(),'appliedForce':total.tolist(),'forceBalanceError':force_error,
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))],
                  'maxTemperature':float(temperature.max()),'minTemperature':float(temperature.min()),'heatBalance':balance}
-        result={'frames':[{'label':'Steady state','value':None,'unit':''}],'fields':['displacement','vonMises','temperature'],
+        result={'frames':[{'label':'Steady state','value':None,'unit':''}],'fields':['displacement',*STRESS_FIELDS,'temperature'],
                 'summary':summary,'warnings':warnings,'charts':[],
                 'checks':[mass_check(study,model)]+checks+heat_checks(balance),
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
-        return result,[{'displacement':displacements,'vonMises':stress,'temperature':temperature}]
+        return result,[{'displacement':displacements,**fields,'temperature':temperature}]
 
     def key_results(self, result):
         s=result['summary']

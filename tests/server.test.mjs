@@ -140,7 +140,16 @@ test("STEP → portable project → reopen → real solve → export", async () 
     // Result schema 2: one frame, its fields, and generic check rows.
     assert.equal(data.result.version, 2);
     assert.equal(data.result.analysis, "static");
-    assert.deepEqual(data.result.fields, ["displacement", "vonMises"]);
+    assert.deepEqual(data.result.fields, [
+      "displacement",
+      "vonMises",
+      "principalMax",
+      "principalMin",
+      "shear",
+      "strain",
+      "strainMax",
+      "strainMin",
+    ]);
     assert.equal(data.result.frames.length, 1);
     assert.ok(
       data.result.checks.some(

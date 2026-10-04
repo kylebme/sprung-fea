@@ -31,7 +31,7 @@ import {
   stripExt,
 } from "./labels";
 import { Head, NumberField, Row } from "./ui";
-import { probeValue, type Probe } from "./viewData";
+import { lowIsCritical, probeValue, type Probe } from "./viewData";
 import { ConvergenceControls, ConvergenceReport } from "./Convergence";
 import { LineChart } from "./Chart";
 import {
@@ -1139,7 +1139,7 @@ export function ResultsPanel({
 }) {
   const s = result.summary;
   const yieldStrength = study.material?.yield || null;
-  const low = plot === "safety";
+  const low = lowIsCritical(plot);
   const info = plotInfo(plot, result.analysis);
   const digits =
     plot === "stress" && !ANALYSES[result.analysis].eigen ? 2 : info.digits;
@@ -1558,7 +1558,7 @@ function FilterControls({
       {iso.on && level("iso", "Iso value")}
       {toggle("threshold", "Threshold")}
       {threshold.on &&
-        level("threshold", plot === "safety" ? "Show below" : "Show above")}
+        level("threshold", lowIsCritical(plot) ? "Show below" : "Show above")}
       <p className="note">
         Filters use the plotted quantity. Click a section or surface to probe
         it.
@@ -1569,7 +1569,11 @@ function FilterControls({
 
 /** Probe card rows, shown when the probed frame has the quantity. */
 const PROBE_ROWS: { plot: Plot; label: string; digits: number }[] = [
-  { plot: "stress", label: "Stress", digits: 3 },
+  { plot: "stress", label: "von Mises", digits: 3 },
+  { plot: "principalMax", label: "Max principal", digits: 3 },
+  { plot: "principalMin", label: "Min principal", digits: 3 },
+  { plot: "shear", label: "Max shear", digits: 3 },
+  { plot: "strain", label: "Equivalent strain", digits: 1 },
   { plot: "movement", label: "Displacement", digits: 5 },
   { plot: "safety", label: "Yield margin", digits: 2 },
   { plot: "temperature", label: "Temperature", digits: 2 },

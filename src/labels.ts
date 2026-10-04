@@ -52,6 +52,12 @@ export const PLOTS: Record<
   temperature: { name: "Temperature", unit: "°C", digits: 2 },
   plastic: { name: "Plastic strain", unit: "mm/mm", digits: 5 },
   heatflux: { name: "Heat flux", unit: "W/m²", digits: 1 },
+  principalMax: { name: "Max principal stress", unit: "MPa", digits: 3 },
+  principalMin: { name: "Min principal stress", unit: "MPa", digits: 3 },
+  shear: { name: "Max shear stress (Tresca)", unit: "MPa", digits: 3 },
+  strain: { name: "Equivalent strain", unit: "µm/m", digits: 1 },
+  strainMax: { name: "Max principal strain", unit: "µm/m", digits: 1 },
+  strainMin: { name: "Min principal strain", unit: "µm/m", digits: 1 },
 };
 /** Thermal condition kinds, in the editor's order, with their help text. */
 export const THERMAL_KINDS: {

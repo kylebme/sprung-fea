@@ -3,7 +3,13 @@
 // converts pointer input into camera moves and picks.
 import { loadAsync, type StandaloneSession } from "@kitware/vtk-wasm";
 import type { ViewData, Probe } from "./viewData";
-import { hasResults, margin, movement, plotRange } from "./viewData";
+import {
+  hasResults,
+  lowIsCritical,
+  margin,
+  movement,
+  plotRange,
+} from "./viewData";
 import type { Face, Filters, Plot, Study } from "./types";
 
 export type Theme = "light" | "dark";
@@ -105,6 +111,12 @@ const FIELD: Record<Plot, string> = {
   temperature: "temperature",
   plastic: "peeq",
   heatflux: "heatFlux",
+  principalMax: "principalMax",
+  principalMin: "principalMin",
+  shear: "shear",
+  strain: "strain",
+  strainMax: "strainMax",
+  strainMin: "strainMin",
 };
 /** Arrays that are geometry or derived, not engine fields, when probing. */
 const NOT_PROBED = new Set([
@@ -909,7 +921,7 @@ export class Scene {
     // The threshold keeps the critical side: high stress or displacement,
     // low yield margin.
     const level = at(f.threshold.level);
-    const low = s.plot === "safety";
+    const low = lowIsCritical(s.plot!);
     // Setup surfaces carry no scalars to clip by.
     this.bandSurface.setInputData(band ? this.surface : this.empty);
     this.bandSurface.setValue(level);

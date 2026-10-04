@@ -41,7 +41,18 @@ export type Probe = {
 };
 
 export type Plot =
-  "stress" | "movement" | "safety" | "temperature" | "plastic" | "heatflux";
+  | "stress"
+  | "movement"
+  | "safety"
+  | "temperature"
+  | "plastic"
+  | "heatflux"
+  | "principalMax"
+  | "principalMin"
+  | "shear"
+  | "strain"
+  | "strainMax"
+  | "strainMin";
 /**
  * A plot shows one scalar per node: an engine field, or a quantity derived
  * from them (displacement magnitude, yield margin). Ranges start at zero
@@ -52,6 +63,12 @@ export const PLOT_SOURCES: Record<
   { field: string; derived?: boolean; signed?: boolean }
 > = {
   stress: { field: "vonMises" },
+  principalMax: { field: "principalMax", signed: true },
+  principalMin: { field: "principalMin", signed: true },
+  shear: { field: "shear" },
+  strain: { field: "strain" },
+  strainMax: { field: "strainMax", signed: true },
+  strainMin: { field: "strainMin", signed: true },
   movement: { field: "displacement", derived: true },
   safety: { field: "vonMises", derived: true },
   temperature: { field: "temperature", signed: true },
@@ -198,11 +215,15 @@ export function plotRange(
   return { min: 0, max: r.max || 1 };
 }
 
+/** Plots whose critical value is the lowest: margin, compression. */
+export const lowIsCritical = (plot: Plot) =>
+  plot === "safety" || plot === "principalMin" || plot === "strainMin";
+
 /** The node with the extreme value: lowest margin, highest otherwise. */
 export function peak(view: ViewData, plot: Plot, yieldStrength: number | null) {
   const values = plotValues(view, plot, yieldStrength);
   let best = 0;
-  const low = plot === "safety";
+  const low = lowIsCritical(plot);
   for (let i = 1; i < values.length; i++)
     if (low ? values[i] < values[best] : values[i] > values[best]) best = i;
   return { value: values[best], node: view.nodeIds[best] };
@@ -275,6 +296,12 @@ const CSV_COLUMNS: Record<string, string> = {
   temperature: "temperature_C",
   peeq: "plastic_strain",
   heatFlux: "heat_flux_W_m2",
+  principalMax: "max_principal_MPa",
+  principalMin: "min_principal_MPa",
+  shear: "max_shear_tresca_MPa",
+  strain: "equivalent_strain_um_per_m",
+  strainMax: "max_principal_strain_um_per_m",
+  strainMin: "min_principal_strain_um_per_m",
 };
 
 /** Nodes on the part surface with the displayed frame's results, as CSV. */

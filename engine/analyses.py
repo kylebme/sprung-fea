@@ -30,6 +30,42 @@ def von_mises(s):
     return math.sqrt(max(0,((xx-yy)**2+(yy-zz)**2+(zz-xx)**2)/2+3*(xy*xy+yz*yz+zx*zx)))
 
 
+def stress_fields(tensors):
+    """Stress measures at each node from the averaged tensors (SXX, SYY,
+    SZZ, SXY, SYZ, SZX): von Mises, the largest and smallest principal
+    stress, and the largest shear stress (Tresca), (σ1 − σ3)/2."""
+    t=np.asarray(tensors,float)[:,:6]
+    xx,yy,zz,xy,yz,zx=t.T
+    matrix=np.stack([np.stack([xx,xy,zx],-1),np.stack([xy,yy,yz],-1),np.stack([zx,yz,zz],-1)],-2)
+    principal=np.linalg.eigvalsh(matrix)
+    return {'vonMises':np.array([von_mises(s) for s in t]),'principalMax':principal[:,2],
+            'principalMin':principal[:,0],'shear':(principal[:,2]-principal[:,0])/2}
+
+
+def strain_fields(tensors):
+    """Total strain measures in µm/m from CalculiX's strain tensors (EXX,
+    EYY, EZZ, EXY, EYZ, EZX; shear as tensor components, ε = γ/2): the
+    largest and smallest principal strain, and the von Mises equivalent
+    strain √(2/3 e:e) of the deviatoric part e."""
+    t=np.asarray(tensors,float)[:,:6]
+    xx,yy,zz,xy,yz,zx=t.T
+    matrix=np.stack([np.stack([xx,xy,zx],-1),np.stack([xy,yy,yz],-1),np.stack([zx,yz,zz],-1)],-2)
+    principal=np.linalg.eigvalsh(matrix)
+    dev=principal-principal.mean(axis=1,keepdims=True)
+    return {'strain':np.sqrt(2/3*(dev**2).sum(1))*1e6,'strainMax':principal[:,2]*1e6,'strainMin':principal[:,0]*1e6}
+
+
+def measures(frame, ids):
+    """Stress and strain fields of a static-type frame."""
+    out=stress_fields(nodal(frame,'STRESS',ids,6,'displacement and stress'))
+    if frame['fields'].get('TOSTRAIN'):
+        out.update(strain_fields(nodal(frame,'TOSTRAIN',ids,6,'strain')))
+    return out
+
+
+STRESS_FIELDS=['vonMises','principalMax','principalMin','shear','strain','strainMax','strainMin']
+
+
 def nodal(frame, label, ids, count, what):
     """Values of one FRD field at the mesh's nodes, first `count` components."""
     data=frame['fields'].get(label)
@@ -118,7 +154,7 @@ class Static(Analysis):
         else:
             lines+=['*STEP','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]]
         lines+=calculix.load_lines(loading)
-        lines+=['*NODE FILE','U, RF','*EL FILE','S','*NODE PRINT, NSET=HELD, TOTALS=YES','RF','*END STEP']
+        lines+=['*NODE FILE','U, RF','*EL FILE','S, E','*NODE PRINT, NSET=HELD, TOTALS=YES','RF','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
         (folder/'applied.json').write_text(json.dumps({n:v.tolist() for n,v in loading.applied.items()}))
         return {'fixed':fixed,'loading':loading}
@@ -130,8 +166,7 @@ class Static(Analysis):
         view=[]
         for f in steps:
             u=nodal(f,'DISP',ids,3,'displacement and stress')
-            s=np.array([von_mises(x) for x in nodal(f,'STRESS',ids,6,'displacement and stress')])
-            view.append({'displacement':u,'vonMises':s})
+            view.append({'displacement':u,**measures(f,ids)})
         frame=frames[-1]
         displacements=view[-1]['displacement'];stress=view[-1]['vonMises']
         movement=np.linalg.norm(displacements,axis=1)
@@ -167,7 +202,7 @@ class Static(Analysis):
                                {'label':'Linear','unit':'mm','values':linear}]}]
         else:
             labels=[{'label':'Static load','value':None,'unit':''}];charts=[]
-        result={'frames':labels,'fields':['displacement','vonMises'],
+        result={'frames':labels,'fields':['displacement',*STRESS_FIELDS],
                 'summary':summary,'warnings':warnings,'charts':charts,
                 'checks':[mass_check(study,model)]+checks,
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}

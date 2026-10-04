@@ -434,3 +434,54 @@ test("curved pressure: select inner torus and verify projected-area reactions in
   expect(ry).toBeCloseTo(-Math.PI * 49, 0);
   await page.screenshot({ path: "output/playwright/toroidal-pressure.png" });
 });
+
+test("principal stress, Tresca shear and strain plots", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("http://127.0.0.1:5173");
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
+  await page.getByRole("button", { name: "Use example setup" }).click();
+  await inspector(page)
+    .getByRole("button", { name: "Solve", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "von Mises stress" }),
+  ).toBeVisible({ timeout: 60000 });
+  // Bending: tension above, an equal compression below.
+  await page.getByRole("button", { name: "Max principal stress" }).click();
+  const tension = Number(
+    await inspector(page).locator(".big strong").innerText(),
+  );
+  await page.getByRole("button", { name: "Min principal stress" }).click();
+  await expect(inspector(page)).toContainText("Minimum");
+  const compression = Number(
+    await inspector(page).locator(".big strong").innerText(),
+  );
+  expect(compression).toBeLessThan(0);
+  expect(Math.abs(compression / tension + 1)).toBeLessThan(0.2);
+  await page.getByRole("switch", { name: "Threshold" }).click();
+  await expect(page.locator(".filters")).toContainText("Show below");
+  await page.getByRole("switch", { name: "Threshold" }).click();
+  await page.getByRole("button", { name: "Max shear stress (Tresca)" }).click();
+  const shear = Number(
+    await inspector(page).locator(".big strong").innerText(),
+  );
+  expect(shear).toBeGreaterThan(0);
+  const box = (await page.locator("canvas").boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator(".probe-card")).toContainText("Max principal");
+  await expect(page.locator(".probe-card")).toContainText("Equivalent strain");
+  // Strain at the surface: σ/E, about 430 µm/m at the root.
+  await page.getByRole("button", { name: "Max principal strain" }).click();
+  await expect(page.locator(".vlabel")).toContainText("µm/m");
+  const strain = Number(
+    (await inspector(page).locator(".big strong").innerText()).replace(
+      /,/g,
+      "",
+    ),
+  );
+  expect(strain).toBeGreaterThan(200);
+  expect(strain).toBeLessThan(800);
+  await page.screenshot({ path: "output/playwright/principal.png" });
+  expect(errors).toEqual([]);
+});

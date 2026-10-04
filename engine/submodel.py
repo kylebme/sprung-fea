@@ -12,7 +12,7 @@ import gmsh
 import calculix
 from cad import emit, threads, mesh_model, write_view, mesh_view
 from model import Model, finite, vector, fixed_dofs, build_loads, check_masses
-from analyses import SCHEMA, von_mises, nodal, mass_check, write_result_view
+from analyses import SCHEMA, von_mises, nodal, mass_check, write_result_view, measures, STRESS_FIELDS
 
 # Loads whose distribution depends on all of their faces. A region that
 # contains part of their faces cannot reproduce them.
@@ -188,7 +188,7 @@ def submodel(folder, study, region):
     lines+=['*STEP','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0],
             '*BOUNDARY, SUBMODEL, STEP=1','CUT, 1, 3']
     lines+=calculix.load_lines(loading)
-    lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']
+    lines+=['*NODE FILE','U','*EL FILE','S, E','*END STEP']
     (target/'analysis.inp').write_text('\n'.join(lines)+'\n')
 
     emit('solving','Solving the region with CalculiX')
@@ -198,7 +198,8 @@ def submodel(folder, study, region):
     frame=calculix.parse_frd(target/'analysis.frd')[-1]
     ids=model.ids
     displacements=nodal(frame,'DISP',ids,3,'displacement and stress')
-    stress=np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'displacement and stress')])
+    fields=measures(frame,ids)
+    stress=fields['vonMises']
     movement=np.linalg.norm(displacements,axis=1)
 
     # The whole-part solution inside the box, and on the cut faces.
@@ -229,7 +230,7 @@ def submodel(folder, study, region):
              'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))],
              'globalPeak':global_peak,'boundaryDifference':difference}
     result={'version':SCHEMA,'analysis':'static','region':{'lo':lo.tolist(),'hi':hi.tolist(),'cutFaces':cut_faces},
-            'frames':[{'label':'Region','value':None,'unit':''}],'fields':['displacement','vonMises'],
+            'frames':[{'label':'Region','value':None,'unit':''}],'fields':['displacement',*STRESS_FIELDS],
             'summary':summary,'warnings':warnings,'charts':[],
             'checks':[{'label':'Peak stress, whole part in region → refined','values':[global_peak,peak],'unit':'MPa'},
                       {'label':'Cut-face stress difference (95th percentile), share of peak','values':[difference*100],'unit':'%'},
@@ -240,7 +241,7 @@ def submodel(folder, study, region):
             'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount'],
             'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
     (target/'result.json').write_text(json.dumps(result))
-    write_result_view(target,mesh,[{'displacement':displacements,'vonMises':stress}])
+    write_result_view(target,mesh,[{'displacement':displacements,**fields}])
     coords=model.coords
     region_geometry={'bounds':[*coords.min(0).tolist(),*coords.max(0).tolist()],
                      'faces':[{**{k:v for k,v in f.items() if k!='indices'},'original':faces.get(f['id']),
