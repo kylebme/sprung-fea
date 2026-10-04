@@ -57,21 +57,35 @@ def bundle_linux():
 
 def bundle_windows():
     # Windows loads DLLs from the executable's folder first. Copy every DLL
-    # the solver imports, transitively, that ships beside it; the rest
-    # (kernel32, the universal CRT) belong to Windows.
+    # the solver needs, transitively, from the folders of its (conda)
+    # environment: imports, and exports forwarded to another DLL (conda's
+    # libblas/liblapack forward to openblas.dll). The rest belong to Windows.
     import pefile
     exe=solver/'ccx.exe';shutil.copy2(source,exe)
-    seen=set();queue=[source]
+    prefix=source.parent.parent.parent if source.parent.parent.name.lower()=='library' else source.parent
+    folders=[source.parent,prefix/'Library'/'bin',prefix/'Library'/'mingw-w64'/'bin',prefix]
+    system=Path(os.environ.get('SystemRoot','C:/Windows'))/'System32'
+    seen=set();queue=[source];missing=[]
     while queue:
         pe=pefile.PE(str(queue.pop(0)),fast_load=True)
-        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_IMPORT']])
-        for entry in getattr(pe,'DIRECTORY_ENTRY_IMPORT',[]):
-            name=entry.dll.decode().lower()
-            dep=source.parent/entry.dll.decode()
-            # API-set names (api-ms-win-crt-*) always resolve inside Windows.
-            if name in seen or name.startswith(('api-ms-','ext-ms-')) or not dep.is_file():continue
-            seen.add(name);shutil.copy2(dep,solver/dep.name);queue.append(dep)
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY[d] for d in ('IMAGE_DIRECTORY_ENTRY_IMPORT','IMAGE_DIRECTORY_ENTRY_EXPORT')])
+        names=[entry.dll.decode() for entry in getattr(pe,'DIRECTORY_ENTRY_IMPORT',[])]
+        export=getattr(pe,'DIRECTORY_ENTRY_EXPORT',None)
+        # A forwarder reads "target.symbol" or "target.dll.symbol".
+        for symbol in export.symbols if export else []:
+            if not symbol.forwarder:continue
+            target=symbol.forwarder.decode().rsplit('.',1)[0]
+            names.append(target if target.lower().endswith('.dll') else target+'.dll')
         pe.close()
+        for name in names:
+            key=name.lower()
+            # API sets and the universal CRT always resolve inside Windows.
+            if key in seen or key.startswith(('api-ms-','ext-ms-')) or key=='ucrtbase.dll':continue
+            seen.add(key)
+            dep=next((f/name for f in folders if (f/name).is_file()),None)
+            if dep:shutil.copy2(dep,solver/dep.name);queue.append(dep)
+            elif not (system/name).is_file():missing.append(name)
+    if missing:sys.exit('Solver libraries not found: '+', '.join(missing))
 
 
 {'darwin':bundle_mac,'win32':bundle_windows}.get(sys.platform,bundle_linux)()
