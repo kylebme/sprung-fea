@@ -29,7 +29,7 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   await page.getByRole("button", { name: /^Face 2\b/ }).click();
   await page.getByLabel("Z force", { exact: true }).fill("-100");
   await page.getByRole("button", { name: "Save load" }).click();
-  await page.getByRole("button", { name: /^Mesh\s*Medium/ }).click();
+  await page.getByRole("button", { name: /^Mesh \+ Solver\s*Medium/ }).click();
   await page.getByRole("button", { name: "Preview mesh" }).click();
   await expect(
     page.getByText("Minimum quality", { exact: true }),
@@ -91,7 +91,9 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   await expect(
     page.getByRole("button", { name: /^Force\s*100 N$/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /^Mesh\s*[\d,]+ el$/ }).click();
+  await page
+    .getByRole("button", { name: /^Mesh \+ Solver\s*[\d,]+ el$/ })
+    .click();
   await inspector(page)
     .getByRole("button", { name: "Solve", exact: true })
     .click();
@@ -113,7 +115,7 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   ).toBeDisabled();
   // A material change keeps the mesh, and keyboard undo restores the study.
   await expect(
-    page.getByRole("button", { name: /^Mesh\s*[\d,]+ el$/ }),
+    page.getByRole("button", { name: /^Mesh \+ Solver\s*[\d,]+ el$/ }),
   ).toBeVisible();
   await page.locator("body").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("ControlOrMeta+z");
@@ -121,7 +123,7 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
     page.getByRole("button", { name: /^Material\s*Aluminum/ }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /^Mesh\s*[\d,]+ el$/ }),
+    page.getByRole("button", { name: /^Mesh \+ Solver\s*[\d,]+ el$/ }),
   ).toBeVisible();
   await page.getByRole("button", { name: /^Material\s*Aluminum/ }).focus();
   await page.keyboard.press("ArrowDown");
@@ -318,7 +320,7 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
   await page
     .getByRole("button", { name: /^Cantilever beam.*Restore$/ })
     .click();
-  await page.getByRole("button", { name: /^Mesh\s/ }).click();
+  await page.getByRole("button", { name: /^Mesh \+ Solver\s/ }).click();
   await expect(
     page
       .getByRole("group", { name: "Solver" })
@@ -411,7 +413,7 @@ test("curved pressure: select inner torus and verify projected-area reactions in
     .click();
   await page.getByLabel(/^Pressure/).fill("1");
   await page.getByRole("button", { name: "Save load" }).click();
-  await page.getByRole("button", { name: /^Mesh\s*Custom/ }).click();
+  await page.getByRole("button", { name: /^Mesh \+ Solver\s*Custom/ }).click();
   await inspector(page)
     .getByRole("button", { name: "Solve", exact: true })
     .click();

@@ -49,7 +49,7 @@ test("heat transfer: fixed temperature, heater and air; then thermal stress", as
   await expect(
     page.getByRole("button", { name: "Loads", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: /^Mesh\s/ }).click();
+  await page.getByRole("button", { name: /^Mesh \+ Solver\s/ }).click();
   await expect(inspector(page).locator(".missing")).toContainText(
     "Temperature or convection",
   );

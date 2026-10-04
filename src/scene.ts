@@ -1128,6 +1128,36 @@ export class Scene {
     c.setPosition(...add(c.getPosition(), move));
   }
 
+  /**
+   * Zooms toward the point under the cursor, as CAD tools do: the camera
+   * scales about that point on the focal plane, so it stays under the
+   * cursor while the view zooms.
+   */
+  private zoomAt(factor: number, display: number[]) {
+    const c = this.camera;
+    const r = this.renderer;
+    const focal = c.getFocalPoint();
+    r.setWorldPoint(focal[0], focal[1], focal[2], 1);
+    r.worldToDisplay();
+    const depth = r.getDisplayPoint()[2];
+    r.setDisplayPoint(display[0], display[1], depth);
+    r.displayToWorld();
+    const w = r.getWorldPoint();
+    const at = [w[0] / w[3], w[1] / w[3], w[2] / w[3]];
+    const shift = add(add(focal, at, -1), [0, 0, 0], 1).map(
+      (v) => v / factor - v,
+    );
+    c.setFocalPoint(...add(focal, shift));
+    if (c.getParallelProjection()) {
+      c.setPosition(...add(c.getPosition(), shift));
+      c.setParallelScale(c.getParallelScale() / factor);
+    } else {
+      // Scale the camera position about the same point.
+      const p = c.getPosition();
+      c.setPosition(...add(at, add(p, at, -1), 1 / factor));
+    }
+  }
+
   private zoom(factor: number) {
     const c = this.camera;
     if (c.getParallelProjection())
@@ -1191,7 +1221,10 @@ export class Scene {
     this.window.setSize(this.canvas.width, this.canvas.height);
     // Frame the part once; later resizes keep the view.
     if (first) this.fit("iso");
-    this.invalidate();
+    // Resizing clears the canvas; draw now, before the browser paints the
+    // empty frame (a dark flash in light mode).
+    if (this.state) this.render();
+    else this.invalidate();
   }
 
   /** PNG of the current view, base64 without the data-URL prefix. */
@@ -1302,7 +1335,7 @@ export class Scene {
     };
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      this.zoom(Math.pow(1.0015, -e.deltaY));
+      this.zoomAt(Math.pow(1.0015, -e.deltaY), this.display(e));
       this.invalidate();
     };
     const leave = () => {

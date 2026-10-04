@@ -924,7 +924,7 @@ export function MeshPanel({
 }) {
   return (
     <>
-      <Head small="Mesh" title={DETAIL_NAMES[study.detail]} />
+      <Head small="Mesh + Solver" title={DETAIL_NAMES[study.detail]} />
       <div className="sec">
         <div className="field">
           <span>Density</span>

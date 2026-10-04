@@ -23,7 +23,7 @@ test("mesh convergence: refine until settled, adopt the finest mesh, undo", asyn
   ).toBeVisible();
   await page.screenshot({ path: "output/playwright/convergence.png" });
   // The study now uses the finest mesh: 0.75 × 4 mm.
-  await page.getByRole("button", { name: /^Mesh\s/ }).click();
+  await page.getByRole("button", { name: /^Mesh \+ Solver\s/ }).click();
   await expect(page.getByLabel(/^Element size/)).toHaveValue("3");
   // Undo returns to the starting size and clears the result.
   await page.locator("body").click({ position: { x: 5, y: 5 } });

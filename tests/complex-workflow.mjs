@@ -74,7 +74,7 @@ export async function configureComplexPart(page, name) {
       .fill(String(c.vector[i]));
   }
   await page.getByRole("button", { name: "Save load" }).click();
-  await page.getByRole("button", { name: /^Mesh\s*Medium/ }).click();
+  await page.getByRole("button", { name: /^Mesh \+ Solver\s*Medium/ }).click();
   await page.getByLabel(/^Element size/).fill(String(c.size));
   return geometry;
 }

@@ -166,7 +166,7 @@ export function StudyTree({
       <Node
         depth={1}
         icon={Grid3X3}
-        label="Mesh"
+        label="Mesh + Solver"
         value={
           mesh ? fmt(mesh.elementCount) + " el" : DETAIL_NAMES[study.detail]
         }
