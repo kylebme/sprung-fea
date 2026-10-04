@@ -20,7 +20,13 @@ app.whenReady().then(async () => {
       dataDir: path.join(app.getPath("userData"), "studies"),
       resourceDir: resources,
       workerExecutable: app.isPackaged
-        ? path.join(resources, "runtime", "sprung-fea-engine")
+        ? path.join(
+            resources,
+            "runtime",
+            process.platform === "win32"
+              ? "sprung-fea-engine.exe"
+              : "sprung-fea-engine",
+          )
         : null,
     });
   }
@@ -31,7 +37,8 @@ app.whenReady().then(async () => {
     minHeight: 720,
     title: "Sprung FEA",
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0d0f11" : "#f3f4f6",
-    titleBarStyle: "hiddenInset",
+    // Elsewhere a hidden title bar would also hide the window controls.
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

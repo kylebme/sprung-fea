@@ -26,6 +26,20 @@ npm run package:mac
 
 The Apple Silicon app is produced at `release/mac-arm64/Sprung FEA.app`. It bundles the Python/Gmsh engine, CalculiX, all required native libraries, the VTK.wasm runtime, and offline fonts. It needs neither Python nor Homebrew on the destination Mac. The build is ad-hoc signed for local testing, not Apple-notarized. Intel Mac packaging requires an Intel runtime and solver built on that architecture. `npm run dist:mac` also produces a DMG.
 
+## Build for Windows and Linux
+
+```sh
+.venv/bin/pip install pyinstaller   # .venv\Scripts\pip on Windows
+npm run package:win                 # or: npm run package:linux
+npm run test:packaged               # solves with only the packaged engine and solver
+```
+
+These bundle the CalculiX found by `SPRUNG_FEA_CCX` (or on `PATH`) together with its shared libraries; CI uses conda-forge `calculix=2.23` (`micromamba create -n calculix calculix=2.23`). Linux packaging needs `patchelf`. Windows produces `release/Sprung-FEA-Setup-<version>.exe`, a one-click installer that installs for the current user without administrator rights. Linux produces `release/Sprung-FEA-<version>-x86_64.AppImage`, which runs without installation. Builds are unsigned.
+
+## Continuous integration
+
+`.github/workflows/build.yml` builds the macOS DMG, Windows installer and Linux AppImage on every push and pull request, runs a static and a frequency solve with each packaged engine, and uploads the installers as workflow artifacts.
+
 ## A first study
 
 1. Open an example, or import `.step`/`.stp`. A file with several solids is an assembly: bodies are bonded where their faces touch, and each body can have its own material.

@@ -12,14 +12,18 @@
     "start": "electron .",
     "test": "node --test tests/*.test.mjs tests/*.test.ts",
     "test:engine": ".venv/bin/python -m unittest discover -s tests -p 'test_*.py'",
-    "package:mac": "npm run build && npm run bundle:engine && electron-builder --mac dir && node scripts/sign-mac.mjs",
-    "dist:mac": "npm run package:mac && electron-builder --prepackaged 'release/mac-arm64/Sprung FEA.app' --mac dmg",
+    "package:mac": "npm run build && npm run bundle:engine && electron-builder --mac dir --publish never && node scripts/sign-mac.mjs",
+    "dist:mac": "npm run package:mac && electron-builder --prepackaged 'release/mac-arm64/Sprung FEA.app' --mac dmg --publish never",
+    "package:win": "npm run build && npm run bundle:engine:win && electron-builder --win nsis --publish never",
+    "package:linux": "npm run build && npm run bundle:engine && electron-builder --linux AppImage --publish never",
     "bundle:engine": ".venv/bin/python scripts/bundle-runtime.py",
+    "bundle:engine:win": ".venv\\Scripts\\python.exe scripts/bundle-runtime.py",
     "test:e2e": "playwright test",
     "test:all": "npm run test:engine && npm test && npm run test:e2e",
     "setup": "node scripts/setup.mjs",
     "dev:desktop": "node scripts/dev.mjs --electron",
     "test:desktop": "node tests/desktop.mjs",
+    "test:packaged": "node tests/packaged.mjs",
     "format": "prettier --write src server electron scripts/*.mjs tests/*.mjs tests/*.ts *.ts *.json index.html"
   },
   "dependencies": {
@@ -78,6 +82,25 @@
       ],
       "icon": "assets/icon.icns",
       "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Sprung-FEA-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Science",
+      "artifactName": "Sprung-FEA-${version}-${arch}.${ext}"
     },
     "asarUnpack": [
       "engine/**/*",
