@@ -18,6 +18,7 @@ import {
   DETAIL_NAMES,
   ANALYSES,
   CONDITIONS,
+  DEFAULT_HARMONIC,
   DEFAULT_MODES,
   LOAD_KINDS,
   THERMAL_KINDS,
@@ -38,6 +39,7 @@ import {
   MATERIALS,
   type Analysis,
   type Axis,
+  type Harmonic,
   type Filters,
   type Condition,
   type ConditionKind,
@@ -133,6 +135,10 @@ export function AnalysisPanel({
                   ...study,
                   analysis: id,
                   modes: DEFAULT_MODES[id] ?? study.modes,
+                  harmonic:
+                    id === "harmonic"
+                      ? (study.harmonic ?? DEFAULT_HARMONIC)
+                      : study.harmonic,
                 })
               }
             >
@@ -166,6 +172,15 @@ export function AnalysisPanel({
             temperature or convection is needed, so heat can leave the part.
           </p>
         </div>
+      )}
+      {study.analysis === "harmonic" && (
+        <HarmonicSettings
+          settings={study.harmonic ?? DEFAULT_HARMONIC}
+          modes={study.modes ?? 20}
+          onChange={(harmonic, modes) =>
+            onChange({ ...study, harmonic, modes })
+          }
+        />
       )}
       {study.analysis === "static" && (
         <div className="sec">
@@ -1291,7 +1306,8 @@ export function ResultsPanel({
             </div>
           </div>
         )}
-        {ANALYSES[result.analysis].eigen && (
+        {(ANALYSES[result.analysis].eigen ||
+          result.analysis === "harmonic") && (
           <div className="switch-row">
             <span>Animate</span>
             <button
@@ -1368,8 +1384,27 @@ export function ResultsPanel({
             series={c.series.map((s) => ({ label: s.label, values: s.values }))}
             xLabel={`${c.x.label}, ${c.x.unit}`}
             yLabel={c.series[0].unit}
-            selected={c.id === "loadPath" ? frame : undefined}
-            onSelect={c.id === "loadPath" ? onFrame : undefined}
+            logY={RESPONSE.includes(c.id)}
+            selected={
+              c.id === "loadPath"
+                ? frame
+                : RESPONSE.includes(c.id)
+                  ? nearest(c.x.values, result.frames[frame]?.value ?? 0)
+                  : undefined
+            }
+            onSelect={
+              c.id === "loadPath"
+                ? onFrame
+                : RESPONSE.includes(c.id)
+                  ? (i) =>
+                      onFrame(
+                        nearest(
+                          result.frames.map((f) => f.value ?? 0),
+                          c.x.values[i],
+                        ),
+                      )
+                  : undefined
+            }
           />
           <p className="legend-note">
             {c.series.map((s, k) => (
@@ -1856,6 +1891,99 @@ function ModeTable({
         {vibration
           ? "A mode with a large effective mass in a direction responds strongly to shaking in that direction."
           : "The part buckles when all loads are multiplied by the first factor. A negative factor means buckling with the loads reversed."}
+      </p>
+    </div>
+  );
+}
+
+/** Response charts, whose points pick the frequency shown. */
+const RESPONSE = ["response", "stressResponse"];
+const nearest = (values: number[], x: number) =>
+  values.reduce(
+    (best, v, i) => (Math.abs(v - x) < Math.abs(values[best] - x) ? i : best),
+    0,
+  );
+
+/** Frequency range, damping and excitation of a harmonic response study. */
+function HarmonicSettings({
+  settings,
+  modes,
+  onChange,
+}: {
+  settings: Harmonic;
+  modes: number;
+  onChange: (h: Harmonic, modes: number) => void;
+}) {
+  const set = (changes: Partial<Harmonic>) =>
+    onChange({ ...settings, ...changes }, modes);
+  return (
+    <div className="sec">
+      <div className="row2">
+        <NumberField
+          label="From"
+          value={settings.min}
+          unit="Hz"
+          onChange={(min) => set({ min })}
+        />
+        <NumberField
+          label="To"
+          value={settings.max}
+          unit="Hz"
+          onChange={(max) => set({ max })}
+        />
+      </div>
+      <NumberField
+        label="Damping"
+        value={Number((settings.damping * 100).toPrecision(4))}
+        unit="% of critical"
+        onChange={(v) => set({ damping: v / 100 })}
+      />
+      <p className="note">
+        Typical: 1–2% for a solid metal part, 3–5% for bolted assemblies.
+      </p>
+      <div className="field" style={{ marginTop: 10 }}>
+        <span>Shaken by</span>
+        <div className="seg" role="group" aria-label="Excitation">
+          {(
+            [
+              ["loads", "Its loads"],
+              ["base", "Base shaking"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              className={settings.excitation === id ? "on" : ""}
+              aria-pressed={settings.excitation === id}
+              onClick={() => set({ excitation: id })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {settings.excitation === "base" ? (
+        <VectorField
+          label="Base acceleration, g"
+          name="base acceleration"
+          value={settings.base}
+          onChange={(base) => set({ base })}
+        />
+      ) : (
+        <p className="note">
+          Each load is the amplitude of a sinusoidal load at every frequency.
+        </p>
+      )}
+      <NumberField
+        label="Modes to use"
+        value={modes}
+        step="1"
+        onChange={(v) =>
+          onChange(settings, Math.max(1, Math.min(50, Math.round(v) || 1)))
+        }
+      />
+      <p className="note">
+        The response is built from the part’s natural modes. Use enough that the
+        highest is well above the top of the range.
       </p>
     </div>
   );

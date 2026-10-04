@@ -52,7 +52,8 @@ export type Plot =
   | "shear"
   | "strain"
   | "strainMax"
-  | "strainMin";
+  | "strainMin"
+  | "amplitude";
 /**
  * A plot shows one scalar per node: an engine field, or a quantity derived
  * from them (displacement magnitude, yield margin). Ranges start at zero
@@ -69,6 +70,7 @@ export const PLOT_SOURCES: Record<
   strain: { field: "strain" },
   strainMax: { field: "strainMax", signed: true },
   strainMin: { field: "strainMin", signed: true },
+  amplitude: { field: "amplitude" },
   movement: { field: "displacement", derived: true },
   safety: { field: "vonMises", derived: true },
   temperature: { field: "temperature", signed: true },
@@ -302,6 +304,7 @@ const CSV_COLUMNS: Record<string, string> = {
   strain: "equivalent_strain_um_per_m",
   strainMax: "max_principal_strain_um_per_m",
   strainMin: "min_principal_strain_um_per_m",
+  amplitude: "displacement_amplitude_mm",
 };
 
 /** Nodes on the part surface with the displayed frame's results, as CSV. */

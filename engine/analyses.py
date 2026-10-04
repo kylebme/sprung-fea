@@ -359,7 +359,8 @@ class Buckling(Analysis):
 
 
 from thermal import Thermal, ThermalStress
-ANALYSES={a.id:a for a in [Static(),Frequency(),Buckling(),Thermal(),ThermalStress()]}
+from harmonic import Harmonic
+ANALYSES={a.id:a for a in [Static(),Frequency(),Buckling(),Thermal(),ThermalStress(),Harmonic()]}
 
 
 def analysis_of(study):

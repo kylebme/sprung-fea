@@ -25,6 +25,7 @@ export const ANALYSES = [
   "buckling",
   "thermal",
   "thermalStress",
+  "harmonic",
 ];
 /** Thermal conditions; generation acts on the whole part. */
 export const THERMAL = ["temperature", "heat", "convection", "generation"];
@@ -146,6 +147,22 @@ export function validateStudy(s) {
     typeof s.largeDeformation !== "boolean"
   )
     throw new RequestError("Large deformation must be on or off.");
+  // Harmonic response: frequency range (Hz), damping ratio, excitation.
+  if (s.harmonic !== undefined) {
+    const h = s.harmonic;
+    if (!h || typeof h !== "object")
+      throw new RequestError("The harmonic settings are invalid.");
+    number(h.min, "Lowest frequency", { positive: true });
+    number(h.max, "Highest frequency", { positive: true });
+    if (h.max <= h.min)
+      throw new RequestError("The highest frequency must be above the lowest.");
+    number(h.damping, "Damping", { positive: true });
+    if (h.damping >= 1)
+      throw new RequestError("Damping must be below 100% of critical.");
+    if (!["loads", "base"].includes(h.excitation))
+      throw new RequestError("Choose loads or base shaking.");
+    if (h.excitation === "base") vector(h.base, "base acceleration");
+  }
   if (s.referenceTemperature !== undefined)
     number(s.referenceTemperature, "Stress-free temperature");
   // Studies saved before point masses have none.

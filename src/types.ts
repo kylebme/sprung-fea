@@ -106,8 +106,20 @@ export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
 export type Threads = "auto" | "single" | "all";
 export type Cpus = { logical: number; performance: number };
 /** Analysis types; projects saved before the choice are linear static. */
+export type Harmonic = {
+  min: number;
+  max: number;
+  damping: number;
+  excitation: "loads" | "base";
+  base: number[];
+};
 export type Analysis =
-  "static" | "frequency" | "buckling" | "thermal" | "thermalStress";
+  | "static"
+  | "frequency"
+  | "buckling"
+  | "thermal"
+  | "thermalStress"
+  | "harmonic";
 export type Study = {
   analysis: Analysis;
   material: Material | null;
@@ -119,6 +131,11 @@ export type Study = {
   bodyMaterials?: Record<string, Material>;
   /** Temperature at which the part is free of thermal stress, °C. */
   referenceTemperature?: number;
+  /**
+   * Harmonic response: frequencies (Hz), damping (fraction of critical),
+   * and excitation by the loads or by base acceleration (g, X/Y/Z).
+   */
+  harmonic?: Harmonic;
   /** Static studies: follow the deformed shape (geometric nonlinearity). */
   largeDeformation?: boolean;
   /** Modes to find in vibration studies. */

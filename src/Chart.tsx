@@ -77,6 +77,13 @@ export function LineChart({
     ((v - y0) / (y1 - y0)) * (height - pad.top - pad.bottom);
   // Log axes get nice ticks in linear space, placed at their logarithms.
   const axisTicks = (lo: number, hi: number, log: boolean) => {
+    // Over a decade or more: powers of ten.
+    if (log && hi - lo >= 1) {
+      const out = [];
+      for (let p = Math.ceil(lo); p <= Math.floor(hi); p++)
+        out.push({ at: p, text: tickText(10 ** p, 10 ** p) });
+      return out;
+    }
     const t = log ? ticks(10 ** lo, 10 ** hi, 3) : ticks(lo, hi, 3);
     return t.values
       .filter((v) => !log || v > 0)

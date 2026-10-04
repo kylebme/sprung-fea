@@ -126,6 +126,7 @@ const FIELD: Record<Plot, string> = {
   strain: "strain",
   strainMax: "strainMax",
   strainMin: "strainMin",
+  amplitude: "amplitude",
 };
 /** Arrays that are geometry or derived, not engine fields, when probing. */
 const NOT_PROBED = new Set([

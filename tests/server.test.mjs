@@ -334,6 +334,20 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       bodyMaterials: { first: study.material },
     });
     assert.equal(badBody.status, 400);
+    // Harmonic settings: an ordered range, damping below critical, and a
+    // known excitation.
+    for (const harmonic of [
+      { min: 500, max: 100, damping: 0.02, excitation: "loads" },
+      { min: 10, max: 100, damping: 1.5, excitation: "loads" },
+      { min: 10, max: 100, damping: 0.02, excitation: "wind" },
+    ]) {
+      const response = await post(`/api/documents/${imported.id}/solve`, {
+        ...study,
+        analysis: "harmonic",
+        harmonic,
+      });
+      assert.equal(response.status, 400, JSON.stringify(harmonic));
+    }
     const notBoolean = await post(`/api/documents/${imported.id}/solve`, {
       ...study,
       largeDeformation: "yes",

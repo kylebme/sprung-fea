@@ -2,6 +2,7 @@ import { fmt } from "./logic";
 import type {
   Analysis,
   Condition,
+  Harmonic,
   ConditionKind,
   Load,
   LoadKind,
@@ -58,6 +59,7 @@ export const PLOTS: Record<
   strain: { name: "Equivalent strain", unit: "µm/m", digits: 1 },
   strainMax: { name: "Max principal strain", unit: "µm/m", digits: 1 },
   strainMin: { name: "Min principal strain", unit: "µm/m", digits: 1 },
+  amplitude: { name: "Displacement amplitude", unit: "mm", digits: 4 },
 };
 /** Thermal condition kinds, in the editor's order, with their help text. */
 export const THERMAL_KINDS: {
@@ -165,6 +167,15 @@ export const ANALYSES: Record<
     thermal: true,
     eigen: false,
   },
+  harmonic: {
+    name: "Harmonic response",
+    note: "How much the part vibrates when its loads, or the base it is mounted on, shake at a range of frequencies: resonances, and the stress they cause.",
+    loads: true,
+    supports: true,
+    mechanical: true,
+    thermal: false,
+    eigen: false,
+  },
   thermalStress: {
     name: "Thermal stress",
     note: "Temperatures, and the stress and deflection from thermal expansion that the supports resist, together with any loads.",
@@ -184,6 +195,14 @@ export const analysisName = (study: Study) =>
 export const DEFAULT_MODES: Partial<Record<Analysis, number>> = {
   frequency: 6,
   buckling: 3,
+  harmonic: 20,
+};
+export const DEFAULT_HARMONIC: Harmonic = {
+  min: 10,
+  max: 1000,
+  damping: 0.02,
+  excitation: "loads",
+  base: [0, 0, 1],
 };
 
 /** A plot's name and unit, which depend on the analysis. */
@@ -192,6 +211,8 @@ export function plotInfo(plot: Plot, analysis: Analysis) {
     return { name: "Buckled shape", unit: "relative", digits: 3 };
   if (ANALYSES[analysis].eigen && plot === "movement")
     return { name: "Mode shape", unit: "relative", digits: 3 };
+  if (analysis === "harmonic" && plot === "stress")
+    return { name: "Stress amplitude", unit: "MPa", digits: 3 };
   if (ANALYSES[analysis].eigen && plot === "stress")
     return { name: "Modal stress", unit: "MPa per mm", digits: 3 };
   return PLOTS[plot];

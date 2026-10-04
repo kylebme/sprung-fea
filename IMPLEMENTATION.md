@@ -6,7 +6,7 @@ This document describes the implemented application, its numerical and persisten
 
 ## 1. Scope and product decisions
 
-BetterSim analyzes a STEP part or bonded assembly with CalculiX: linear static stress, natural frequencies, linear buckling, steady heat transfer, and thermal stress. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
+BetterSim analyzes a STEP part or bonded assembly with CalculiX: linear static stress, natural frequencies, linear buckling, steady heat transfer, thermal stress, and harmonic response. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
 
 The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A study tree with the part's face list on the left, the model view in the center, and an inspector on the right keep these dependencies visible. A collapsible console under the view holds job output and solver checks. Light and dark themes follow the system setting until the user picks one. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
 
@@ -147,6 +147,14 @@ Thermal studies use thermal conditions on faces: a fixed temperature (°C), a to
 Heat transfer runs `*HEAT TRANSFER, STEADY STATE` with `*BOUNDARY` on degree of freedom 11, `*DFLUX` surface and body flux, and `*FILM`. Results are temperature and heat flux magnitude (W/m²). Thermal stress runs `*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE` with the supports, any loads and point masses, `*EXPANSION, ZERO` at the stress-free temperature (default 20 °C), and initial temperatures at that value. Its results add temperature to the static fields and checks.
 
 The heat balance check adds up heat flowing in and out: heat flows and generation, convection integrated from nodal temperatures with the quadratic face shape functions, and the heat supplied at fixed temperatures. CalculiX's `RFL` at those nodes, like force reactions, also contains the share of distributed heat landing on them, which is subtracted. A purely thermal stress study has no applied force, so its force balance compares the reactions with their own size. The `.frd` file stores five significant digits, which bounds the precision of every result read from it.
+
+### Harmonic response
+
+A harmonic response study (`analysis: "harmonic"`) finds how much the part vibrates under sinusoidal excitation across a frequency range (`harmonic.min`, `harmonic.max` in Hz). CalculiX first finds `modes` natural modes (default 20, `*FREQUENCY, STORAGE=YES`), then sums their responses (`*STEADY STATE DYNAMICS`) with the same modal damping ratio in every mode (`harmonic.damping`, default 2% of critical), at frequencies it places between the natural frequencies (3–12 per interval, fewer with many modes). Point masses add inertia as in vibration studies.
+
+The excitation is either the study's loads, each the amplitude of a sinusoidal load, or base shaking: an acceleration in g along X, Y and Z at the supports. Base shaking is solved relative to the base, as the equivalent uniform inertial load −ρa (and −m·a on point masses). CalculiX's own `*BASE MOTION` was not used: its modal damping acts on absolute motion, which corrupted the response well below resonance (the beam's relative tip motion at 20 Hz came out nearly twice the static value).
+
+Results at each frequency are complex. The displacement amplitude is √(|uₓ|² + |u_y|² + |u_z|²) at each node; stress amplitude is the largest von Mises stress over twelve phases of a cycle; the displayed shape is the instant when the most-moving node peaks. Response charts (log scale) plot peak displacement and stress amplitude against frequency; clicking them shows the nearest stored frequency. At most 40 frequencies keep nodal fields: every local maximum, the ends, then evenly spaced points. The study opens at the largest response. It warns when the highest mode found is below 1.5 × the top of the range, and when stress at resonance exceeds yield. Key results are the peak displacement and stress amplitudes.
 
 ### Solve and result decoding
 

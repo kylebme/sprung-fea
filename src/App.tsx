@@ -341,8 +341,15 @@ export default function App() {
   const present = (r: Result) => {
     // Mode shapes read best moving; show the first elastic mode.
     const eigen = ANALYSES[r.analysis].eigen;
+    const harmonic = r.analysis === "harmonic";
     setPlot(
-      eigen ? "movement" : r.analysis === "thermal" ? "temperature" : "stress",
+      eigen
+        ? "movement"
+        : r.analysis === "thermal"
+          ? "temperature"
+          : harmonic
+            ? "amplitude"
+            : "stress",
     );
     setFrame(
       eigen
@@ -352,11 +359,25 @@ export default function App() {
           )
         : 0,
     );
-    setAnimate(r.analysis === "frequency");
+    setAnimate(r.analysis === "frequency" || harmonic);
+    // Harmonic response: open at the largest response.
+    if (harmonic) {
+      const peak = r.summary.peakFrequency as number;
+      setFrame(
+        r.frames.reduce(
+          (best, f, i) =>
+            Math.abs((f.value ?? 0) - peak) <
+            Math.abs((r.frames[best].value ?? 0) - peak)
+              ? i
+              : best,
+          0,
+        ),
+      );
+    }
     // Load steps of a large-deformation solve: show full load, true scale.
     const steps = r.charts.some((c) => c.id === "loadPath");
     if (steps) setFrame(r.frames.length - 1);
-    setDeform(eigen ? "auto" : steps ? "true" : "off");
+    setDeform(eigen || harmonic ? "auto" : steps ? "true" : "off");
   };
   const importPart = async (
     action: () => Promise<any>,
@@ -514,7 +535,12 @@ export default function App() {
       : null,
     needs.supports && !study.supports.length ? "Support" : null,
     // Thermal stress can come from temperatures alone.
-    needs.loads && !needs.thermal && !study.loads.length ? "Load" : null,
+    needs.loads &&
+    !needs.thermal &&
+    !(study.analysis === "harmonic" && study.harmonic?.excitation === "base") &&
+    !study.loads.length
+      ? "Load"
+      : null,
     needs.thermal &&
     !study.thermal.some(
       (c) => c.kind === "temperature" || c.kind === "convection",
@@ -865,7 +891,10 @@ export default function App() {
   // A yield margin means nothing for mode shapes scaled to 1 mm.
   const plots = shown
     ? availablePlots(shown, yieldStrength).filter(
-        (p) => !(ANALYSES[resultAnalysis].eigen && p === "safety"),
+        (p) =>
+          !(ANALYSES[resultAnalysis].eigen && p === "safety") &&
+          // A harmonic shape is one instant; its amplitude is the measure.
+          !(resultAnalysis === "harmonic" && p === "movement"),
       )
     : [];
   const activePlot: Plot = plots.includes(plot) ? plot : plots[0] || plot;

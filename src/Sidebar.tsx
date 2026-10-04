@@ -53,7 +53,15 @@ const ICONS = {
 export const conditionKinds = (study: Study) => {
   const a = ANALYSES[study.analysis];
   return (["thermal", "support", "load", "mass"] as const).filter((k) =>
-    k === "thermal" ? a.thermal : k === "load" ? a.loads : a.mechanical,
+    k === "thermal"
+      ? a.thermal
+      : k === "load"
+        ? a.loads &&
+          !(
+            study.analysis === "harmonic" &&
+            study.harmonic?.excitation === "base"
+          )
+        : a.mechanical,
   );
 };
 
