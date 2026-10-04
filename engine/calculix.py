@@ -22,7 +22,7 @@ def solver_of(study):
 def find_ccx():
     candidates=[os.environ.get('SPRUNG_FEA_CCX'),shutil.which('ccx'),shutil.which('ccx_2.23'),
                 '/opt/homebrew/opt/calculix-ccx/bin/ccx_2.23','/usr/local/opt/calculix-ccx/bin/ccx_2.23']
-    bundled=Path(__file__).resolve().parent.parent/'solver'/'ccx'
+    bundled=Path(__file__).resolve().parent.parent/'solver'/('ccx.exe' if os.name=='nt' else 'ccx')
     candidates.insert(0,str(bundled))
     for p in candidates:
         if p and Path(p).is_file() and os.access(p,os.X_OK): return p

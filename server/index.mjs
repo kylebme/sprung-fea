@@ -25,6 +25,19 @@ function cores() {
     } catch {}
   return { logical, performance: Math.min(performance, logical) };
 }
+/**
+ * Stops an engine and the CalculiX process it started: the engine's process
+ * group on POSIX, its process tree on Windows.
+ */
+function terminate(child) {
+  try {
+    if (process.platform === "win32")
+      spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+      });
+    else process.kill(-child.pid, "SIGTERM");
+  } catch {}
+}
 export async function createServer({
   port = 4318,
   dataDir = path.join(root, ".sprung-fea"),
@@ -137,7 +150,7 @@ export async function createServer({
                   resourceDir,
                   "runtime",
                   "solver",
-                  "ccx",
+                  process.platform === "win32" ? "ccx.exe" : "ccx",
                 ),
               }
             : {}),
@@ -194,10 +207,7 @@ export async function createServer({
   };
   const stop = (job) => {
     job.status = "cancelled";
-    try {
-      if (process.platform !== "win32") process.kill(-job.child.pid, "SIGTERM");
-      else job.child.kill();
-    } catch {}
+    terminate(job.child);
   };
   app.get("/api/health", (_, res) =>
     res.json({
@@ -506,12 +516,7 @@ export async function createServer({
     close: async () => {
       clearInterval(cleanup);
       clearInterval(pruning);
-      for (const child of children) {
-        try {
-          if (process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
-          else child.kill();
-        } catch {}
-      }
+      for (const child of children) terminate(child);
       await new Promise((r) => server.close(r));
     },
   };

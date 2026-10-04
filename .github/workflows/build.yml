@@ -1,0 +1,104 @@
+name: Build
+
+on:
+  push:
+    branches: [workbench-ui, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-14
+            package: dist:mac
+            artifact: release/*.dmg
+          - name: Windows (x64)
+            os: windows-latest
+            package: package:win
+            artifact: release/*.exe
+          - name: Linux (x64)
+            # The oldest supported runner, so the app runs on older glibc.
+            os: ubuntu-22.04
+            package: package:linux
+            artifact: release/*.AppImage
+    env:
+      # Unsigned builds: no certificate lookup, no publishing.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      # CalculiX 2.23 on every platform: the Homebrew tap on macOS (as for
+      # local builds), conda-forge on Windows and Linux.
+      - name: Install CalculiX (macOS)
+        if: runner.os == 'macOS'
+        run: brew install costerwi/calculix/calculix-ccx
+
+      - name: Install CalculiX (Windows, Linux)
+        if: runner.os != 'macOS'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: calculix
+          create-args: calculix=2.23
+          init-shell: none
+          cache-environment: true
+
+      - name: Locate CalculiX (Windows, Linux)
+        if: runner.os != 'macOS'
+        run: |
+          env="$MAMBA_ROOT_PREFIX/envs/calculix"
+          if [ "$RUNNER_OS" = Windows ]; then ccx="$env/Library/bin/ccx.exe"; else ccx="$env/bin/ccx"; fi
+          test -f "$ccx"
+          echo "SPRUNG_FEA_CCX=$ccx" >> "$GITHUB_ENV"
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        # patchelf relocates the solver; Gmsh's library links to X11/GLU.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf libglu1-mesa libxcursor1 libxinerama1 libxft2 libxrender1 libxfixes3
+
+      - run: npm ci
+
+      - name: Set up engine environment
+        run: |
+          npm run setup
+          if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
+          "$py" -m pip install pyinstaller==6.22.3
+
+      - name: Package
+        run: npm run ${{ matrix.package }}
+
+      - name: Solve with the packaged engine
+        run: npm run test:packaged
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sprung-fea-${{ runner.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
