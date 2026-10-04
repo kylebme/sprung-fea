@@ -127,7 +127,44 @@ export type Chart = {
   x: { label: string; unit: string; values: number[] };
   series: { label: string; unit: string; values: number[] }[];
 };
+/** A mesh convergence study: one row per mesh, one verdict per quantity. */
+export type Convergence = {
+  /** Largest relative change on the last refinement counted as converged. */
+  tolerance: number;
+  /** Element size ratio between successive meshes. */
+  ratio: number;
+  meshes: {
+    size: number;
+    elementCount: number;
+    nodeCount: number;
+    seconds: number;
+    values: number[];
+  }[];
+  quantities: {
+    id: string;
+    label: string;
+    unit: string;
+    /** A local peak, which may not converge at a singularity. */
+    peak?: boolean;
+    converged: boolean;
+    change: number | null;
+    /** Richardson extrapolation from the last three meshes. */
+    estimate: { value: number; order: number } | null;
+    singular?: boolean;
+  }[];
+};
+export type ConvergenceOptions = { runs: number; tolerance: number };
+/** A number that characterizes a result, followed by mesh convergence. */
+export type KeyResult = {
+  id: string;
+  label: string;
+  unit: string;
+  value: number;
+  peak?: boolean;
+};
 export type ResultInfo = {
+  keys: KeyResult[];
+  convergence?: Convergence;
   /** Result schema version; results saved before 2 are linear static. */
   version: number;
   analysis: Analysis;

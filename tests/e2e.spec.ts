@@ -49,7 +49,7 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   const box = await canvas.boundingBox();
   await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
   await expect(page.locator(".probe-card")).toContainText("Interpolated");
-  await page.getByRole("button", { name: /^Re-solve with/ }).click();
+  await page.getByRole("button", { name: /^Re-solve once with/ }).click();
   await expect(
     page.getByText("Peak stress change", { exact: true }),
   ).toBeVisible({ timeout: 60000 });
@@ -379,7 +379,7 @@ for (const name of [
     await expect(page.locator(".probe-card")).toContainText("Node");
     await page.getByRole("button", { name: "Magnified" }).click();
     await page.screenshot({ path: `output/playwright/${name}.png` });
-    await page.getByRole("button", { name: /^Re-solve with/ }).click();
+    await page.getByRole("button", { name: /^Re-solve once with/ }).click();
     // Jobs don't block the view: the camera stays usable while solving.
     await expect(page.locator(".job-card")).toBeVisible();
     await expect(inspector(page)).toHaveAttribute("inert", "");

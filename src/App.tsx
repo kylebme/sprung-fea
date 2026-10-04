@@ -74,6 +74,7 @@ import {
   type Study,
   type Condition,
   type ConditionKind,
+  type ConvergenceOptions,
   type Threads,
   type Cpus,
 } from "./types";
@@ -148,6 +149,10 @@ export default function App() {
     [notice, setNotice] = useState(""),
     [plot, setPlot] = useState<Plot>("stress"),
     [frame, setFrame] = useState(0),
+    [convergeOptions, setConvergeOptions] = useState<ConvergenceOptions>({
+      runs: 3,
+      tolerance: 0.02,
+    }),
     [deform, setDeform] = useState<"off" | "true" | "auto">("off"),
     [wire, setWire] = useState(false),
     [probe, setProbe] = useState<Probe | null>(null),
@@ -467,8 +472,8 @@ export default function App() {
     !study.loads.length ? "Load" : null,
   ].filter(Boolean) as string[];
   const ready = !!part && !missing.length && !draft;
-  const run = async (action: "mesh" | "solve", refine = false) => {
-    if (!part || job || (action === "solve" && !ready)) return;
+  const run = async (action: "mesh" | "solve" | "converge", refine = false) => {
+    if (!part || job || (action !== "mesh" && !ready)) return;
     const operation = ++sequence.current;
     setError(null);
     setDraft(null);
@@ -485,8 +490,14 @@ export default function App() {
     try {
       const count =
         threads === "single" ? 1 : threads === "all" && cpus ? cpus.logical : 0;
+      const query = new URLSearchParams();
+      if (count) query.set("threads", String(count));
+      if (action === "converge") {
+        query.set("runs", String(convergeOptions.runs));
+        query.set("tolerance", String(convergeOptions.tolerance));
+      }
       const j = await post(
-        `/documents/${part.id}/${action}${count ? "?threads=" + count : ""}`,
+        `/documents/${part.id}/${action}${query.size ? "?" + query : ""}`,
         next,
       );
       const data = await poll(j.job, action === "mesh" ? "meshing" : "solve");
@@ -508,6 +519,24 @@ export default function App() {
           ...normalizeResult(data.result as ResultInfo),
           view,
         };
+        if (r.convergence) {
+          // The study adopts the finest mesh, which the result belongs to;
+          // later solves reuse it. Recorded as an edit so undo returns to
+          // the starting size.
+          const size = r.convergence.meshes.at(-1)!.size;
+          setHist((h) =>
+            history(h, {
+              type: "edit",
+              study: { ...h.study, detail: "custom", meshSize: size },
+            }),
+          );
+          const settled = r.convergence.quantities.every((q) => q.converged);
+          write(
+            "converge",
+            `${r.convergence.meshes.length} meshes · ${settled ? "converged" : "not fully converged"} · element size now ${fmt(size, 3)} mm`,
+            "done",
+          );
+        }
         setResult(r);
         setProbe(null);
         setFromProject(false);
@@ -529,7 +558,14 @@ export default function App() {
         );
       }
     } catch (e) {
-      fail(action === "mesh" ? "Meshing failed" : "Solve failed", e);
+      fail(
+        action === "mesh"
+          ? "Meshing failed"
+          : action === "converge"
+            ? "Convergence study failed"
+            : "Solve failed",
+        e,
+      );
     } finally {
       if (sequence.current === operation) finish();
     }
@@ -845,6 +881,9 @@ export default function App() {
                 setProbe(node === null ? null : nodeProbe(shown, node))
               }
               onRefine={() => run("solve", true)}
+              convergeOptions={convergeOptions}
+              onConvergeOptions={setConvergeOptions}
+              onConverge={() => run("converge")}
               onCsv={csv}
               onImage={screenshot}
               onSolverFile={exportSolver}

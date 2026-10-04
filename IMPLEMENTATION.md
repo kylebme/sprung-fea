@@ -158,7 +158,9 @@ The viewer provides stress, movement, and yield-margin plots; original, true-sca
 
 Result filters act on the volume. A section plane normal to X, Y or Z clips the part and shows the cut colored by the plotted quantity, with its area. An iso-surface shows where the plotted quantity equals a level. A threshold shows the critical region: stress or displacement above a level, or yield margin below it. Filters act on the displayed (deformed) shape and combine with the section. Their design is recorded in [vtk-wasm.md](docs/vtk-wasm.md). Force balance, reactions, and solver details are in the console's Checks tab. The yield-margin scale runs from 0 to 5 when the part yields and widens (to 10, 20, 50, …) for safer parts, so variation stays visible.
 
-Refinement reduces the current mesh size to 70%, reruns the analysis, and compares maximum movement and peak stress with the previous result. One comparison is evidence of sensitivity, not an automatic convergence certificate. Sharp support edges and corners may produce increasing peak stress.
+A mesh convergence study solves on successively finer meshes, each with 0.75 times the element size of the previous one, starting from the study's size. After each mesh it compares the result's key results (for static studies, maximum displacement and peak stress) with the previous mesh, and stops when every one changed by less than the tolerance (1, 2 or 5%; default 2%) or after the chosen number of meshes (3 to 5; the service accepts 2 to 6). The report lists every mesh, a verdict per quantity, and a chart of each quantity against element count. With three or more meshes whose changes shrink monotonically, it adds a Richardson extrapolation of the limit and the observed order of convergence. A peak that keeps rising by similar or growing steps is reported as a likely singularity: sharp inside corners and support edges have no finite stress in the ideal model, so refinement cannot settle it. The study adopts the finest mesh's size; undo returns to the starting size. Element counts do not always scale with size, because curvature-based sizing keeps curved faces fine at every size.
+
+A single refinement (0.7 times the current size) remains available as a quick comparison of the key results.
 
 Exports available in the interface are portable projects, surface-node CSV, viewport PNG, solver input, FRD results, and solver log. The service also exposes the raw mesh and the binary view file.
 
@@ -175,6 +177,7 @@ The service binds to `127.0.0.1`: port 4318 during normal browser development an
 | `DELETE /api/jobs/:id` | Cancel a running job |
 | `POST /api/documents/:id/mesh` | Generate a mesh for the submitted study |
 | `POST /api/documents/:id/solve` | Mesh and solve the submitted study with its analysis type |
+| `POST /api/documents/:id/converge?runs=N&tolerance=T` | Mesh convergence study: solve on up to N finer meshes until key results change by less than T |
 | `GET /api/documents/:id/view` | Binary mesh and nodal results for the viewer (`view.bin`, layout in [vtk-wasm.md](docs/vtk-wasm.md)) |
 | `POST /api/documents/:id/save` | Serialize the embedded STEP and study |
 | `POST /api/open` | Validate and import a portable project |

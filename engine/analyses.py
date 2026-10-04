@@ -11,6 +11,10 @@ Result schema (version 2), shared by every analysis:
   charts      x–y series for plots: {id, title, x: {label, unit, values},
               series: [{label, unit, values}]}
   warnings    plain-language limits of this result
+  keys        the few numbers that characterize it (peak displacement, a
+              first frequency…): {id, label, unit, value, peak?}; mesh
+              convergence follows these
+  convergence optional mesh convergence history, see convergence.py
 Frame k > 0 stores its arrays in view.bin as `name@k`."""
 import json, math, time
 import numpy as np
@@ -161,6 +165,7 @@ def solve(folder, study):
         raise ValueError('CalculiX did not produce any results. Inspect the solver log.')
     result,view=analysis.results(folder,study,Model(mesh),frames,context)
     result['summary']['seconds']=time.monotonic()-start
+    result['keys']=analysis.key_results(result)
     result.update({'version':SCHEMA,'analysis':analysis.id,'solver':'CalculiX, '+calculix.SOLVERS[calculix.solver_of(study)][1],
                    'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
                    'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']})

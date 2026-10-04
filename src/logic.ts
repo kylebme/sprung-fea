@@ -42,6 +42,21 @@ export function normalizeResult(info: ResultInfo): ResultInfo {
     ...info,
     version: 2,
     analysis: "static",
+    keys: [
+      {
+        id: "maxMovement",
+        label: "Maximum displacement",
+        unit: "mm",
+        value: s.maxMovement ?? 0,
+      },
+      {
+        id: "maxStress",
+        label: "Peak stress",
+        unit: "MPa",
+        value: s.maxStress ?? 0,
+        peak: true,
+      },
+    ],
     frames: [{ label: "Static load", value: null, unit: "" }],
     charts: [],
     checks: s.appliedForce
@@ -65,6 +80,17 @@ export function fmt(n: number, digits = 3) {
       ? n.toExponential(2)
       : new Intl.NumberFormat("en-US", {
           maximumFractionDigits: digits,
+        }).format(n);
+}
+
+/** A number to `digits` significant digits, for values of any scale. */
+export function sig(n: number, digits = 4) {
+  return !Number.isFinite(n)
+    ? "—"
+    : Math.abs(n) > 0 && (Math.abs(n) < 0.001 || Math.abs(n) >= 1e6)
+      ? n.toExponential(digits - 1)
+      : new Intl.NumberFormat("en-US", {
+          maximumSignificantDigits: digits,
         }).format(n);
 }
 

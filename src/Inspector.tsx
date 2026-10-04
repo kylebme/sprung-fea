@@ -28,12 +28,14 @@ import {
 } from "./labels";
 import { Head, NumberField, Row } from "./ui";
 import { probeValue, type Probe } from "./viewData";
+import { ConvergenceControls, ConvergenceReport } from "./Convergence";
 import {
   MATERIALS,
   type Axis,
   type Filters,
   type Condition,
   type ConditionKind,
+  type ConvergenceOptions,
   type Load,
   type LoadKind,
   type PointMass,
@@ -866,6 +868,9 @@ export function ResultsPanel({
   onWire,
   onProbe,
   onRefine,
+  convergeOptions,
+  onConvergeOptions,
+  onConverge,
   onCsv,
   onImage,
   onSolverFile,
@@ -893,6 +898,9 @@ export function ResultsPanel({
   onWire: (on: boolean) => void;
   onProbe: (node: number | null) => void;
   onRefine: () => void;
+  convergeOptions: ConvergenceOptions;
+  onConvergeOptions: (o: ConvergenceOptions) => void;
+  onConverge: () => void;
   onCsv: () => void;
   onImage: () => void;
   onSolverFile: (kind: "deck" | "log" | "frd") => void;
@@ -1027,36 +1035,52 @@ export function ResultsPanel({
         onChange={onFilters}
       />
       <div className="sec">
-        <h4>Mesh sensitivity</h4>
-        {comparison && (
+        <h4>Mesh convergence</h4>
+        {result.convergence && (
+          <ConvergenceReport report={result.convergence} />
+        )}
+        {comparison && !result.convergence && (
           <div className="comparison">
             <Row label="Elements">
               {fmt(comparison.before.elementCount)} → {fmt(result.elementCount)}
             </Row>
-            <Row label="Displacement change">
-              {fmt(
-                Math.abs(
-                  s.maxMovement! / comparison.before.summary.maxMovement! - 1,
-                ) * 100,
-                2,
-              )}
-              <em>%</em>
-            </Row>
-            <Row label="Peak stress change">
-              {fmt(
-                Math.abs(
-                  s.maxStress! / comparison.before.summary.maxStress! - 1,
-                ) * 100,
-                2,
-              )}
-              <em>%</em>
-            </Row>
+            {result.keys.map((k) => {
+              const before = comparison.before.keys.find(
+                (b) => b.id === k.id,
+              )?.value;
+              return (
+                before !== undefined && (
+                  <Row key={k.id} label={k.label + " change"}>
+                    {fmt(Math.abs(k.value / before - 1) * 100, 2)}
+                    <em>%</em>
+                  </Row>
+                )
+              );
+            })}
             <div style={{ height: 8 }} />
           </div>
         )}
-        <button className="btn full" onClick={onRefine} disabled={busy}>
+        {!result.convergence && !comparison && (
+          <p className="note" style={{ marginTop: 0 }}>
+            Results depend on the mesh. Solve on finer meshes until the numbers
+            stop changing.
+          </p>
+        )}
+        <ConvergenceControls
+          options={convergeOptions}
+          onChange={onConvergeOptions}
+        />
+        <button
+          className="btn primary full"
+          onClick={onConverge}
+          disabled={busy}
+        >
           <Layers size={14} />
-          Re-solve with {fmt((mesh?.size || study.meshSize) * 0.7, 2)} mm mesh
+          Check mesh convergence
+        </button>
+        <button className="btn full" onClick={onRefine} disabled={busy}>
+          Re-solve once with {fmt((mesh?.size || study.meshSize) * 0.7, 2)} mm
+          mesh
         </button>
       </div>
       <div className="sec">

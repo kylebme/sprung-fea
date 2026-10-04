@@ -170,6 +170,30 @@ test("STEP → portable project → reopen → real solve → export", async () 
     assert.ok(deck.includes("TYPE=C3D10"));
     assert.ok(deck.includes("*CLOAD"));
     assert.ok(deck.includes("*STATIC, SOLVER=ITERATIVE CHOLESKY"));
+    // A convergence study: options travel as query parameters.
+    const badRuns = await fetch(
+      `${base}/api/documents/${opened.id}/converge?runs=9`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(study),
+      },
+    );
+    assert.equal(badRuns.status, 400);
+    const converging = await request(
+      base,
+      `/api/documents/${opened.id}/converge?runs=2&tolerance=0.05`,
+      { ...study, solver: "spooles" },
+    );
+    const converged = await wait(base, converging.job);
+    const history = converged.result.convergence;
+    assert.equal(history.meshes.length, 2);
+    assert.equal(history.tolerance, 0.05);
+    assert.equal(converged.mesh.elementCount, history.meshes[1].elementCount);
+    assert.deepEqual(
+      converged.result.keys.map((k) => k.id),
+      ["maxMovement", "maxStress"],
+    );
     const foreign = await fetch(base + "/api/sample/beam", {
       method: "POST",
       headers: { Origin: "https://unrelated.example" },

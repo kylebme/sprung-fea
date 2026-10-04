@@ -12,6 +12,7 @@ from model import (QUAD, triangle_weights, triangle_vector_weights, tetra_weight
                    finite, Model)
 from calculix import SOLVERS, solver_of, find_ccx, read_log, parse_frd
 from analyses import ANALYSES, analysis_of, write_deck, solve
+from convergence import converge
 
 
 def validate(study, mesh):
@@ -24,13 +25,18 @@ FIELDS=('displacements','stress','movement')
 
 def main():
     command=sys.argv[1]; folder=Path(sys.argv[2]).resolve()
-    study=json.loads(sys.stdin.read() or '{}')
+    payload=json.loads(sys.stdin.read() or '{}')
     try:
         if command=='import': result=import_part(folder)
-        elif command=='mesh': result=mesh_info(mesh_part(folder,study))
+        elif command=='mesh': result=mesh_info(mesh_part(folder,payload))
         elif command=='solve':
-            mesh=mesh_info(mesh_part(folder,study))
-            result={'mesh':mesh,'result':{k:v for k,v in solve(folder,study).items() if k not in FIELDS}}
+            mesh=mesh_info(mesh_part(folder,payload))
+            result={'mesh':mesh,'result':{k:v for k,v in solve(folder,payload).items() if k not in FIELDS}}
+        elif command=='converge':
+            # The payload carries the study and the convergence options.
+            mesh,solved=converge(folder,payload['study'],payload.get('options') or {})
+            (folder/'result.json').write_text(json.dumps(solved))
+            result={'mesh':mesh_info(mesh),'result':{k:v for k,v in solved.items() if k not in FIELDS}}
         else: raise ValueError('Unknown worker command.')
         print(json.dumps({'ok':True,'data':result}))
     except Exception as error:

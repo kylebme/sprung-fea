@@ -321,7 +321,8 @@ export async function createServer({
     const { id, action } = req.params;
     if (action === "save") return next();
     const dir = folder(id);
-    if (!["mesh", "solve"].includes(action)) return res.sendStatus(404);
+    if (!["mesh", "solve", "converge"].includes(action))
+      return res.sendStatus(404);
     await fs.access(path.join(dir, "geometry.json"));
     await touch(id);
     if (
@@ -343,7 +344,21 @@ export async function createServer({
           `Threads must be a whole number from 1 to ${cpus.logical}.`,
         );
     }
-    const job = run(action, dir, req.body, threads);
+    let payload = req.body;
+    if (action === "converge") {
+      // A convergence study solves on 2–6 successively finer meshes until
+      // the key results change by less than the tolerance (a fraction).
+      const runs = Number(req.query.runs ?? 3);
+      const tolerance = Number(req.query.tolerance ?? 0.02);
+      if (!Number.isInteger(runs) || runs < 2 || runs > 6)
+        throw new RequestError("A convergence study uses 2 to 6 meshes.");
+      if (!(tolerance >= 0.001 && tolerance <= 0.2))
+        throw new RequestError(
+          "The convergence tolerance must lie between 0.1% and 20%.",
+        );
+      payload = { study: req.body, options: { runs, tolerance } };
+    }
+    const job = run(action, dir, payload, threads);
     jobs.get(job).document = id;
     res.json({ job });
   });

@@ -1391,3 +1391,95 @@ svg {
 .field-action {
   float: right;
 }
+.chart {
+  margin: 6px 0 0;
+}
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.chart .tick,
+.chart .axis {
+  fill: var(--faint);
+  font: 9px var(--mono);
+}
+.chart .axis {
+  fill: var(--muted);
+}
+.chart .series polyline {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+.chart .series circle {
+  fill: var(--accent);
+}
+.chart .series.s1 polyline {
+  stroke: var(--load);
+}
+.chart .series.s1 circle {
+  fill: var(--load);
+}
+.chart .cursor {
+  stroke: var(--muted);
+  stroke-dasharray: 3 3;
+}
+.chart figcaption {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--muted);
+  text-align: right;
+}
+.convergence {
+  margin-bottom: 10px;
+}
+.convergence .verdict {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-weight: 500;
+}
+.convergence .ok,
+.convergence .verdict.ok {
+  color: var(--support);
+}
+.convergence .warn,
+.convergence .verdict.warn {
+  color: var(--load);
+}
+.convergence h5 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 10px 0 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.mesh-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 10.5px var(--mono);
+}
+.mesh-table th {
+  font: 500 10px var(--sans, inherit);
+  color: var(--muted);
+  text-align: right;
+  padding: 0 0 4px 6px;
+  vertical-align: bottom;
+}
+.mesh-table td {
+  text-align: right;
+  padding: 2px 0 2px 6px;
+  border-top: 1px solid var(--line);
+}
+.mesh-table th:first-child,
+.mesh-table td:first-child {
+  text-align: left;
+  padding-left: 0;
+}
