@@ -9,6 +9,7 @@ import {
   Layers,
   Play,
   Plus,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -31,7 +32,7 @@ import {
   loadValue,
   stripExt,
 } from "./labels";
-import { Head, NumberField, Row } from "./ui";
+import { Head, NumberField, Qty, Row, VectorInput, useUnits } from "./ui";
 import { lowIsCritical, probeValue, type Probe } from "./viewData";
 import { ConvergenceControls, ConvergenceReport } from "./Convergence";
 import { LineChart } from "./Chart";
@@ -70,17 +71,17 @@ export function PartPanel({
   onMaterial: () => void;
   onExample: () => void;
 }) {
+  const u = useUnits();
   return (
     <>
       <Head small="Part" title={stripExt(part.name)} />
       <div className="sec">
         <Row label="Size">
-          {part.geometry.dimensions.map((d) => fmt(d, 2)).join(" × ")}
-          <em>mm</em>
+          {part.geometry.dimensions.map((d) => u.show(d, "mm", 2)).join(" × ")}
+          <em>{u.label("mm")}</em>
         </Row>
         <Row label="Volume">
-          {fmt(part.geometry.volume, 1)}
-          <em>mm³</em>
+          <Qty value={part.geometry.volume} unit="mm³" digits={1} />
         </Row>
         <Row label="Faces">{part.geometry.faces.length}</Row>
         {(part.geometry.bodies?.length ?? 1) > 1 && (
@@ -287,6 +288,7 @@ export function MaterialPanel({
   onApply: (m: Material) => void;
   onBodies: (own: Record<string, Material> | undefined) => void;
 }) {
+  const u = useUnits();
   const [material, setMaterial] = useState<Material>(() =>
     structuredClone(study.material || MATERIALS[0]),
   );
@@ -310,7 +312,9 @@ export function MaterialPanel({
               <label className="field" key={b.id}>
                 <span>
                   {b.name}
-                  <b className="mono">{fmt(b.volume, 0)} mm³</b>
+                  <b className="mono">
+                    {u.show(b.volume, "mm³", 0)} {u.label("mm³")}
+                  </b>
                 </span>
                 <select
                   className="input"
@@ -360,7 +364,10 @@ export function MaterialPanel({
               <span>
                 {m.name}
                 <small>
-                  {fmt(m.young / 1000, 1)} GPa · {fmt(m.density)} kg/m³
+                  {u.system === "si"
+                    ? `${fmt(m.young / 1000, 1)} GPa`
+                    : `${fmt(u.value(m.young, "MPa") / 1e6, 2)} Msi`}{" "}
+                  · {u.show(m.density, "kg/m³", 0)} {u.label("kg/m³")}
                 </small>
               </span>
               {material.name === m.name && <Check size={14} />}
@@ -398,31 +405,31 @@ export function MaterialPanel({
         />
         <NumberField
           label="Yield strength (optional)"
-          value={material.yield ?? 0}
+          value={material.yield ?? NaN}
           unit="MPa"
           onChange={(v) => edit({ yield: v || null })}
         />
         <NumberField
           label="Thermal conductivity"
-          value={material.conductivity ?? 0}
+          value={material.conductivity ?? NaN}
           unit="W/(m·K)"
           onChange={(v) => edit({ conductivity: v || null })}
         />
         <NumberField
           label="Thermal expansion"
-          value={material.expansion ?? 0}
+          value={material.expansion ?? NaN}
           unit="µm/(m·°C)"
           onChange={(v) => edit({ expansion: v || null })}
         />
         <NumberField
           label="Ultimate strength"
-          value={material.ultimate ?? 0}
+          value={material.ultimate ?? NaN}
           unit="MPa"
           onChange={(v) => edit({ ultimate: v || null })}
         />
         <NumberField
           label="Elongation at break"
-          value={material.elongation ?? 0}
+          value={material.elongation ?? NaN}
           unit="%"
           onChange={(v) => edit({ elongation: v || null })}
         />
@@ -458,6 +465,7 @@ export function ConditionsPanel({
   onEdit: (c: Condition) => void;
   onRemove: (id: string) => void;
 }) {
+  const u = useUnits();
   const labels = CONDITIONS[kind];
   return (
     <>
@@ -472,7 +480,9 @@ export function ConditionsPanel({
               <span className={"swatch " + kind} />
               {c.name}
               <span className="val">
-                {kind !== "support" ? conditionValue(kind, c) + " · " : ""}
+                {kind !== "support"
+                  ? conditionValue(kind, c, u.system) + " · "
+                  : ""}
                 {(kind === "load" && isBodyLoad(c as Load)) ||
                 (kind === "thermal" &&
                   (c as ThermalCondition).kind === "generation")
@@ -545,6 +555,7 @@ export function ConditionEditor({
   onSave: () => void;
   onDelete: () => void;
 }) {
+  const u = useUnits();
   const v = draft.value;
   const body =
     (draft.kind === "load" && isBodyLoad(draft.value)) ||
@@ -594,7 +605,7 @@ export function ConditionEditor({
             Faces
             <span className="mono">
               {selected.length
-                ? `${selected.length} · ${fmt(selectedArea, 1)} mm²`
+                ? `${selected.length} · ${u.show(selectedArea, "mm²", 1)} ${u.label("mm²")}`
                 : "none"}
             </span>
           </h4>
@@ -713,7 +724,8 @@ function MassFields({
         onChange={(v) => onChange({ mass: v })}
       />
       <VectorField
-        label="Center of mass, mm"
+        label="Center of mass"
+        unit="mm"
         name="center of mass"
         value={mass.point}
         onChange={(point) => onChange({ point })}
@@ -807,19 +819,24 @@ function VectorField({
   label,
   name,
   value,
+  unit,
   onChange,
   action,
 }: {
   label: string;
   name: string;
+  /** In SI working units, converted for display when `unit` is given. */
   value: number[];
+  unit?: string;
   onChange: (v: number[]) => void;
   action?: { label: string; onClick: () => void };
 }) {
+  const u = useUnits();
   return (
     <div className="field">
       <span>
         {label}
+        {unit ? `, ${u.label(unit)}` : ""}
         {action && (
           <button className="link field-action" onClick={action.onClick}>
             {action.label}
@@ -828,19 +845,17 @@ function VectorField({
       </span>
       <div className="vec">
         {["X", "Y", "Z"].map((a, i) => (
-          <label key={a} className={"axis-" + a.toLowerCase()}>
-            <span>{a}</span>
-            <input
-              aria-label={a + " " + name}
-              type="number"
-              value={value[i]}
-              onChange={(e) =>
-                onChange(
-                  value.map((x, j) => (j === i ? Number(e.target.value) : x)),
-                )
-              }
-            />
-          </label>
+          <VectorInput
+            key={a}
+            axis={a}
+            name={name}
+            unit={unit}
+            value={value[i]}
+            onChange={(n) =>
+              // An emptied component counts as zero.
+              onChange(value.map((x, j) => (j === i ? (isNaN(n) ? 0 : n) : x)))
+            }
+          />
         ))}
       </div>
     </div>
@@ -888,6 +903,7 @@ function LoadFields({
   center: { selection: number[] | null; part: number[] };
   onChange: (changes: Record<string, unknown>) => void;
 }) {
+  const u = useUnits();
   const kind = LOAD_KINDS.find((k) => k.id === load.kind)!;
   const forceLike = FORCE_LIKE.includes(load.kind);
   return (
@@ -951,7 +967,8 @@ function LoadFields({
             onChange={(axis) => onChange({ axis })}
           />
           <VectorField
-            label="Axis passes through, mm"
+            label="Axis passes through"
+            unit="mm"
             name="axis position"
             value={load.point || center.part}
             onChange={(point) => onChange({ point })}
@@ -967,10 +984,17 @@ function LoadFields({
           <VectorField
             label={
               load.kind === "gravity"
-                ? "Acceleration, m/s²"
+                ? "Acceleration"
                 : load.kind === "moment"
-                  ? "Moment, N·mm"
-                  : "Total force, N"
+                  ? "Moment"
+                  : "Total force"
+            }
+            unit={
+              load.kind === "gravity"
+                ? "m/s²"
+                : load.kind === "moment"
+                  ? "N·mm"
+                  : "N"
             }
             name={
               load.kind === "gravity"
@@ -983,20 +1007,23 @@ function LoadFields({
             onChange={(vector) => onChange({ vector })}
           />
           <Row label="Magnitude">
-            {fmt(Math.hypot(...load.vector))}
-            <em>
-              {load.kind === "gravity"
-                ? "m/s²"
-                : load.kind === "moment"
-                  ? "N·mm"
-                  : "N"}
-            </em>
+            <Qty
+              value={Math.hypot(...load.vector)}
+              unit={
+                load.kind === "gravity"
+                  ? "m/s²"
+                  : load.kind === "moment"
+                    ? "N·mm"
+                    : "N"
+              }
+            />
           </Row>
         </>
       )}
       {load.kind === "remote" && (
         <VectorField
-          label="Acts at, mm"
+          label="Acts at"
+          unit="mm"
           name="position"
           value={load.point || center.part}
           onChange={(point) => onChange({ point })}
@@ -1259,6 +1286,7 @@ export function ResultsPanel({
   onImage: () => void;
   onSolverFile: (kind: "deck" | "log" | "frd") => void;
 }) {
+  const u = useUnits();
   const s = result.summary;
   const yieldStrength = study.material?.yield || null;
   const low = lowIsCritical(plot);
@@ -1266,7 +1294,7 @@ export function ResultsPanel({
   const digits =
     plot === "stress" && !ANALYSES[result.analysis].eigen ? 2 : info.digits;
   const peak = {
-    value: fmt(stats.peak.value, digits),
+    value: u.show(stats.peak.value, info.unit, digits),
     node: stats.peak.node,
     label: low ? "Minimum" : "Maximum",
   };
@@ -1298,20 +1326,18 @@ export function ResultsPanel({
           <>
             <div className="big">
               <strong>{peak.value}</strong>
-              <span>{info.unit}</span>
+              <span>{u.label(info.unit)}</span>
             </div>
             <Row label={peak.label}>node {peak.node}</Row>
           </>
         )}
         {plot === "safety" ? (
           <Row label="Yield strength">
-            {fmt(yieldStrength || 0)}
-            <em>MPa</em>
+            <Qty value={yieldStrength || 0} unit="MPa" />
           </Row>
         ) : (
           <Row label="Minimum">
-            {fmt(stats.min, info.digits)}
-            <em>{info.unit}</em>
+            <Qty value={stats.min} unit={info.unit} digits={info.digits} />
           </Row>
         )}
         <div className="kv">
@@ -1394,8 +1420,8 @@ export function ResultsPanel({
               {probe.node === null ? "Interpolated" : "Node " + probe.node}
             </Row>
             <Row label="Position">
-              {probe.point.map((n) => fmt(n, 2)).join(", ")}
-              <em>mm</em>
+              {probe.point.map((n) => u.show(n, "mm", 2)).join(", ")}
+              <em>{u.label("mm")}</em>
             </Row>
             {PROBE_ROWS.map(({ plot: p, label: plain, digits }) => {
               const label = ANALYSES[result.analysis].eigen
@@ -1405,12 +1431,18 @@ export function ResultsPanel({
               return (
                 value !== null && (
                   <Row key={p} label={label}>
-                    {p === "safety" && value >= 1000
-                      ? "> 1000"
-                      : fmt(value, digits)}
-                    <em>
-                      {p === "safety" ? "×" : plotInfo(p, result.analysis).unit}
-                    </em>
+                    {p === "safety" ? (
+                      <>
+                        {value >= 1000 ? "> 1000" : fmt(value, digits)}
+                        <em>×</em>
+                      </>
+                    ) : (
+                      <Qty
+                        value={value}
+                        unit={plotInfo(p, result.analysis).unit}
+                        digits={digits}
+                      />
+                    )}
                   </Row>
                 )
               );
@@ -1427,10 +1459,13 @@ export function ResultsPanel({
           <h4>{c.title}</h4>
           <LineChart
             label={c.title}
-            x={c.x.values}
-            series={c.series.map((s) => ({ label: s.label, values: s.values }))}
-            xLabel={`${c.x.label}, ${c.x.unit}`}
-            yLabel={c.series[0].unit}
+            x={c.x.values.map((v) => u.value(v, c.x.unit))}
+            series={c.series.map((s) => ({
+              label: s.label,
+              values: s.values.map((v) => u.value(v, s.unit)),
+            }))}
+            xLabel={`${c.x.label}, ${u.label(c.x.unit)}`}
+            yLabel={u.label(c.series[0].unit)}
             logY={RESPONSE.includes(c.id)}
             selected={
               c.id === "loadPath"
@@ -1518,8 +1553,9 @@ export function ResultsPanel({
             Check mesh convergence
           </button>
           <button className="btn full" onClick={onRefine} disabled={busy}>
-            Re-solve once with {fmt((mesh?.size || study.meshSize) * 0.7, 2)} mm
-            mesh
+            Re-solve once with{" "}
+            {u.show((mesh?.size || study.meshSize) * 0.7, "mm", 2)}{" "}
+            {u.label("mm")} mesh
           </button>
         </div>
       )}
@@ -1590,7 +1626,8 @@ function FilterControls({
   onChange: (f: Filters) => void;
 }) {
   const { section, iso, threshold } = filters;
-  const unit = unitOf;
+  const u = useUnits();
+  const unit = u.label(unitOf);
   const digits =
     plot === "movement"
       ? 4
@@ -1617,8 +1654,9 @@ function FilterControls({
       <span>
         {label}
         <b className="mono">
-          {fmt(
+          {u.show(
             scale.min + filters[key].level * (scale.max - scale.min),
+            unitOf,
             digits,
           )}{" "}
           {unit}
@@ -1671,7 +1709,9 @@ function FilterControls({
           <label className="field">
             <span>
               Position
-              <b className="mono">{fmt(section.position, 2)} mm</b>
+              <b className="mono">
+                {u.show(section.position, "mm", 2)} {u.label("mm")}
+              </b>
             </span>
             <input
               type="range"
@@ -1687,8 +1727,7 @@ function FilterControls({
           </label>
           {sectionArea !== null && (
             <Row label="Section area">
-              {fmt(sectionArea, 1)}
-              <em>mm²</em>
+              <Qty value={sectionArea} unit="mm²" digits={1} />
             </Row>
           )}
         </>
@@ -1760,6 +1799,7 @@ function FramePicker({
  * the whole-part solution at the box's cut faces.
  */
 function RegionControls({ region }: { region: RegionState }) {
+  const u = useUnits();
   const { draft, result } = region;
   const s = result?.summary;
   return (
@@ -1787,12 +1827,10 @@ function RegionControls({ region }: { region: RegionState }) {
       {result && s && (
         <div style={{ marginTop: 8 }}>
           <Row label="Peak stress, whole part">
-            {fmt(s.globalPeak as number, 3)}
-            <em>MPa</em>
+            <Qty value={s.globalPeak as number} unit="MPa" />
           </Row>
           <Row label="Peak stress, refined region">
-            {fmt(s.maxStress!, 3)}
-            <em>MPa</em>
+            <Qty value={s.maxStress!} unit="MPa" />
           </Row>
           <Row label="Cut-face agreement">
             {fmt((s.boundaryDifference as number) * 100, 1)}
@@ -1812,13 +1850,15 @@ function RegionControls({ region }: { region: RegionState }) {
       ) : draft ? (
         <>
           <VectorField
-            label="Center, mm"
+            label="Center"
+            unit="mm"
             name="region center"
             value={draft.center}
             onChange={(center) => region.onDraft({ ...draft, center })}
           />
           <VectorField
-            label="Size, mm"
+            label="Size"
+            unit="mm"
             name="region size"
             value={draft.size}
             onChange={(size) => region.onDraft({ ...draft, size })}

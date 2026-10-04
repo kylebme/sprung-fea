@@ -44,8 +44,9 @@ export function StartScreen({
             <kbd>⌘O</kbd>
           </button>
           <p className="scope">
-            Linear static analysis of one solid part. Units: mm, N, MPa. Solves
-            locally with CalculiX.
+            Static, vibration, buckling, thermal and dynamic analysis of parts
+            and bonded assemblies, in SI or US units (switch in the status bar).
+            Solves locally with CalculiX.
           </p>
         </div>
         <div className="start-right">

@@ -1,6 +1,7 @@
 import { Check, TriangleAlert } from "lucide-react";
 import { LineChart } from "./Chart";
 import { fmt, sig } from "./logic";
+import { useUnits } from "./ui";
 import type { Convergence, ConvergenceOptions } from "./types";
 
 const percent = (v: number | null) =>
@@ -16,6 +17,7 @@ function verdict(q: Convergence["quantities"][number], tolerance: number) {
 }
 
 export function ConvergenceReport({ report }: { report: Convergence }) {
+  const u = useUnits();
   const meshes = report.meshes;
   const done = report.quantities.every((q) => q.converged);
   return (
@@ -29,11 +31,11 @@ export function ConvergenceReport({ report }: { report: Convergence }) {
       <table className="mesh-table">
         <thead>
           <tr>
-            <th>Size, mm</th>
+            <th>Size, {u.label("mm")}</th>
             <th>Elements</th>
             {report.quantities.map((q) => (
               <th key={q.id}>
-                {q.label}, {q.unit}
+                {q.label}, {u.label(q.unit)}
               </th>
             ))}
           </tr>
@@ -41,10 +43,10 @@ export function ConvergenceReport({ report }: { report: Convergence }) {
         <tbody>
           {meshes.map((m) => (
             <tr key={m.size}>
-              <td>{fmt(m.size, 3)}</td>
+              <td>{u.show(m.size, "mm", 3)}</td>
               <td>{fmt(m.elementCount)}</td>
               {m.values.map((v, i) => (
-                <td key={i}>{sig(v)}</td>
+                <td key={i}>{sig(u.value(v, report.quantities[i].unit))}</td>
               ))}
             </tr>
           ))}
@@ -63,8 +65,9 @@ export function ConvergenceReport({ report }: { report: Convergence }) {
           <p className="note">{verdict(q, report.tolerance)}</p>
           {q.estimate && (
             <p className="note">
-              Estimated limit {sig(q.estimate.value)} {q.unit} (Richardson
-              extrapolation, observed order {fmt(q.estimate.order, 1)}).
+              Estimated limit {sig(u.value(q.estimate.value, q.unit))}{" "}
+              {u.label(q.unit)} (Richardson extrapolation, observed order{" "}
+              {fmt(q.estimate.order, 1)}).
             </p>
           )}
           {meshes.length > 1 && (
@@ -72,14 +75,19 @@ export function ConvergenceReport({ report }: { report: Convergence }) {
               label={`${q.label} against element count`}
               x={meshes.map((m) => m.elementCount)}
               series={[
-                { label: q.label, values: meshes.map((m) => m.values[i]) },
+                {
+                  label: q.label,
+                  values: meshes.map((m) => u.value(m.values[i], q.unit)),
+                },
               ]}
               xLabel="Elements"
-              yLabel={q.unit}
+              yLabel={u.label(q.unit)}
               logX
               height={110}
               minSpan={
-                4 * report.tolerance * Math.abs(meshes.at(-1)!.values[i])
+                4 *
+                report.tolerance *
+                Math.abs(u.value(meshes.at(-1)!.values[i], q.unit))
               }
             />
           )}

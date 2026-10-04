@@ -22,7 +22,7 @@ import {
   facesLabel,
   stripExt,
 } from "./labels";
-import { Group, Node, listKeys } from "./ui";
+import { Group, Node, listKeys, useUnits } from "./ui";
 import type {
   Condition,
   ConditionKind,
@@ -95,6 +95,7 @@ export function StudyTree({
   onEdit: (kind: ConditionKind, c: Condition) => void;
   onPlot: (p: Plot) => void;
 }) {
+  const units = useUnits();
   const isNew =
     draft &&
     !conditionsOf(study, draft.kind).some((c) => c.id === draft.value.id);
@@ -114,7 +115,9 @@ export function StudyTree({
       <Node
         icon={Box}
         label={stripExt(part.name)}
-        value={part.geometry.dimensions.map((d) => fmt(d, 1)).join("×")}
+        value={part.geometry.dimensions
+          .map((d) => units.show(d, "mm", 1))
+          .join("×")}
         active={section === "part"}
         onClick={() => onSection("part")}
         disabled={busy}
@@ -165,7 +168,7 @@ export function StudyTree({
               value={
                 kind === "support"
                   ? facesLabel(c.faces)
-                  : conditionValue(kind, c)
+                  : conditionValue(kind, c, units.system)
               }
               active={draft?.value.id === c.id}
               onClick={() => onEdit(kind, c)}
@@ -245,6 +248,7 @@ export function FaceList({
   onSelect: (id: number) => void;
   onHover: (id: number | null) => void;
 }) {
+  const units = useUnits();
   const use = new Map<number, { kind: ConditionKind; name: string }>();
   for (const kind of conditionKinds(study))
     for (const c of conditionsOf(study, kind))
@@ -293,20 +297,20 @@ export function FaceList({
                 onFocus={() => onHover(f.id)}
                 onBlur={() => onHover(null)}
                 aria-pressed={isSelected}
-                aria-label={`Face ${f.id}, ${f.type}, ${fmt(f.area, 1)} mm²${u ? ", " + u.name : ""}`}
+                aria-label={`Face ${f.id}, ${f.type}, ${units.show(f.area, "mm²", 1)} ${units.label("mm²")}${u ? ", " + u.name : ""}`}
                 title={`Center ${f.center.map((c) => fmt(c, 1)).join(", ")} mm`}
                 disabled={disabled}
               >
                 <b>{f.id}</b>
                 <span>
-                  {faceHint(f)}
+                  {faceHint(f, (mm) => units.show(mm, "mm", 1))}
                   {(part.geometry.bodies?.length ?? 1) > 1 &&
                     ` · ${part.geometry.bodies!.find((b) => b.id === f.body)?.name}`}
                 </span>
                 {u ? (
                   <span className={"tag " + u.kind}>{u.name}</span>
                 ) : (
-                  <span className="tag">{fmt(f.area, 1)}</span>
+                  <span className="tag">{units.show(f.area, "mm²", 1)}</span>
                 )}
               </button>
             );

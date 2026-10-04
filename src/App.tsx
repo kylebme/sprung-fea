@@ -22,6 +22,8 @@ import {
   type Theme,
 } from "./Viewer";
 import { api, post, saveFile } from "./api";
+import { SYSTEM_LABEL, unitLabel, type UnitSystem } from "./units";
+import { UnitsContext } from "./ui";
 import {
   fmt,
   history,
@@ -40,6 +42,7 @@ import {
 import {
   ANALYSES,
   analysisName,
+  quantity,
   plotInfo,
   STAGES,
   blankLoad,
@@ -182,6 +185,19 @@ export default function App() {
       ? "orthographic"
       : "perspective",
   );
+  // Units are a display preference kept on this computer; studies and
+  // results stay in SI working units.
+  const [units, setUnits] = useState<UnitSystem>(() =>
+    readStorage("bettersim-units") === "us" ? "us" : "si",
+  );
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
+  const chooseUnits = (next: UnitSystem) => {
+    try {
+      localStorage.setItem("bettersim-units", next);
+    } catch {}
+    setUnits(next);
+  };
   const [threads, setThreads] = useState<Threads>(() => {
     const saved = readStorage("bettersim-threads");
     return saved === "single" || saved === "all" ? saved : "auto";
@@ -413,7 +429,7 @@ export default function App() {
       setWire(false);
       write(
         "import",
-        `${geometry.dimensions.map((d: number) => fmt(d, 2)).join(" × ")} mm · ${geometry.faces.length} faces · ${fmt(geometry.volume, 1)} mm³`,
+        `${geometry.dimensions.map((d: number) => quantity(d, "mm", unitsRef.current, 2)).join(" × ")} · ${geometry.faces.length} faces · ${quantity(geometry.volume, "mm³", unitsRef.current, 1)}`,
         "done",
       );
       const restored = saved
@@ -787,7 +803,7 @@ export default function App() {
     setSection("mesh");
     setSelected([]);
     announce(
-      `Example setup: Aluminum 6061-T6, Face ${held.id} fixed, 100 N ${tower ? "sideways" : "downward"} on Face ${loaded.id}`,
+      `Example setup: ${MATERIALS[0].name}, Face ${held.id} fixed, ${quantity(100, "N", units)} ${tower ? "sideways" : "downward"} on Face ${loaded.id}`,
     );
   };
 
@@ -889,7 +905,7 @@ export default function App() {
       const s = data.result.summary;
       write(
         "region",
-        `${fmt(data.mesh.elementCount)} elements · peak ${fmt(s.globalPeak, 3)} → ${fmt(s.maxStress, 3)} MPa`,
+        `${fmt(data.mesh.elementCount)} elements · peak ${quantity(s.globalPeak, "MPa", units)} → ${quantity(s.maxStress, "MPa", units)}`,
         "done",
       );
     } catch (e) {
@@ -949,9 +965,10 @@ export default function App() {
       ? null
       : activePlot === "safety"
         ? fmt(probeAt, 2) + "×"
-        : fmt(probeAt, info.digits) + " " + info.unit;
+        : quantity(probeAt, info.unit, units, info.digits);
   const csv = async () => {
-    if (shown) await saveFile("bettersim-surface-nodes.csv", surfaceCsv(shown));
+    if (shown)
+      await saveFile("bettersim-surface-nodes.csv", surfaceCsv(shown, units));
   };
   const exportSolver = async (kind: "deck" | "log" | "frd") => {
     if (!part) return;
@@ -1158,415 +1175,431 @@ export default function App() {
         : "Ready");
   const jobCard = job && <JobCard job={job} onCancel={cancel} />;
   return (
-    <div
-      className={
-        "app " + (window.desktop?.platform === "darwin" ? "desktop" : "")
-      }
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        if (job) return;
-        const file = e.dataTransfer.files[0];
-        if (file)
-          /\.bsim$/i.test(file.name) ? openProject(file) : importFile(file);
-      }}
-    >
-      <input
-        className="hidden"
-        ref={fileInput}
-        type="file"
-        accept=".step,.stp"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) importFile(file);
-          e.target.value = "";
+    <UnitsContext.Provider value={units}>
+      <div
+        className={
+          "app " + (window.desktop?.platform === "darwin" ? "desktop" : "")
+        }
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (job) return;
+          const file = e.dataTransfer.files[0];
+          if (file)
+            /\.bsim$/i.test(file.name) ? openProject(file) : importFile(file);
         }}
-      />
-      <input
-        className="hidden"
-        ref={projectInput}
-        type="file"
-        accept=".bsim"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) openProject(file);
-          e.target.value = "";
-        }}
-      />
-      <header className="titlebar">
-        <div className="crumb">
-          <b>BetterSim</b>
-          {part && (
-            <>
-              <span className="sep">/</span>
-              <span>{stripExt(part.name)}</span>
-              <span className="sep">/</span>
-              <span className="faint">{analysisName(study)}</span>
-            </>
-          )}
-        </div>
-        <div className="spacer" />
-        {part && (
-          <>
-            <button
-              className="tb"
-              onClick={() => projectInput.current?.click()}
-              disabled={!!job}
-              title="Open project (⌘O)"
-            >
-              <FolderOpen size={14} />
-              Open
-            </button>
-            <button
-              className="tb"
-              onClick={() => fileInput.current?.click()}
-              disabled={!!job}
-              title="Import STEP (⌘I)"
-            >
-              <Upload size={14} />
-              Import
-            </button>
-            <button
-              className="tb"
-              onClick={save}
-              disabled={!!job}
-              title="Save project (⌘S)"
-            >
-              <Save size={14} />
-              Save
-            </button>
-            <span className="divider" />
-            <button
-              className="tb"
-              aria-label="Undo study edit"
-              title="Undo (⌘Z)"
-              onClick={() => change({ type: "undo" })}
-              disabled={!hist.past.length || !!job}
-            >
-              <Undo2 size={14} />
-            </button>
-            <button
-              className="tb"
-              aria-label="Redo study edit"
-              title="Redo (⇧⌘Z)"
-              onClick={() => change({ type: "redo" })}
-              disabled={!hist.future.length || !!job}
-            >
-              <Redo2 size={14} />
-            </button>
-          </>
-        )}
-        <button
-          className="tb"
-          aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
-          title={theme === "dark" ? "Light theme" : "Dark theme"}
-          onClick={toggleTheme}
-        >
-          {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-        </button>
-        {part && (
-          <button
-            className="solve"
-            onClick={() => run("solve")}
-            disabled={!ready || !!job}
-            title={
-              draft
-                ? "Save or cancel the " + draft.kind + " first"
-                : missing.length
-                  ? "Needs: " + missing.join(", ").toLowerCase()
-                  : "Solve (⌘↵)"
-            }
-          >
-            <Play size={11} />
-            Solve
-            <kbd>⌘↵</kbd>
-          </button>
-        )}
-      </header>
-
-      {!part ? (
-        <StartScreen
-          recovery={recovery}
-          busy={!!job}
-          onImport={() => fileInput.current?.click()}
-          onOpen={() => projectInput.current?.click()}
-          onRestore={restore}
-          onSample={sample}
-        >
-          {jobCard}
-        </StartScreen>
-      ) : (
-        <main className="main">
-          <aside className="pane left">
-            <div className="phead">Study</div>
-            <StudyTree
-              part={part}
-              study={study}
-              mesh={mesh}
-              result={result}
-              draft={draft}
-              section={section}
-              plot={activePlot}
-              plots={plots}
-              busy={!!job}
-              onSection={chooseSection}
-              onAdd={add}
-              onEdit={edit}
-              onPlot={(k) => {
-                setPlot(k);
-                chooseSection("results");
-              }}
-            />
-            <FaceList
-              part={part}
-              study={study}
-              selected={selected}
-              hover={hover}
-              draftKind={draft?.kind || null}
-              disabled={!!job || (!!result && !draft)}
-              query={query}
-              onQuery={setQuery}
-              onSelect={selectFace}
-              onHover={setHover}
-            />
-          </aside>
-
-          <section className="center">
-            <div className="viewport">
-              <Viewer
-                ref={viewer}
-                geometry={draft ? part.geometry : viewGeometry!}
-                view={draft ? null : shown || mesh?.view || null}
-                region={draft ? null : regionBox}
-                origin={
-                  !!regionDraft ||
-                  draft?.kind === "mass" ||
-                  (draft?.kind === "load" &&
-                    (draft.value.kind === "remote" ||
-                      draft.value.kind === "rotation"))
-                }
-                plot={showingResult && plots.length ? activePlot : null}
-                study={shownStudy}
-                selected={selected}
-                hovered={hover}
-                onSelect={selectFace}
-                onHover={setHover}
-                onProbe={setProbe}
-                onSectionArea={setSectionArea}
-                filters={filters!}
-                deformation={deformation}
-                wireframe={wire && !draft}
-                animate={animate && showingResult && deformation !== 0}
-                probe={draft ? null : probe}
-                probeLabel={probeLabel}
-                theme={theme}
-                projection={projection}
-                draftKind={draft?.kind || null}
-                marginMax={marginMax}
-                yieldStrength={yieldStrength}
-              />
-              <div className="vlabel">
-                {showingResult ? (
-                  <>
-                    <b>{info.name}</b>
-                    <span>
-                      {info.unit} · nodal
-                      {regionShown
-                        ? " · refined region"
-                        : result.frames.length > 1
-                          ? " · " + result.frames[frame]?.label
-                          : ""}
-                    </span>
-                  </>
-                ) : draft && isBody ? (
-                  <>
-                    <b>{draft.value.name || "Load"}</b>
-                    <span>acts on the whole part</span>
-                  </>
-                ) : draft ? (
-                  <>
-                    <b>Select faces for {draft.value.name || draft.kind}</b>
-                    <span>click to add or remove</span>
-                  </>
-                ) : mesh ? (
-                  <>
-                    <b>Mesh</b>
-                    <span>
-                      {fmt(mesh.elementCount)} elements · {fmt(mesh.size, 2)} mm
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <b>Model</b>
-                    <span>{part.geometry.faces.length} faces</span>
-                  </>
-                )}
-              </div>
-              <div className="vbar">
-                <button
-                  aria-label="Fit part to view"
-                  title="Fit"
-                  onClick={() => viewer.current?.fit()}
-                >
-                  <Maximize size={14} />
-                </button>
-                <span className="div" />
-                {(
-                  [
-                    ["iso", "Iso"],
-                    ["front", "Front"],
-                    ["top", "Top"],
-                    ["right", "Right"],
-                  ] as const
-                ).map(([v, name]) => (
-                  <button key={v} onClick={() => viewer.current?.view(v)}>
-                    {name}
-                  </button>
-                ))}
-                <span className="div" />
-                {(
-                  [
-                    ["perspective", "Persp", "Perspective"],
-                    ["orthographic", "Ortho", "Orthographic"],
-                  ] as const
-                ).map(([mode, name, full]) => (
-                  <button
-                    key={mode}
-                    className={projection === mode ? "on" : ""}
-                    aria-pressed={projection === mode}
-                    aria-label={full}
-                    title={full}
-                    onClick={() => chooseProjection(mode)}
-                  >
-                    {name}
-                  </button>
-                ))}
-                <span className="div" />
-                <button
-                  aria-label="Toggle mesh edges"
-                  title="Mesh edges"
-                  className={wire ? "on" : ""}
-                  onClick={() => setWire(!wire)}
-                >
-                  <Grid3X3 size={14} />
-                </button>
-                <button
-                  aria-label="Save view image"
-                  title="Save image"
-                  onClick={screenshot}
-                >
-                  <Camera size={14} />
-                </button>
-              </div>
-              {showingResult && stats && (
-                <div className="legend" aria-label={info.name + " scale"}>
-                  <div
-                    className="bar"
-                    style={{
-                      background: `linear-gradient(to top,${(activePlot === "safety" ? [...palette].reverse() : palette).join(",")})`,
-                    }}
-                  />
-                  {[1, 0.75, 0.5, 0.25, 0].map((f) => (
-                    <span key={f}>
-                      {activePlot === "safety" && f === 1
-                        ? marginMax + "+"
-                        : fmt(
-                            stats.scale.min +
-                              f * (stats.scale.max - stats.scale.min),
-                            3,
-                          )}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {showingResult && shown?.displacement && (
-                <div className="vchip">
-                  {deform === "off"
-                    ? "Undeformed"
-                    : deform === "true"
-                      ? "True scale"
-                      : `${ANALYSES[resultAnalysis].eigen ? "Shape" : "Displacement"} ×${fmt(deformation, deformation >= 100 ? 0 : 1)}${animate && ANALYSES[resultAnalysis].eigen ? " · animated" : ""}`}
-                </div>
-              )}
-              {(!result || draft) && !job && selected.length > 0 && (
-                <div className="selpill">
-                  <MousePointer2 size={13} />
-                  {selected.length === 1
-                    ? "Face " + selected[0]
-                    : selected.length + " faces"}{" "}
-                  · {fmt(selectedArea, 1)} mm²
-                  <button
-                    aria-label="Clear selection"
-                    onClick={() => setSelected([])}
-                  >
-                    <X size={13} />
-                  </button>
-                </div>
-              )}
-              {jobCard}
-            </div>
-            <Console
-              log={log}
-              result={displayed}
-              open={consoleOpen}
-              tab={consoleTab}
-              onOpen={setConsoleOpen}
-              onTab={setConsoleTab}
-            />
-          </section>
-
-          <aside
-            className={"pane right" + (job ? " busy" : "")}
-            aria-label="Inspector"
-            inert={!!job}
-          >
-            {inspector()}
-          </aside>
-        </main>
-      )}
-
-      <footer className="status">
-        <span>
-          {(job || part) && <span className={"dot" + (job ? " busy" : "")} />}
-          {status}
-        </span>
-        <span className="spacer" />
-        {part && (
-          <span>
-            {hover
-              ? `Face ${hover} · ${part.geometry.faces.find((f) => f.id === hover)?.type}`
-              : part.geometry.dimensions.map((d) => fmt(d, 1)).join(" × ") +
-                " mm"}
-          </span>
-        )}
-        <span>mm · N · MPa</span>
-      </footer>
-
-      {error && (
-        <div
-          className={"error-panel" + (part ? "" : " start-error")}
-          role="alert"
-        >
-          <h2>{error.title}</h2>
-          <p>{error.message.split("\n")[0]}</p>
-          {error.message.includes("\n") && (
-            <details>
-              <summary>Details</summary>
-              <pre>{error.message}</pre>
-            </details>
-          )}
-          <div className="row">
-            <button className="btn" onClick={() => setError(null)}>
-              Dismiss
-            </button>
-            {part && error.title === "Solve failed" && (
-              <button className="btn" onClick={() => exportSolver("log")}>
-                Save solver log
-              </button>
+      >
+        <input
+          className="hidden"
+          ref={fileInput}
+          type="file"
+          accept=".step,.stp"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) importFile(file);
+            e.target.value = "";
+          }}
+        />
+        <input
+          className="hidden"
+          ref={projectInput}
+          type="file"
+          accept=".bsim"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) openProject(file);
+            e.target.value = "";
+          }}
+        />
+        <header className="titlebar">
+          <div className="crumb">
+            <b>BetterSim</b>
+            {part && (
+              <>
+                <span className="sep">/</span>
+                <span>{stripExt(part.name)}</span>
+                <span className="sep">/</span>
+                <span className="faint">{analysisName(study)}</span>
+              </>
             )}
           </div>
-        </div>
-      )}
-    </div>
+          <div className="spacer" />
+          {part && (
+            <>
+              <button
+                className="tb"
+                onClick={() => projectInput.current?.click()}
+                disabled={!!job}
+                title="Open project (⌘O)"
+              >
+                <FolderOpen size={14} />
+                Open
+              </button>
+              <button
+                className="tb"
+                onClick={() => fileInput.current?.click()}
+                disabled={!!job}
+                title="Import STEP (⌘I)"
+              >
+                <Upload size={14} />
+                Import
+              </button>
+              <button
+                className="tb"
+                onClick={save}
+                disabled={!!job}
+                title="Save project (⌘S)"
+              >
+                <Save size={14} />
+                Save
+              </button>
+              <span className="divider" />
+              <button
+                className="tb"
+                aria-label="Undo study edit"
+                title="Undo (⌘Z)"
+                onClick={() => change({ type: "undo" })}
+                disabled={!hist.past.length || !!job}
+              >
+                <Undo2 size={14} />
+              </button>
+              <button
+                className="tb"
+                aria-label="Redo study edit"
+                title="Redo (⇧⌘Z)"
+                onClick={() => change({ type: "redo" })}
+                disabled={!hist.future.length || !!job}
+              >
+                <Redo2 size={14} />
+              </button>
+            </>
+          )}
+          <button
+            className="tb"
+            aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            title={theme === "dark" ? "Light theme" : "Dark theme"}
+            onClick={toggleTheme}
+          >
+            {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
+          {part && (
+            <button
+              className="solve"
+              onClick={() => run("solve")}
+              disabled={!ready || !!job}
+              title={
+                draft
+                  ? "Save or cancel the " + draft.kind + " first"
+                  : missing.length
+                    ? "Needs: " + missing.join(", ").toLowerCase()
+                    : "Solve (⌘↵)"
+              }
+            >
+              <Play size={11} />
+              Solve
+              <kbd>⌘↵</kbd>
+            </button>
+          )}
+        </header>
+
+        {!part ? (
+          <StartScreen
+            recovery={recovery}
+            busy={!!job}
+            onImport={() => fileInput.current?.click()}
+            onOpen={() => projectInput.current?.click()}
+            onRestore={restore}
+            onSample={sample}
+          >
+            {jobCard}
+          </StartScreen>
+        ) : (
+          <main className="main">
+            <aside className="pane left">
+              <div className="phead">Study</div>
+              <StudyTree
+                part={part}
+                study={study}
+                mesh={mesh}
+                result={result}
+                draft={draft}
+                section={section}
+                plot={activePlot}
+                plots={plots}
+                busy={!!job}
+                onSection={chooseSection}
+                onAdd={add}
+                onEdit={edit}
+                onPlot={(k) => {
+                  setPlot(k);
+                  chooseSection("results");
+                }}
+              />
+              <FaceList
+                part={part}
+                study={study}
+                selected={selected}
+                hover={hover}
+                draftKind={draft?.kind || null}
+                disabled={!!job || (!!result && !draft)}
+                query={query}
+                onQuery={setQuery}
+                onSelect={selectFace}
+                onHover={setHover}
+              />
+            </aside>
+
+            <section className="center">
+              <div className="viewport">
+                <Viewer
+                  ref={viewer}
+                  geometry={draft ? part.geometry : viewGeometry!}
+                  view={draft ? null : shown || mesh?.view || null}
+                  region={draft ? null : regionBox}
+                  origin={
+                    !!regionDraft ||
+                    draft?.kind === "mass" ||
+                    (draft?.kind === "load" &&
+                      (draft.value.kind === "remote" ||
+                        draft.value.kind === "rotation"))
+                  }
+                  plot={showingResult && plots.length ? activePlot : null}
+                  study={shownStudy}
+                  selected={selected}
+                  hovered={hover}
+                  onSelect={selectFace}
+                  onHover={setHover}
+                  onProbe={setProbe}
+                  onSectionArea={setSectionArea}
+                  filters={filters!}
+                  deformation={deformation}
+                  wireframe={wire && !draft}
+                  animate={animate && showingResult && deformation !== 0}
+                  probe={draft ? null : probe}
+                  probeLabel={probeLabel}
+                  theme={theme}
+                  projection={projection}
+                  draftKind={draft?.kind || null}
+                  marginMax={marginMax}
+                  yieldStrength={yieldStrength}
+                />
+                <div className="vlabel">
+                  {showingResult ? (
+                    <>
+                      <b>{info.name}</b>
+                      <span>
+                        {unitLabel(info.unit, units)} · nodal
+                        {regionShown
+                          ? " · refined region"
+                          : result.frames.length > 1
+                            ? " · " + result.frames[frame]?.label
+                            : ""}
+                      </span>
+                    </>
+                  ) : draft && isBody ? (
+                    <>
+                      <b>{draft.value.name || "Load"}</b>
+                      <span>acts on the whole part</span>
+                    </>
+                  ) : draft ? (
+                    <>
+                      <b>Select faces for {draft.value.name || draft.kind}</b>
+                      <span>click to add or remove</span>
+                    </>
+                  ) : mesh ? (
+                    <>
+                      <b>Mesh</b>
+                      <span>
+                        {fmt(mesh.elementCount)} elements · {fmt(mesh.size, 2)}{" "}
+                        mm
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <b>Model</b>
+                      <span>{part.geometry.faces.length} faces</span>
+                    </>
+                  )}
+                </div>
+                <div className="vbar">
+                  <button
+                    aria-label="Fit part to view"
+                    title="Fit"
+                    onClick={() => viewer.current?.fit()}
+                  >
+                    <Maximize size={14} />
+                  </button>
+                  <span className="div" />
+                  {(
+                    [
+                      ["iso", "Iso"],
+                      ["front", "Front"],
+                      ["top", "Top"],
+                      ["right", "Right"],
+                    ] as const
+                  ).map(([v, name]) => (
+                    <button key={v} onClick={() => viewer.current?.view(v)}>
+                      {name}
+                    </button>
+                  ))}
+                  <span className="div" />
+                  {(
+                    [
+                      ["perspective", "Persp", "Perspective"],
+                      ["orthographic", "Ortho", "Orthographic"],
+                    ] as const
+                  ).map(([mode, name, full]) => (
+                    <button
+                      key={mode}
+                      className={projection === mode ? "on" : ""}
+                      aria-pressed={projection === mode}
+                      aria-label={full}
+                      title={full}
+                      onClick={() => chooseProjection(mode)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                  <span className="div" />
+                  <button
+                    aria-label="Toggle mesh edges"
+                    title="Mesh edges"
+                    className={wire ? "on" : ""}
+                    onClick={() => setWire(!wire)}
+                  >
+                    <Grid3X3 size={14} />
+                  </button>
+                  <button
+                    aria-label="Save view image"
+                    title="Save image"
+                    onClick={screenshot}
+                  >
+                    <Camera size={14} />
+                  </button>
+                </div>
+                {showingResult && stats && (
+                  <div className="legend" aria-label={info.name + " scale"}>
+                    <div
+                      className="bar"
+                      style={{
+                        background: `linear-gradient(to top,${(activePlot === "safety" ? [...palette].reverse() : palette).join(",")})`,
+                      }}
+                    />
+                    {[1, 0.75, 0.5, 0.25, 0].map((f) => (
+                      <span key={f}>
+                        {activePlot === "safety" && f === 1
+                          ? marginMax + "+"
+                          : quantity(
+                              stats.scale.min +
+                                f * (stats.scale.max - stats.scale.min),
+                              info.unit,
+                              units,
+                            ).replace(/ \S+$/, "")}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {showingResult && shown?.displacement && (
+                  <div className="vchip">
+                    {deform === "off"
+                      ? "Undeformed"
+                      : deform === "true"
+                        ? "True scale"
+                        : `${ANALYSES[resultAnalysis].eigen ? "Shape" : "Displacement"} ×${fmt(deformation, deformation >= 100 ? 0 : 1)}${animate && ANALYSES[resultAnalysis].eigen ? " · animated" : ""}`}
+                  </div>
+                )}
+                {(!result || draft) && !job && selected.length > 0 && (
+                  <div className="selpill">
+                    <MousePointer2 size={13} />
+                    {selected.length === 1
+                      ? "Face " + selected[0]
+                      : selected.length + " faces"}{" "}
+                    · {quantity(selectedArea, "mm²", units, 1)}
+                    <button
+                      aria-label="Clear selection"
+                      onClick={() => setSelected([])}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                )}
+                {jobCard}
+              </div>
+              <Console
+                log={log}
+                result={displayed}
+                open={consoleOpen}
+                tab={consoleTab}
+                onOpen={setConsoleOpen}
+                onTab={setConsoleTab}
+              />
+            </section>
+
+            <aside
+              className={"pane right" + (job ? " busy" : "")}
+              aria-label="Inspector"
+              inert={!!job}
+            >
+              {inspector()}
+            </aside>
+          </main>
+        )}
+
+        <footer className="status">
+          <span>
+            {(job || part) && <span className={"dot" + (job ? " busy" : "")} />}
+            {status}
+          </span>
+          <span className="spacer" />
+          {part && (
+            <span>
+              {hover
+                ? `Face ${hover} · ${part.geometry.faces.find((f) => f.id === hover)?.type}`
+                : part.geometry.dimensions
+                    .map((d) =>
+                      quantity(d, "mm", units, 1).replace(/ \S+$/, ""),
+                    )
+                    .join(" × ") +
+                  " " +
+                  unitLabel("mm", units)}
+            </span>
+          )}
+          <button
+            className="units-toggle"
+            aria-label={`Units: ${SYSTEM_LABEL[units]}. Switch to ${units === "si" ? "US" : "SI"} units`}
+            title={`Switch to ${units === "si" ? "US" : "SI"} units`}
+            onClick={() => chooseUnits(units === "si" ? "us" : "si")}
+          >
+            {SYSTEM_LABEL[units]}
+          </button>
+        </footer>
+
+        {error && (
+          <div
+            className={"error-panel" + (part ? "" : " start-error")}
+            role="alert"
+          >
+            <h2>{error.title}</h2>
+            <p>{error.message.split("\n")[0]}</p>
+            {error.message.includes("\n") && (
+              <details>
+                <summary>Details</summary>
+                <pre>{error.message}</pre>
+              </details>
+            )}
+            <div className="row">
+              <button className="btn" onClick={() => setError(null)}>
+                Dismiss
+              </button>
+              {part && error.title === "Solve failed" && (
+                <button className="btn" onClick={() => exportSolver("log")}>
+                  Save solver log
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </UnitsContext.Provider>
   );
 }

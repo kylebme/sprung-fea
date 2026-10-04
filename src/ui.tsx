@@ -1,6 +1,85 @@
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { Plus, type LucideIcon } from "lucide-react";
-import { moveFocus } from "./logic";
+import { fmt, moveFocus, sig } from "./logic";
+import {
+  converts,
+  fromShown,
+  toShown,
+  unitLabel,
+  type UnitSystem,
+} from "./units";
+
+/** The unit system the interface shows; data stays in SI working units. */
+export const UnitsContext = createContext<UnitSystem>("si");
+
+/** Formatting in the chosen unit system, from SI working units. */
+export function useUnits() {
+  const system = useContext(UnitsContext);
+  return {
+    system,
+    label: (unit: string) => unitLabel(unit, system),
+    value: (v: number, unit: string) => toShown(v, unit, system),
+    /** A formatted value: SI keeps its digits, converted values keep five
+     * significant digits. */
+    show: (v: number, unit: string, digits = 3) =>
+      converts(unit, system)
+        ? sig(toShown(v, unit, system), Math.max(4, digits + 1))
+        : fmt(v, digits),
+  };
+}
+
+/** A value with its unit, for read-only rows. */
+export function Qty({
+  value,
+  unit,
+  digits = 3,
+}: {
+  value: number;
+  unit: string;
+  digits?: number;
+}) {
+  const u = useUnits();
+  return (
+    <>
+      {u.show(value, unit, digits)}
+      <em>{u.label(unit)}</em>
+    </>
+  );
+}
+
+/**
+ * A number input in the chosen units. The typed text is kept while it is
+ * edited, so unit round-off never rewrites it; an empty field reports NaN.
+ */
+function useNumberText(value: number, unit: string | undefined) {
+  const system = useContext(UnitsContext);
+  const [text, setText] = useState<string | null>(null);
+  const shown = toShown(value, unit ?? "", system);
+  return {
+    value:
+      text ??
+      (Number.isFinite(shown)
+        ? // Converted values: six significant digits hide round-off.
+          String(
+            Number(shown.toPrecision(converts(unit ?? "", system) ? 6 : 10)),
+          )
+        : ""),
+    change: (raw: string, onChange: (n: number) => void) => {
+      setText(raw);
+      const n = raw.trim() === "" ? NaN : Number(raw);
+      if (raw.trim() === "" || Number.isFinite(n))
+        onChange(fromShown(n, unit ?? "", system));
+    },
+    blur: () => setText(null),
+  };
+}
 
 export function Head({ small, title }: { small: string; title: string }) {
   return (
@@ -34,11 +113,14 @@ export function NumberField({
   onChange,
 }: {
   label: string;
+  /** In SI working units; `unit` names them and converts for display. */
   value: number;
   unit?: string;
   step?: string;
   onChange: (n: number) => void;
 }) {
+  const system = useContext(UnitsContext);
+  const text = useNumberText(value, unit);
   return (
     <label className="field">
       <span>{label}</span>
@@ -46,11 +128,41 @@ export function NumberField({
         <input
           type="number"
           step={step}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
+          value={text.value}
+          onChange={(e) => text.change(e.target.value, onChange)}
+          onBlur={text.blur}
         />
-        {unit && <span>{unit}</span>}
+        {unit && <span>{unitLabel(unit, system)}</span>}
       </span>
+    </label>
+  );
+}
+
+/** One component of a vector input, in the chosen units. */
+export function VectorInput({
+  axis,
+  name,
+  value,
+  unit,
+  onChange,
+}: {
+  axis: string;
+  name: string;
+  value: number;
+  unit?: string;
+  onChange: (n: number) => void;
+}) {
+  const text = useNumberText(value, unit);
+  return (
+    <label className={"axis-" + axis.toLowerCase()}>
+      <span>{axis}</span>
+      <input
+        aria-label={axis + " " + name}
+        type="number"
+        value={text.value}
+        onChange={(e) => text.change(e.target.value, onChange)}
+        onBlur={text.blur}
+      />
     </label>
   );
 }

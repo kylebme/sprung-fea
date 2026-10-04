@@ -1582,3 +1582,13 @@ b.axis-z,
 .legend-note .key.s1::before {
   background: var(--load);
 }
+.units-toggle {
+  padding: 0 6px;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+}
+.units-toggle:hover {
+  background: var(--line);
+  color: var(--text);
+}

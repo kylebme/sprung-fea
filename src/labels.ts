@@ -1,4 +1,5 @@
-import { fmt } from "./logic";
+import { fmt, sig } from "./logic";
+import { converts, toShown, unitLabel, type UnitSystem } from "./units";
 import type {
   Analysis,
   Condition,
@@ -98,12 +99,12 @@ export const THERMAL_KINDS: {
     note: "Heat produced evenly through the whole part, such as from electrical losses.",
   },
 ];
-export const thermalValue = (c: ThermalCondition) =>
+export const thermalValue = (c: ThermalCondition, system: UnitSystem = "si") =>
   c.kind === "temperature"
-    ? fmt(c.value) + " °C"
+    ? quantity(c.value, "°C", system)
     : c.kind === "convection"
-      ? fmt(c.value) + " W/m²K"
-      : fmt(c.value) + " W";
+      ? quantity(c.value, "W/(m²·K)", system)
+      : quantity(c.value, "W", system);
 export const blankThermal = (): ThermalCondition => ({
   id: crypto.randomUUID(),
   name: "Temperature",
@@ -275,14 +276,30 @@ export const LOAD_KINDS: { id: LoadKind; name: string; note: string }[] = [
 ];
 export const BODY_LOADS: LoadKind[] = ["gravity", "rotation"];
 export const isBodyLoad = (l: Load) => BODY_LOADS.includes(l.kind);
-export const loadValue = (l: Load) =>
+/** "100 N" in SI, "22.48 lbf" in US units. */
+export const quantity = (
+  value: number,
+  unit: string,
+  system: UnitSystem = "si",
+  digits = 3,
+) =>
+  (converts(unit, system)
+    ? sig(toShown(value, unit, system), Math.max(4, digits + 1))
+    : fmt(value, digits)) +
+  " " +
+  unitLabel(unit, system);
+export const loadValue = (l: Load, system: UnitSystem = "si") =>
   l.kind === "pressure"
-    ? fmt(l.magnitude) + " MPa"
+    ? quantity(l.magnitude, "MPa", system)
     : l.kind === "rotation"
-      ? fmt(l.magnitude) + " rpm"
-      : fmt(Math.hypot(...l.vector)) +
-        (l.kind === "gravity" ? " m/s²" : l.kind === "moment" ? " N·mm" : " N");
-export const massValue = (m: PointMass) => fmt(m.mass) + " kg";
+      ? quantity(l.magnitude, "rpm", system)
+      : quantity(
+          Math.hypot(...l.vector),
+          l.kind === "gravity" ? "m/s²" : l.kind === "moment" ? "N·mm" : "N",
+          system,
+        );
+export const massValue = (m: PointMass, system: UnitSystem = "si") =>
+  quantity(m.mass, "kg", system);
 export const CONDITIONS: Record<
   ConditionKind,
   { group: string; add: string; empty: string }
@@ -311,13 +328,17 @@ export const CONDITIONS: Record<
       "Point masses stand in for parts that are not modeled, such as a motor bolted to a face.",
   },
 };
-export const conditionValue = (kind: ConditionKind, c: Condition) =>
+export const conditionValue = (
+  kind: ConditionKind,
+  c: Condition,
+  system: UnitSystem = "si",
+) =>
   kind === "load"
-    ? loadValue(c as Load)
+    ? loadValue(c as Load, system)
     : kind === "mass"
-      ? massValue(c as PointMass)
+      ? massValue(c as PointMass, system)
       : kind === "thermal"
-        ? thermalValue(c as ThermalCondition)
+        ? thermalValue(c as ThermalCondition, system)
         : "";
 export const blankMass = (point: number[]): PointMass => ({
   id: crypto.randomUUID(),

@@ -161,10 +161,13 @@ export function editMaterial(
 }
 
 /** Planes facing a global axis are easiest to find by their position on it. */
-export function faceHint(face: Face) {
+export function faceHint(
+  face: Face,
+  length: (mm: number) => string = (mm) => fmt(mm, 1),
+) {
   const axis = face.normal.findIndex((n) => Math.abs(n) > 0.999);
   return face.type === "Plane" && axis >= 0
-    ? `Plane · ${"xyz"[axis]} ${fmt(face.center[axis], 1)}`
+    ? `Plane · ${"xyz"[axis]} ${length(face.center[axis])}`
     : face.type;
 }
 

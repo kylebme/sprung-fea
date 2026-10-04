@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { ChevronDown, ChevronUp, LoaderCircle } from "lucide-react";
 import { fmt } from "./logic";
 import { STAGES } from "./labels";
+import { useUnits } from "./ui";
 import type { Result } from "./types";
 
 export type LogEntry = {
@@ -35,6 +36,7 @@ export function Console({
   onOpen: (open: boolean) => void;
   onTab: (tab: "output" | "checks") => void;
 }) {
+  const u = useUnits();
   const end = useRef<HTMLDivElement>(null);
   // Braces matter: scrollIntoView returns a Promise in current Chromium, and
   // React would treat a returned value as the effect's cleanup function.
@@ -96,7 +98,7 @@ export function Console({
               )}
               <CheckRow
                 label="Mesh"
-                value={`${fmt(result.elementCount)} C3D10 · ${fmt(result.nodeCount)} nodes · ${fmt(result.meshSize, 3)} mm`}
+                value={`${fmt(result.elementCount)} C3D10 · ${fmt(result.nodeCount)} nodes · ${u.show(result.meshSize, "mm", 3)} ${u.label("mm")}`}
               />
               {result.checks.map((c) => (
                 <CheckRow
@@ -104,8 +106,11 @@ export function Console({
                   label={c.label}
                   value={
                     c.values
-                      .map((v) => fmt(v, c.digits ?? (c.unit === "%" ? 4 : 2)))
-                      .join(", ") + (c.unit === "%" ? "%" : " " + c.unit)
+                      .map((v) =>
+                        u.show(v, c.unit, c.digits ?? (c.unit === "%" ? 4 : 2)),
+                      )
+                      .join(", ") +
+                    (c.unit === "%" ? "%" : " " + u.label(c.unit))
                   }
                 />
               ))}

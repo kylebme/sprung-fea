@@ -1,6 +1,7 @@
 // Arrays the viewer draws: the engine's binary view (mesh and nodal results)
 // or the setup triangulation. Only type imports, so Node can test it directly.
 import type { Surface } from "./types";
+import { toShown, unitLabel, type UnitSystem } from "./units.ts";
 
 /**
  * Nodal results of one frame (a load step, mode, increment or frequency):
@@ -292,30 +293,52 @@ export function nodeProbe(view: ViewData, node: number): Probe | null {
   };
 }
 
-/** CSV column names and units of engine fields. */
-const CSV_COLUMNS: Record<string, string> = {
-  vonMises: "von_mises_MPa",
-  temperature: "temperature_C",
-  peeq: "plastic_strain",
-  heatFlux: "heat_flux_W_m2",
-  principalMax: "max_principal_MPa",
-  principalMin: "min_principal_MPa",
-  shear: "max_shear_tresca_MPa",
-  strain: "equivalent_strain_um_per_m",
-  strainMax: "max_principal_strain_um_per_m",
-  strainMin: "min_principal_strain_um_per_m",
-  amplitude: "displacement_amplitude_mm",
+/** CSV column names and SI working units of engine fields. */
+const CSV_COLUMNS: Record<string, [string, string]> = {
+  vonMises: ["von_mises", "MPa"],
+  principalMax: ["max_principal", "MPa"],
+  principalMin: ["min_principal", "MPa"],
+  shear: ["max_shear_tresca", "MPa"],
+  temperature: ["temperature", "°C"],
+  peeq: ["plastic_strain", "mm/mm"],
+  heatFlux: ["heat_flux", "W/m²"],
+  strain: ["equivalent_strain", "µm/m"],
+  strainMax: ["max_principal_strain", "µm/m"],
+  strainMin: ["min_principal_strain", "µm/m"],
+  amplitude: ["displacement_amplitude", "mm"],
+};
+/** Unit labels as column-name suffixes. */
+const SLUG: Record<string, string> = {
+  "°C": "C",
+  "°F": "F",
+  "W/m²": "W_m2",
+  "Btu/(hr·ft²)": "Btu_hr_ft2",
+  "µm/m": "um_per_m",
+  "µin/in": "uin_per_in",
+  "mm/mm": "mm_per_mm",
+  "in/in": "in_per_in",
 };
 
-/** Nodes on the part surface with the displayed frame's results, as CSV. */
-export function surfaceCsv(view: ViewData) {
+/** Nodes on the part surface with the displayed frame's results, as CSV,
+ * in the chosen unit system. */
+export function surfaceCsv(view: ViewData, system: UnitSystem = "si") {
   const names = Object.keys(view.fields);
   const d = view.displacement;
+  const suffix = (unit: string) => {
+    const label = unitLabel(unit, system);
+    return SLUG[label] ?? label;
+  };
+  const mm = suffix("mm");
+  const show = (v: number, unit: string) => toShown(v, unit, system);
   const lines = [
     [
-      "surface_node,x_mm,y_mm,z_mm",
-      ...(d ? ["ux_mm,uy_mm,uz_mm,displacement_mm"] : []),
-      ...names.map((n) => CSV_COLUMNS[n] || n),
+      `surface_node,x_${mm},y_${mm},z_${mm}`,
+      ...(d ? [`ux_${mm},uy_${mm},uz_${mm},displacement_${mm}`] : []),
+      ...names.map((n) =>
+        CSV_COLUMNS[n]
+          ? `${CSV_COLUMNS[n][0]}_${suffix(CSV_COLUMNS[n][1])}`
+          : n,
+      ),
     ].join(","),
   ];
   const used = new Uint8Array(view.nodeIds.length);
@@ -326,9 +349,15 @@ export function surfaceCsv(view: ViewData) {
     lines.push(
       [
         view.nodeIds[i],
-        ...view.points.subarray(i * 3, i * 3 + 3),
-        ...(d ? [...u, Math.hypot(...u)] : []),
-        ...names.map((n) => view.fields[n][i]),
+        ...Array.from(view.points.subarray(i * 3, i * 3 + 3), (v) =>
+          show(v, "mm"),
+        ),
+        ...(d ? [...u, Math.hypot(...u)].map((v) => show(v, "mm")) : []),
+        ...names.map((n) =>
+          CSV_COLUMNS[n]
+            ? show(view.fields[n][i], CSV_COLUMNS[n][1])
+            : view.fields[n][i],
+        ),
       ].join(","),
     );
   });
