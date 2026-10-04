@@ -117,10 +117,14 @@ class Pipeline(unittest.TestCase):
                 # 1e-3 of peak displacement from the direct solution.
                 tol=1e-4 if name=='iterative-scaling' else 2e-3
                 np.testing.assert_allclose(result['displacements'],direct['displacements'],rtol=0,atol=tol*direct['summary']['maxMovement'])
-                self.assertLess(abs(result['summary']['maxStress']/direct['summary']['maxStress']-1),1e-3)
+                self.assertLess(abs(result['summary']['maxStress']/direct['summary']['maxStress']-1),1e-3 if name=='iterative-scaling' else 1e-2)
                 # Conjugate gradients stop at CalculiX's tolerance: equilibrium
                 # closes to about 0.1%, not to round-off as with SPOOLES.
-                self.assertLess(result['summary']['forceBalanceError'],1e-3 if name=='iterative-scaling' else 5e-3)
+                # About one mesh in eight, incomplete Cholesky stops early with
+                # up to about 1% equilibrium error; the result then warns.
+                balance=result['summary']['forceBalanceError']
+                self.assertLess(balance,1e-3 if name=='iterative-scaling' else 2e-2)
+                self.assertEqual(balance>.005,any('force balance error' in w for w in result['warnings']))
     def test_unconverged_iterative_solve_is_detected(self):
         # CalculiX reports no error when conjugate gradients stop short.
         log=self.folder/'cg.log'

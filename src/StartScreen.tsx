@@ -17,7 +17,7 @@ export function StartScreen({
   onImport: () => void;
   onOpen: () => void;
   onRestore: () => void;
-  onSample: (name: "beam" | "bracket") => void;
+  onSample: (name: "beam" | "bracket" | "post-plate") => void;
   children?: ReactNode;
 }) {
   return (
@@ -79,6 +79,11 @@ export function StartScreen({
             <button onClick={() => onSample("bracket")} disabled={busy}>
               <b>Mounting bracket</b>
               <small>70 × 45 × 50 mm · 4 holes</small>
+              <span className="r">Open</span>
+            </button>
+            <button onClick={() => onSample("post-plate")} disabled={busy}>
+              <b>Post on plate</b>
+              <small>Assembly · 2 bonded bodies</small>
               <span className="r">Open</span>
             </button>
           </div>

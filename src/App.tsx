@@ -724,18 +724,32 @@ export default function App() {
   const exampleSetup = () => {
     if (!part) return;
     const faces = part.geometry.faces;
-    const held = faces.reduce((a, b) => (a.center[0] < b.center[0] ? a : b));
-    const loaded = faces.reduce((a, b) => (a.center[0] > b.center[0] ? a : b));
+    // The post stands on the plate: hold the plate's underside and push
+    // the top of the post sideways. Otherwise hold one end, load the other.
+    const tower = part.sample === "post-plate";
+    const axis = tower ? 2 : 0;
+    const held = faces.reduce((a, b) =>
+      a.center[axis] < b.center[axis] ? a : b,
+    );
+    const loaded = faces.reduce((a, b) =>
+      a.center[axis] > b.center[axis] ? a : b,
+    );
     update({
       ...study,
       material: structuredClone(MATERIALS[0]),
       supports: [{ ...blankSupport(), faces: [held.id] }],
-      loads: [{ ...blankLoad(), faces: [loaded.id] }],
+      loads: [
+        {
+          ...blankLoad(),
+          faces: [loaded.id],
+          vector: tower ? [100, 0, 0] : [0, 0, -100],
+        },
+      ],
     });
     setSection("mesh");
     setSelected([]);
     announce(
-      `Example setup: Aluminum 6061-T6, Face ${held.id} fixed, 100 N downward on Face ${loaded.id}`,
+      `Example setup: Aluminum 6061-T6, Face ${held.id} fixed, 100 N ${tower ? "sideways" : "downward"} on Face ${loaded.id}`,
     );
   };
 
@@ -970,10 +984,12 @@ export default function App() {
           <MaterialPanel
             key={study.material?.name}
             study={study}
+            bodies={part.geometry.bodies || []}
             onApply={(material) => {
               update({ ...study, material });
               if (!study.supports.length) setSection("supports");
             }}
+            onBodies={(bodyMaterials) => update({ ...study, bodyMaterials })}
           />
         );
       case "supports":
@@ -1027,7 +1043,14 @@ export default function App() {
                 draft: regionDraft,
                 result: regionResult,
                 showing: regionShown,
-                available: !fromProject && result.analysis === "static",
+                available:
+                  !fromProject &&
+                  result.analysis === "static" &&
+                  (part.geometry.bodies?.length ?? 1) <= 1,
+                unavailable:
+                  (part.geometry.bodies?.length ?? 1) > 1
+                    ? "Region refinement works on single parts for now, not assemblies."
+                    : "Solve the whole part in this session to refine a region.",
                 onStart: startRegion,
                 onDraft: setRegionDraft,
                 onSolve: solveRegion,

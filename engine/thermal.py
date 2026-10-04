@@ -99,13 +99,19 @@ def heat_lines(heat):
     return lines
 
 
-def thermal_material(material, expansion, zero):
-    """*CONDUCTIVITY (and *EXPANSION) inserted before the section line."""
-    lines=calculix.material_lines(material)
-    extra=['*CONDUCTIVITY',calculix.number(material['conductivity'])]
-    if expansion:
-        extra+=[f'*EXPANSION, ZERO={calculix.number(zero)}',calculix.number(material['expansion']*1e-6)]
-    return lines[:-1]+extra+lines[-1:]
+def thermal_material(model, study, expansion, zero):
+    """Materials with *CONDUCTIVITY (and *EXPANSION) for each body group."""
+    def extra(material):
+        out=['*CONDUCTIVITY',calculix.number(material['conductivity'])]
+        if expansion:
+            out+=[f'*EXPANSION, ZERO={calculix.number(zero)}',calculix.number(material['expansion']*1e-6)]
+        return out
+    return calculix.section_lines(model,study,extra)
+
+
+def check_materials(study, expansion):
+    check_material(study.get('material'),expansion)
+    for m in (study.get('bodyMaterials') or {}).values(): check_material(m,expansion)
 
 
 def initial_lines(model, temperature):
@@ -168,7 +174,7 @@ class Thermal(Analysis):
     name='Heat transfer'
 
     def validate(self, study, mesh):
-        check_material(study.get('material'),False)
+        check_materials(study,False)
         check_thermal(study.get('thermal') or [],mesh)
         return Model(mesh).nodes,set()
 
@@ -176,7 +182,7 @@ class Thermal(Analysis):
         self.validate(study,mesh)
         model=Model(mesh);heat=build_heat(study,model)
         lines=calculix.mesh_lines(model,'steady heat transfer study')
-        lines+=thermal_material(study['material'],False,REFERENCE)+initial_lines(model,reference(study))
+        lines+=thermal_material(model,study,False,REFERENCE)+initial_lines(model,reference(study))
         lines+=['*STEP','*HEAT TRANSFER, STEADY STATE','1., 1.']+heat_lines(heat)
         lines+=['*NODE FILE','NT, RFL','*EL FILE','HFL','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
@@ -208,7 +214,7 @@ class ThermalStress(Analysis):
 
     def validate(self, study, mesh):
         calculix.solver_of(study)
-        check_material(study.get('material'),True)
+        check_materials(study,True)
         reference(study)
         check_thermal(study.get('thermal') or [],mesh)
         supports=study.get('supports',[]);loads=study.get('loads',[])
@@ -229,7 +235,7 @@ class ThermalStress(Analysis):
         heat=build_heat(study,model)
         loading=build_loads(study,model,m['density']*1e-12)
         lines=calculix.mesh_lines(model,'steady thermal stress study')
-        lines+=thermal_material(m,True,reference(study))+initial_lines(model,reference(study))
+        lines+=thermal_material(model,study,True,reference(study))+initial_lines(model,reference(study))
         lines+=calculix.boundary_lines(fixed)
         lines+=['*STEP','*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE','1., 1.']+heat_lines(heat)
         lines+=calculix.load_lines(loading)

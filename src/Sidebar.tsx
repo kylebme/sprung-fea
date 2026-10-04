@@ -286,7 +286,11 @@ export function FaceList({
                 disabled={disabled}
               >
                 <b>{f.id}</b>
-                <span>{faceHint(f)}</span>
+                <span>
+                  {faceHint(f)}
+                  {(part.geometry.bodies?.length ?? 1) > 1 &&
+                    ` · ${part.geometry.bodies!.find((b) => b.id === f.body)?.name}`}
+                </span>
                 {u ? (
                   <span className={"tag " + u.kind}>{u.name}</span>
                 ) : (

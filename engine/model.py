@@ -92,9 +92,44 @@ class Model:
         self.coords=coords
         self._faces=None
 
+    def volumes(self):
+        """Volume of each element in mm³, by the four-point rule."""
+        return np.array([sum(w for _,_,w in tetra_points(np.array([self.nodes[n] for n in c]))) for c in self.mesh['elements']])
+
     def volume(self):
-        """Volume of the meshed part in mm³, by the four-point rule."""
-        return sum(w for c in self.mesh['elements'] for _,_,w in tetra_points(np.array([self.nodes[n] for n in c])))
+        return float(self.volumes().sum())
+
+    def body_elements(self):
+        """{body id: element ids}; a mesh from before assemblies is one body."""
+        return self.mesh.get('bodies') or {'1':self.mesh['elementIds']}
+
+    def components(self):
+        """Groups of bonded bodies, as lists of body ids (strings)."""
+        groups=self.mesh.get('components')
+        return [[str(b) for b in g] for g in groups] if groups else [list(self.body_elements())]
+
+    def materials(self, study):
+        """[(body ids, material, element ids)]: the part material, with any
+        body that has its own material split off."""
+        own=study.get('bodyMaterials') or {}
+        bodies=self.body_elements()
+        out=[];rest=[]
+        for b,elements in bodies.items():
+            if b in own: out.append(([b],own[b],elements))
+            else: rest+=[(b,elements)]
+        if rest: out.insert(0,([b for b,_ in rest],study['material'],[e for _,es in rest for e in es]))
+        return out
+
+    def densities(self, study):
+        """Density of each element in tonne/mm³ (kg/m³ × 1e-12)."""
+        index={e:i for i,e in enumerate(self.mesh['elementIds'])}
+        out=np.zeros(len(index))
+        for _,m,elements in self.materials(study):
+            for e in elements: out[index[e]]=m['density']*1e-12
+        return out
+
+    def body_number(self, body):
+        return list(self.body_elements()).index(str(body))+1
 
     def face_triangles(self, face):
         return self.mesh['faces'][str(face)]['triangles']
@@ -132,11 +167,7 @@ class Model:
         return out
 
 
-def validate(study, mesh):
-    """Checks the material, face references and support directions, and that
-    the supports remove all six rigid motions. Returns node coordinates and
-    the fixed (node, direction) pairs."""
-    material = study.get('material')
+def check_material(material):
     if not material:
         raise ValueError('Choose a material first.')
     finite(material['young'], 'Elastic modulus', True)
@@ -146,6 +177,21 @@ def validate(study, mesh):
     finite(material['density'], 'Density', True)
     if material.get('yield') is not None:
         finite(material['yield'], 'Yield strength', True)
+
+
+def check_materials(study, mesh):
+    check_material(study.get('material'))
+    bodies=set(mesh.get('bodies') or {'1':None})
+    for b,m in (study.get('bodyMaterials') or {}).items():
+        if b not in bodies: raise ValueError('A body material refers to a body this part does not have.')
+        check_material(m)
+
+
+def validate(study, mesh):
+    """Checks the material, face references and support directions, and that
+    the supports remove all six rigid motions. Returns node coordinates and
+    the fixed (node, direction) pairs."""
+    check_materials(study, mesh)
     supports = study.get('supports', [])
     loads = study.get('loads', [])
     if not supports:
@@ -186,18 +232,42 @@ def fixed_dofs(supports, model):
     return fixed
 
 
-def rigid_motions(fixed, model):
-    """Raises unless the blocked directions remove all six rigid motions."""
-    coords = model.coords
-    center = coords.mean(axis=0)
-    scale = max(np.ptp(coords,axis=0))
+def component_nodes(model):
+    """Node sets of each group of bonded bodies, with the groups' bodies."""
+    bodies=model.body_elements()
+    index={e:i for i,e in enumerate(model.mesh['elementIds'])}
+    out=[]
+    for group in model.components():
+        nodes=set()
+        for b in group:
+            for e in bodies[b]: nodes.update(model.mesh['elements'][index[e]])
+        out.append((group,nodes))
+    return out
+
+
+def free_motions(fixed, model, nodes):
+    """Rigid motions (0 to 6) that the blocked directions on `nodes` leave."""
+    coords=np.array([model.nodes[n] for n in nodes])
+    center=coords.mean(axis=0);scale=max(np.ptp(coords,axis=0))
     rows=[]
     for node,a in fixed:
-        x,y,z = (model.nodes[node]-center)/scale
+        if node not in nodes: continue
+        x,y,z=(model.nodes[node]-center)/scale
         rows.append([[1,0,0,0,z,-y],[0,1,0,-z,0,x],[0,0,1,y,-x,0]][a])
-    rank = np.linalg.matrix_rank(np.asarray(rows), tol=1e-8) if rows else 0
-    if rank < 6:
-        raise ValueError(f'The part can still move freely ({6-rank} rigid motions). Block additional directions or choose another support face.')
+    return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-8) if rows else 0))
+
+
+def rigid_motions(fixed, model):
+    """Raises unless the blocked directions remove all six rigid motions of
+    every group of bonded bodies."""
+    groups=component_nodes(model)
+    for group,nodes in groups:
+        free=free_motions(fixed,model,nodes)
+        if free:
+            if len(groups)==1:
+                raise ValueError(f'The part can still move freely ({free} rigid motions). Block additional directions or choose another support face.')
+            names=', '.join(f'Body {model.body_number(b)}' for b in group)
+            raise ValueError(f'{names} can still move freely ({free} rigid motions). Bodies are bonded only where their faces touch, so each separate group needs its own supports.')
 
 
 def check_masses(masses):
@@ -317,8 +387,10 @@ def rpm_to_rad(speed):
     return float(speed)*2*math.pi/60
 
 
-def build_loads(study, model, density):
-    """Equivalent loads for the study's load list. `density` is in tonne/mm³."""
+def build_loads(study, model, density=None):
+    """Equivalent loads for the study's load list. Body loads use each
+    element's density (tonne/mm³)."""
+    densities=model.densities(study)
     loading=Loading()
     lookup=model.element_faces()
     for l in study['loads']:
@@ -370,7 +442,7 @@ def build_loads(study, model, density):
         force=np.zeros(3);force[a]=v;loading.add_applied(n,force)
     if np.any(loading.gravity) or loading.rotation:
         if loading.rotation: omega,origin,axis=loading.rotation
-        for c in model.mesh['elements']:
+        for c,density in zip(model.mesh['elements'],densities):
             for N,x,w in tetra_points(np.array([model.nodes[n] for n in c])):
                 body=loading.gravity.copy()
                 if loading.rotation:
@@ -412,27 +484,15 @@ def rbe3(model, faces, point, limit=60):
 
 
 def rigid_count(fixed, model):
-    """How many rigid motions the blocked directions leave free (0 to 6)."""
-    coords=model.coords
-    center=coords.mean(axis=0);scale=max(np.ptp(coords,axis=0))
-    rows=[]
-    for node,a in fixed:
-        x,y,z=(model.nodes[node]-center)/scale
-        rows.append([[1,0,0,0,z,-y],[0,1,0,-z,0,x],[0,0,1,y,-x,0]][a])
-    return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-8) if rows else 0))
+    """How many rigid motions the blocked directions leave free, over all
+    groups of bonded bodies."""
+    return sum(free_motions(fixed,model,nodes) for _,nodes in component_nodes(model))
 
 
 def validate_vibration(study, mesh):
     """Material with density, valid supports (optional) and point masses.
     Loads play no part. Returns (model, fixed, free rigid motions)."""
-    material=study.get('material')
-    if not material:
-        raise ValueError('Choose a material first.')
-    finite(material['young'],'Elastic modulus',True)
-    nu=finite(material['poisson'],'Poisson ratio')
-    if not -1<nu<.499:
-        raise ValueError('Poisson ratio must lie between -1 and 0.499. Nearly incompressible materials need a different formulation.')
-    finite(material['density'],'Density',True)
+    check_materials(study,mesh)
     masses=study.get('masses') or []
     check_faces(study.get('supports',[])+masses,mesh)
     check_masses(masses)

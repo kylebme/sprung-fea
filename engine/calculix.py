@@ -152,6 +152,22 @@ def material_lines(m, name='MAT', elset='PART'):
             '*DENSITY',number(m['density']*1e-12),f'*SOLID SECTION, ELSET={elset}, MATERIAL={name}']
 
 
+def section_lines(model, study, extra=lambda m: []):
+    """Materials and solid sections: one for the part, or one per group of
+    bodies with the same material. `extra(material)` adds keyword lines
+    (thermal properties) to each material."""
+    groups=model.materials(study)
+    if len(groups)==1:
+        lines=material_lines(groups[0][1])
+        return lines[:-1]+extra(groups[0][1])+lines[-1:]
+    out=[]
+    for k,(_,m,elements) in enumerate(groups,1):
+        out+=[f'*ELSET, ELSET=BODIES{k}']+rows(sorted(elements))
+        lines=material_lines(m,f'MAT{k}',f'BODIES{k}')
+        out+=lines[:-1]+extra(m)+lines[-1:]
+    return out
+
+
 def boundary_lines(fixed):
     lines=['*BOUNDARY']+[f'{n}, {a+1}, {a+1}, 0' for n,a in sorted(fixed)]
     lines+=['*NSET, NSET=HELD']+rows(sorted(set(n for n,_ in fixed)))

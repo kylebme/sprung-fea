@@ -81,6 +81,12 @@ export function PartPanel({
           <em>mm³</em>
         </Row>
         <Row label="Faces">{part.geometry.faces.length}</Row>
+        {(part.geometry.bodies?.length ?? 1) > 1 && (
+          <Row label="Bodies">
+            {part.geometry.bodies!.length}
+            <em>bonded where they touch</em>
+          </Row>
+        )}
         <Row label="Units">mm · N · MPa</Row>
         <p className="note">
           STEP lengths are converted to millimetres. Check the size against your
@@ -221,10 +227,15 @@ const PRESET_NAMES = MATERIALS.map((m) => m.name);
 
 export function MaterialPanel({
   study,
+  bodies,
   onApply,
+  onBodies,
 }: {
   study: Study;
+  /** Bodies of an assembly; empty for a single part. */
+  bodies: { id: number; name: string; volume: number }[];
   onApply: (m: Material) => void;
+  onBodies: (own: Record<string, Material> | undefined) => void;
 }) {
   const [material, setMaterial] = useState<Material>(() =>
     structuredClone(study.material || MATERIALS[0]),
@@ -240,6 +251,53 @@ export function MaterialPanel({
   return (
     <>
       <Head small="Material" title={study.material?.name || "Not set"} />
+      {bodies.length > 1 && (
+        <div className="sec">
+          <h4>Bodies</h4>
+          {bodies.map((b) => {
+            const own = study.bodyMaterials?.[String(b.id)];
+            return (
+              <label className="field" key={b.id}>
+                <span>
+                  {b.name}
+                  <b className="mono">{fmt(b.volume, 0)} mm³</b>
+                </span>
+                <select
+                  className="input"
+                  aria-label={`${b.name} material`}
+                  value={own?.name ?? ""}
+                  onChange={(e) => {
+                    const next = { ...(study.bodyMaterials || {}) };
+                    const preset = MATERIALS.find(
+                      (m) => m.name === e.target.value,
+                    );
+                    if (preset) next[String(b.id)] = structuredClone(preset);
+                    else delete next[String(b.id)];
+                    onBodies(Object.keys(next).length ? next : undefined);
+                  }}
+                >
+                  <option value="">
+                    Part material
+                    {study.material ? ` (${study.material.name})` : ""}
+                  </option>
+                  {MATERIALS.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.name}
+                    </option>
+                  ))}
+                  {own && !MATERIALS.some((m) => m.name === own.name) && (
+                    <option value={own.name}>{own.name}</option>
+                  )}
+                </select>
+              </label>
+            );
+          })}
+          <p className="note">
+            Bodies are bonded where their faces touch. The material below
+            applies to every body not given its own.
+          </p>
+        </div>
+      )}
       <div className="sec">
         <h4>Presets</h4>
         <div className="presets">
@@ -1064,6 +1122,8 @@ export type RegionState = {
   result: RegionResult | null;
   showing: boolean;
   available: boolean;
+  /** Why refinement is unavailable, shown when it is. */
+  unavailable: string;
   onStart: () => void;
   onDraft: (r: Region | null) => void;
   onSolve: () => void;
@@ -1668,7 +1728,7 @@ function RegionControls({ region }: { region: RegionState }) {
       )}
       {!region.available ? (
         <p className="note" style={{ marginTop: 0 }}>
-          Solve the whole part in this session to refine a region.
+          {region.unavailable}
         </p>
       ) : draft ? (
         <>

@@ -98,6 +98,15 @@ const COLORS = {
 };
 // Axis colors, shared with the X, Y and Z inputs (--x, --y, --z in CSS).
 const AXES = ["#e5484d", "#3dae6b", "#3f74e0"];
+/** Tints that tell the bodies of an assembly apart. */
+const BODY_TINTS = [
+  "#7a8a99",
+  "#5b8ccf",
+  "#c9a35b",
+  "#7fb07a",
+  "#b07ab0",
+  "#6fb3b3",
+];
 const VIEW_ANGLE = 35;
 const VTK_QUADRATIC_TETRA = 24;
 /**
@@ -688,7 +697,15 @@ export class Scene {
     const massed = new Set(s.study.masses.flatMap((c) => c.faces));
     const heated = new Set((s.study.thermal || []).flatMap((c) => c.faces));
     const byFace = new Map<number, number[]>();
+    const bodies = [...new Set(s.faces.map((f) => f.body))];
     for (const f of s.faces) {
+      const plain = !(
+        s.selected.includes(f.id) ||
+        supported.has(f.id) ||
+        loaded.has(f.id) ||
+        massed.has(f.id) ||
+        heated.has(f.id)
+      );
       let c = rgb(
         s.selected.includes(f.id)
           ? pick
@@ -702,6 +719,13 @@ export class Scene {
                   ? colors.thermalFace
                   : colors.base,
       );
+      // Assemblies: each body gets its own tint of the base color.
+      if (plain && bodies.length > 1)
+        c = mix(
+          c,
+          rgb(BODY_TINTS[bodies.indexOf(f.body) % BODY_TINTS.length]),
+          0.22,
+        );
       if (f.id === s.hovered) c = mix(c, rgb(colors.hover), 0.35);
       byFace.set(
         f.id,

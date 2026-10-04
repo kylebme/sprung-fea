@@ -77,7 +77,8 @@ def nodal(frame, label, ids, count, what):
 def mass_check(study, model):
     """Mass of the meshed part plus point masses, so density and units can be
     checked at a glance."""
-    part=model.volume()*study['material']['density']*1e-9
+    # Element volumes (mm³) × densities (tonne/mm³), in kg.
+    part=float(np.dot(model.volumes(),model.densities(study)))*1e3
     extra=sum(float(m['mass']) for m in study.get('masses') or [])
     label='Mass, part + point masses' if extra else 'Mass'
     return {'label':label,'values':[part+extra],'unit':'kg','digits':4}
@@ -146,7 +147,7 @@ class Static(Analysis):
         loading=build_loads(study, model, m['density']*1e-12)
         large=large_deformation(study)
         lines=calculix.mesh_lines(model, 'static study, large deformation' if large else 'linear static study')
-        lines+=calculix.material_lines(m)+calculix.boundary_lines(fixed)
+        lines+=calculix.section_lines(model,study)+calculix.boundary_lines(fixed)
         if large:
             # Automatic load steps: start at 10%, at most 25%, results at each.
             lines+=['*STEP, NLGEOM, INC=200','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0],
@@ -181,6 +182,9 @@ class Static(Analysis):
         yield_strength=study['material'].get('yield')
         warnings=['Peak stress at sharp corners or support edges may increase with refinement. Check a finer mesh before relying on a result.']
         if yield_strength and max_stress>yield_strength: warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation.')
+        if calculix.solver_of(study)!='spooles' and balance>.005 and not follower:
+            # CalculiX's incomplete-Cholesky solver occasionally stops early.
+            warnings.append(f'The iterative solver stopped with a {balance*100:.2g}% force balance error. Use the direct solver for a tighter answer.')
         if large:
             warnings.append('Large deformation: stiffness follows the deformed shape, so results are not proportional to the loads. The material is still linear elastic.')
             if follower: warnings.append('Pressure follows the deformed surface and rotation the deformed shape, so their resultant changes with deformation: force balance is not checked.')
@@ -245,7 +249,7 @@ class Frequency(Analysis):
         count=modes_of(study)
         masses=study.get('masses') or []
         lines=calculix.mesh_lines(model,'natural frequency study')
-        lines+=calculix.material_lines(study['material'])
+        lines+=calculix.section_lines(model,study)
         if fixed: lines+=calculix.boundary_lines(fixed)
         lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],fixed)
         # A free part needs a negative shift: its stiffness is singular.
@@ -310,7 +314,7 @@ class Buckling(Analysis):
         m=study['material']
         loading=build_loads(study,model,m['density']*1e-12)
         lines=calculix.mesh_lines(model,'linear buckling study')
-        lines+=calculix.material_lines(m)+calculix.boundary_lines(fixed)
+        lines+=calculix.section_lines(model,study)+calculix.boundary_lines(fixed)
         lines+=['*STEP','*BUCKLE, SOLVER=SPOOLES',str(count)]
         lines+=calculix.load_lines(loading)
         lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']

@@ -9,9 +9,17 @@ export type Face = {
   anchor: number[];
   normal: number[];
   indices: number[];
+  /** The body this face belongs to. */
+  body?: number;
 };
 export type Surface = { positions: number[]; nodeIds: number[]; faces: Face[] };
+/** A solid of the STEP file. Touching bodies are bonded. */
+export type Body = { id: number; name: string; volume: number };
 export type Geometry = Surface & {
+  /** Present for files read since assemblies; one body for a single part. */
+  bodies?: Body[];
+  /** Groups of bonded bodies, by body id. */
+  components?: number[][];
   bounds: number[];
   dimensions: number[];
   volume: number;
@@ -107,6 +115,8 @@ export type Study = {
   loads: Load[];
   masses: PointMass[];
   thermal: ThermalCondition[];
+  /** Assemblies: bodies with their own material, by body id. */
+  bodyMaterials?: Record<string, Material>;
   /** Temperature at which the part is free of thermal stress, °C. */
   referenceTemperature?: number;
   /** Static studies: follow the deformed shape (geometric nonlinearity). */
@@ -228,7 +238,7 @@ export type Part = {
   id: string;
   name: string;
   geometry: Geometry;
-  sample?: "beam" | "bracket";
+  sample?: "beam" | "bracket" | "post-plate";
 };
 export type Axis = 0 | 1 | 2;
 /**

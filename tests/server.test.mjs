@@ -319,6 +319,21 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       });
       assert.equal(response.status, 400, load.kind);
     }
+    // Assemblies: the bonded example has two bodies, and body materials
+    // must name bodies by number.
+    const assembly = await request(base, "/api/sample/post-plate", {});
+    const assemblyGeometry = await wait(base, assembly.job);
+    assert.equal(assembly.name, "Post on plate.step");
+    assert.deepEqual(
+      assemblyGeometry.bodies.map((b) => b.name),
+      ["Body 1", "Body 2"],
+    );
+    assert.deepEqual(assemblyGeometry.components, [[1, 2]]);
+    const badBody = await post(`/api/documents/${imported.id}/solve`, {
+      ...study,
+      bodyMaterials: { first: study.material },
+    });
+    assert.equal(badBody.status, 400);
     const notBoolean = await post(`/api/documents/${imported.id}/solve`, {
       ...study,
       largeDeformation: "yes",

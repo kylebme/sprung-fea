@@ -33,6 +33,7 @@ def check_region(region, bounds):
 
 def cut(step, lo, hi):
     """Loads the part and replaces it with its intersection with the box."""
+    if gmsh.isInitialized(): gmsh.finalize()
     gmsh.initialize()
     gmsh.option.setNumber('General.Terminal',0)
     gmsh.option.setNumber('General.NumThreads',threads())
@@ -156,6 +157,8 @@ def submodel(folder, study, region):
         raise ValueError('Solve the whole part before refining a region.')
     parent=json.loads((folder/'mesh.json').read_text())
     geometry=json.loads((folder/'geometry.json').read_text())
+    if len(geometry.get('bodies') or [None])>1:
+        raise ValueError('Region refinement works on single parts for now, not assemblies.')
     lo,hi=check_region(region,geometry['bounds'])
     target=folder/'region';target.mkdir(exist_ok=True)
     emit('meshing','Cutting the region from the part')

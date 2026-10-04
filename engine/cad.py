@@ -15,6 +15,8 @@ def threads():
 
 
 def initialize(step):
+    # Start from an empty model, even after an earlier failure left one.
+    if gmsh.isInitialized(): gmsh.finalize()
     gmsh.initialize()
     gmsh.option.setNumber('General.Terminal', 0)
     gmsh.option.setNumber('General.NumThreads', threads())
@@ -22,11 +24,40 @@ def initialize(step):
     gmsh.model.occ.importShapes(str(step))
     gmsh.model.occ.synchronize()
     solids = gmsh.model.getEntities(3)
-    if len(solids) != 1:
-        raise ValueError(f'Import one solid part. This STEP contains {len(solids)} solids. Export a single solid from your CAD tool.')
-    if gmsh.model.occ.getMass(*solids[0]) <= 0:
-        raise ValueError('The part has no solid volume. Export a closed solid as STEP.')
-    return solids[0]
+    if not solids:
+        raise ValueError('This STEP contains no solids. Export the part as a solid body, not surfaces.')
+    if any(gmsh.model.occ.getMass(*s) <= 0 for s in solids):
+        raise ValueError('A body has no solid volume. Export closed solids as STEP.')
+    if len(solids) > 1:
+        # A bonded assembly: fragmenting makes touching bodies share their
+        # contact faces, so the mesh is continuous across them. A single
+        # solid skips this, which keeps its face numbers.
+        _, parts = gmsh.model.occ.fragment(solids, [])
+        gmsh.model.occ.synchronize()
+        if any(len(p) != 1 for p in parts) or len(gmsh.model.getEntities(3)) != len(solids):
+            raise ValueError('Some bodies overlap. Bonded bodies must touch without overlapping: check your CAD model for interference.')
+        solids = gmsh.model.getEntities(3)
+    return solids
+
+
+def topology():
+    """Bodies and how faces join them: {face: [volume tags]}. A face with one
+    volume is on the outside; one with two is a bonded contact."""
+    return {tag: [int(v) for v in gmsh.model.getAdjacencies(2, tag)[0]] for _, tag in gmsh.model.getEntities(2)}
+
+
+def bodies(solids, adjacency):
+    """Body list and the groups of bodies bonded to each other."""
+    out = [{'id': tag, 'name': f'Body {i+1}', 'volume': gmsh.model.occ.getMass(3, tag)} for i, (_, tag) in enumerate(solids)]
+    group = {b['id']: b['id'] for b in out}
+    def root(b):
+        while group[b] != b: b = group[b]
+        return b
+    for volumes in adjacency.values():
+        if len(volumes) == 2: group[root(volumes[0])] = root(volumes[1])
+    components = {}
+    for b in out: components.setdefault(root(b['id']), []).append(b['id'])
+    return out, sorted(components.values())
 
 
 def size_settings(size):
@@ -51,11 +82,15 @@ def preview_settings(dims):
 
 
 def surface_data(quadratic=False):
+    """Nodes and the outer faces, each with its body. Bonded contact faces
+    are inside the assembly and are left out."""
     tags, coords, _ = gmsh.model.mesh.getNodes()
     coords = np.asarray(coords).reshape(-1, 3)
     node_index = {int(t): i for i, t in enumerate(tags)}
     faces = []
+    adjacency = topology()
     for _, tag in gmsh.model.getEntities(2):
+        if len(adjacency[tag]) != 1: continue
         et, _, en = gmsh.model.mesh.getElements(2, tag)
         tris = []
         for typ, nodes in zip(et, en):
@@ -76,6 +111,7 @@ def surface_data(quadratic=False):
         closest,param=gmsh.model.getClosestPoint(2,tag,anchor)
         normal=gmsh.model.getNormal(tag,param)
         faces.append({'anchor':closest.tolist(),'normal':normal.tolist(),'id': tag, 'name': f'Face {tag}', 'type': gmsh.model.getType(2, tag),
+                      'body': adjacency[tag][0],
                       'area': gmsh.model.occ.getMass(2, tag), 'center': list(gmsh.model.occ.getCenterOfMass(2, tag)), 'indices': tris})
     return {'positions': coords.flatten().tolist(), 'nodeIds': [int(t) for t in tags], 'faces': faces}
 
@@ -121,14 +157,19 @@ def mesh_info(mesh):
 
 def import_part(folder):
     emit('importing', 'Reading STEP geometry')
-    solid = initialize(folder / 'part.step')
-    bbox = gmsh.model.getBoundingBox(*solid)
+    solids = initialize(folder / 'part.step')
+    bbox = gmsh.model.getBoundingBox(-1, -1)
     dims = [bbox[i+3]-bbox[i] for i in range(3)]
-    default = max(min(dims) / 2.5, max(dims) / 60)
+    # A starting element size: the thinnest body's smallest extent over 2.5,
+    # but no finer than 1/60 of the whole. One body: its bounding box.
+    thinnest = min(min(b[i+3]-b[i] for i in range(3)) for b in (gmsh.model.getBoundingBox(*s) for s in solids))
+    default = max(thinnest / 2.5, max(dims) / 60)
     preview_settings(dims)
     gmsh.model.mesh.generate(2)
     geometry = surface_data()
-    geometry.update({'bounds': list(bbox), 'dimensions': dims, 'volume': gmsh.model.occ.getMass(*solid),
+    body_list, components = bodies(solids, topology())
+    geometry.update({'bodies': body_list, 'components': components,
+                     'bounds': list(bbox), 'dimensions': dims, 'volume': sum(b['volume'] for b in body_list),
                      'recommendedSize': default, 'hash': hashlib.sha256((folder/'part.step').read_bytes()).hexdigest(), 'units': 'mm'})
     (folder/'geometry.json').write_text(json.dumps(geometry))
     gmsh.finalize()
@@ -159,12 +200,18 @@ def mesh_model(folder, size, finalize=True):
     conn = np.asarray(conn).reshape(-1, 10)
     surface = surface_data(True)
     faces = {}
+    adjacency = topology()
     for _, tag in gmsh.model.getEntities(2):
+        if len(adjacency[tag]) != 1: continue
         nt, _, _ = gmsh.model.mesh.getNodes(2, tag, includeBoundary=True)
         _, tn = gmsh.model.mesh.getElementsByType(9, tag)
         faces[str(tag)] = {'nodes': [int(n) for n in nt], 'triangles': np.asarray(tn).reshape(-1,6).tolist()}
     quality = np.asarray(gmsh.model.mesh.getElementQualities(tags, 'minSICN'))
-    mesh = {'surface': surface, 'elementIds': [int(t) for t in tags], 'elements': conn.tolist(),
+    solids = gmsh.model.getEntities(3)
+    elements = {str(v): [int(e) for e in gmsh.model.mesh.getElements(3, v)[1][0]] for _, v in solids}
+    body_list, components = bodies(solids, adjacency)
+    mesh = {'bodies': elements, 'components': components,
+            'surface': surface, 'elementIds': [int(t) for t in tags], 'elements': conn.tolist(),
             'faces': faces, 'size': size, 'nodeCount': len(surface['nodeIds']), 'elementCount': len(tags),
             'minQuality': float(quality.min())}
     if mesh['minQuality'] <= 0:

@@ -95,8 +95,7 @@ export function validateStudy(s) {
     throw new RequestError("Ask for 1 to 50 modes.");
   if (!SOLVERS.includes(s.solver))
     throw new RequestError("The solver setting is invalid.");
-  if (s.material) {
-    const m = s.material;
+  const material = (m) => {
     text(m.name, "Material name");
     number(m.young, "Elastic modulus", { positive: true });
     number(m.poisson, "Poisson ratio");
@@ -108,6 +107,22 @@ export function validateStudy(s) {
     if (m.conductivity != null)
       number(m.conductivity, "Thermal conductivity", { positive: true });
     if (m.expansion != null) number(m.expansion, "Thermal expansion");
+  };
+  if (s.material) material(s.material);
+  // Assemblies: bodies with their own material, by body id.
+  if (s.bodyMaterials !== undefined) {
+    if (
+      !s.bodyMaterials ||
+      typeof s.bodyMaterials !== "object" ||
+      Array.isArray(s.bodyMaterials) ||
+      Object.keys(s.bodyMaterials).length > 1000
+    )
+      throw new RequestError("This project contains an invalid study setup.");
+    for (const [id, m] of Object.entries(s.bodyMaterials)) {
+      if (!/^\d{1,9}$/.test(id))
+        throw new RequestError("A body material refers to an invalid body.");
+      material(m);
+    }
   }
   // Studies saved before thermal analysis have no thermal conditions.
   s.thermal ??= [];

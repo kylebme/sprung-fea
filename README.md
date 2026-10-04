@@ -28,7 +28,7 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 
 ## A first study
 
-1. Open the cantilever beam example, or import `.step`/`.stp` containing one solid.
+1. Open an example, or import `.step`/`.stp`. A file with several solids is an assembly: bodies are bonded where their faces touch, and each body can have its own material.
 2. Choose the analysis: linear static (stress and deflection) natural frequencies (vibration modes), buckling (how far the loads can grow before a slender part buckles), heat transfer (settled temperatures), or thermal stress (stress from expansion against the supports). Check the dimensions shown after import. Working units are **mm, N, MPa**; STEP length units are converted to mm by OpenCASCADE.
 3. Choose a material. The built-in values are representative; enter the actual material specification when needed.
 4. Add a support and select CAD faces in the model or face list. "Fixed" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
@@ -53,7 +53,7 @@ Study edits invalidate results. Undo/redo preserves setup history. Autosave reta
 - CalculiX RF output is corrected for applied nodal loads before reporting support reactions. Force balance is available in result interpretation.
 - Stress contours use the solver's averaged nodal stress tensor, converted to von Mises stress.
 
-Static analysis assumes isotropic elastic material and slowly applied loads; small deformation unless Large deformation is turned on in the Analysis settings. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Assemblies, shells, contact, transient heat, fatigue, nonlinear, and forced-response dynamic analyses are outside this release.
+Static analysis assumes isotropic elastic material and slowly applied loads; small deformation unless Large deformation is turned on in the Analysis settings. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Shells, sliding contact between bodies, transient heat, fatigue, nonlinear, and forced-response dynamic analyses are outside this release.
 
 ## Tests
 
@@ -74,6 +74,7 @@ The committed `samples/` corpus includes a filleted bearing block with counterbo
 To regenerate these fixtures (optional; ordinary tests need no CadQuery installation):
 
 ```sh
+.venv/bin/python scripts/generate-assembly-samples.py  # assembly fixtures (Gmsh)
 python3 -m venv .cad-venv
 .cad-venv/bin/pip install cadquery==2.7.0
 .cad-venv/bin/python scripts/generate-complex-samples.py

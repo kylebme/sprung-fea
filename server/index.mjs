@@ -219,8 +219,12 @@ export async function createServer({
     res.json({ id, name: req.file.originalname, job: run("import", dir) });
   });
   app.post("/api/sample/:name", async (req, res) => {
-    if (!["beam", "bracket"].includes(req.params.name))
-      return res.sendStatus(404);
+    const samples = {
+      beam: "Cantilever beam.step",
+      bracket: "Mounting bracket.step",
+      "post-plate": "Post on plate.step",
+    };
+    if (!samples[req.params.name]) return res.sendStatus(404);
     const id = randomUUID();
     const dir = folder(id);
     await fs.mkdir(dir);
@@ -230,10 +234,7 @@ export async function createServer({
     );
     res.json({
       id,
-      name:
-        req.params.name === "beam"
-          ? "Cantilever beam.step"
-          : "Mounting bracket.step",
+      name: samples[req.params.name],
       sample: req.params.name,
       job: run("import", dir),
     });
@@ -272,7 +273,9 @@ export async function createServer({
       document: id,
       name,
       study,
-      sample: ["beam", "bracket"].includes(sample) ? sample : undefined,
+      sample: ["beam", "bracket", "post-plate"].includes(sample)
+        ? sample
+        : undefined,
       at: Date.now(),
     };
     await fs.writeFile(
