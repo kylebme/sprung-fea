@@ -68,10 +68,17 @@ def bundle_windows():
         for entry in getattr(pe,'DIRECTORY_ENTRY_IMPORT',[]):
             name=entry.dll.decode().lower()
             dep=source.parent/entry.dll.decode()
-            if name in seen or not dep.is_file():continue
+            # API-set names (api-ms-win-crt-*) always resolve inside Windows.
+            if name in seen or name.startswith(('api-ms-','ext-ms-')) or not dep.is_file():continue
             seen.add(name);shutil.copy2(dep,solver/dep.name);queue.append(dep)
         pe.close()
 
 
 {'darwin':bundle_mac,'win32':bundle_windows}.get(sys.platform,bundle_linux)()
+# The bundled solver must start from its own folder alone. A missing library
+# fails here, silently, with no version banner (ccx -v exits nonzero anyway).
+check=subprocess.run([str(solver/('ccx.exe' if sys.platform=='win32' else 'ccx')),'-v'],capture_output=True,text=True,
+                     env={k:v for k,v in os.environ.items() if k not in ('PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH')})
+if 'This is Version' not in check.stdout:
+    sys.exit(f'The bundled solver does not start (exit {check.returncode}): {check.stdout}{check.stderr}')
 print('Standalone engine:',runtime/'sprung-fea-engine','with solver',sorted(p.name for p in solver.iterdir()))

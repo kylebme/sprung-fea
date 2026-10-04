@@ -64,7 +64,9 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: calculix
-          create-args: calculix=2.23
+          # OpenBLAS: MKL, the Windows default, loads its kernels at run
+          # time, so they cannot be found and bundled from the imports.
+          create-args: calculix=2.23 libblas=*=*openblas
           init-shell: none
           cache-environment: true
 
