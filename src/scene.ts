@@ -28,6 +28,8 @@ export type SceneState = {
   yieldStrength: number | null;
   filters: Filters;
   probe: Probe | null;
+  /** A box outline: the region being refined, by its corners. */
+  region: { lo: number[]; hi: number[] } | null;
 };
 
 export type SceneEvents = {
@@ -328,7 +330,7 @@ export class Scene {
       return { source: glyph, data, actor };
     });
 
-    this.links = [0, 1].map(() => {
+    this.links = [0, 1, 2].map(() => {
       const data = make("vtkPolyData");
       const actor = this.actor(this.mapper({ data }));
       actor.getMapper().scalarVisibilityOff();
@@ -431,6 +433,7 @@ export class Scene {
     )
       this.filter();
     if (model || changed("probe", "deformation")) this.placeMarker();
+    if (model || changed("region", "theme")) this.drawRegion();
     if (changed("projection")) this.project(next.projection);
     if (changed("theme")) {
       // Matches the viewport's CSS gradient tokens (--view-a, --view-b).
@@ -795,6 +798,36 @@ export class Scene {
       g.actor.getProperty().setColor(...rgb(color));
       g.actor.setVisibility(items.length ? 1 : 0);
     });
+  }
+
+  /** The outline of the region box. */
+  private drawRegion() {
+    const s = this.state!;
+    const link = this.links[2];
+    const lines: number[] = [];
+    if (s.region) {
+      const { lo, hi } = s.region;
+      const corner = (i: number) =>
+        [0, 1, 2].map((a) => ((i >> a) & 1 ? hi[a] : lo[a]));
+      for (let i = 0; i < 8; i++)
+        for (let a = 0; a < 3; a++)
+          if (!((i >> a) & 1))
+            lines.push(...corner(i), ...corner(i | (1 << a)));
+    }
+    const pts = this.vtk.vtkPoints();
+    const coords = this.array(Float64Array.from(lines), 3);
+    pts.setData(coords);
+    link.data.setPoints(pts);
+    const cells = this.cells(
+      Int32Array.from({ length: lines.length / 3 }, (_, k) => k),
+      2,
+    );
+    link.data.setLines(cells);
+    link.data.modified();
+    for (const o of [pts, coords, cells]) o.$delete();
+    link.actor.getProperty().setColor(...rgb(COLORS[s.theme].select));
+    link.actor.getProperty().setLineWidth(2);
+    link.actor.setVisibility(lines.length ? 1 : 0);
   }
 
   private filter() {

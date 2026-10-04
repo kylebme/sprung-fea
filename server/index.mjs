@@ -1,5 +1,5 @@
 import express from "express";
-import { validateStudy, RequestError } from "./validation.mjs";
+import { validateRegion, validateStudy, RequestError } from "./validation.mjs";
 import multer from "multer";
 import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
@@ -321,7 +321,7 @@ export async function createServer({
     const { id, action } = req.params;
     if (action === "save") return next();
     const dir = folder(id);
-    if (!["mesh", "solve", "converge"].includes(action))
+    if (!["mesh", "solve", "converge", "submodel"].includes(action))
       return res.sendStatus(404);
     await fs.access(path.join(dir, "geometry.json"));
     await touch(id);
@@ -333,7 +333,8 @@ export async function createServer({
       return res
         .status(409)
         .json({ error: "A job is already running for this part." });
-    validateStudy(req.body);
+    validateStudy(action === "submodel" ? req.body?.study : req.body);
+    if (action === "submodel") validateRegion(req.body.region);
     // Threads are a machine preference, not part of the study: CalculiX
     // gives identical results with any count.
     let threads = cpus.performance;
@@ -408,8 +409,13 @@ export async function createServer({
     });
   });
   // Mesh and nodal results for the viewer, in the engine's binary layout.
+  // ?region=1 serves the refined region of a submodel solve.
   app.get("/api/documents/:id/view", async (req, res) => {
-    const target = path.join(folder(req.params.id), "view.bin");
+    const target = path.join(
+      folder(req.params.id),
+      req.query.region ? "region" : "",
+      "view.bin",
+    );
     try {
       await fs.access(target);
     } catch {
@@ -430,6 +436,9 @@ export async function createServer({
       log: "solver.log",
       mesh: "part.msh",
       frd: "analysis.frd",
+      "region-deck": "region/analysis.inp",
+      "region-log": "region/solver.log",
+      "region-frd": "region/analysis.frd",
     };
     const file = allowed[req.params.file];
     if (!file) return res.sendStatus(404);
@@ -442,7 +451,8 @@ export async function createServer({
       });
     }
     await touch(req.params.id);
-    res.download(target, file);
+    // Development data lives in .bettersim/, which send() ignores by default.
+    res.download(target, path.basename(file), { dotfiles: "allow" });
   });
   app.use(express.static(path.join(root, "dist")));
   app.get("/", (_, res) => res.sendFile(path.join(root, "dist", "index.html")));

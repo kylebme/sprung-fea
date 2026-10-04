@@ -181,8 +181,23 @@ export type ResultInfo = {
   nodeCount: number;
   elementCount: number;
 };
+/** A box (center and size, mm) re-solved on a finer mesh: a submodel. */
+export type Region = { center: number[]; size: number[]; meshSize: number };
+/** Faces of a solved region: cut faces carry the whole-part solution. */
+export type RegionFace = {
+  id: number;
+  type: string;
+  area: number;
+  original: number | null;
+  cut: boolean;
+};
 /** Nodal displacement and stress live in `view`, with the mesh they belong to. */
 export type Result = ResultInfo & { view: ViewData };
+export type RegionResult = Result & {
+  region: Region;
+  bounds: number[];
+  faces: RegionFace[];
+};
 export type Part = {
   id: string;
   name: string;

@@ -142,6 +142,12 @@ def mesh_part(folder, study):
     size = float(study.get('meshSize') or geo['recommendedSize'])
     if not math.isfinite(size) or size <= 0:
         raise ValueError('Mesh size must be a positive number in mm.')
+    return mesh_model(folder, size)
+
+
+def mesh_model(folder, size, finalize=True):
+    """Meshes the solids loaded in the current Gmsh model with quadratic
+    tetrahedra and writes mesh.json, view.bin and part.msh to folder."""
     size_settings(size)
     gmsh.model.mesh.generate(3)
     gmsh.model.mesh.setOrder(2)
@@ -166,5 +172,5 @@ def mesh_part(folder, study):
     (folder/'mesh.json').write_text(json.dumps(mesh))
     write_view(folder,mesh_view(mesh))
     gmsh.write(str(folder/'part.msh'))
-    gmsh.finalize()
+    if finalize: gmsh.finalize()
     return mesh

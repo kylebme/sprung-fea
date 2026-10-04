@@ -45,6 +45,7 @@ type Props = {
   marginMax: number;
   yieldStrength: number | null;
   filters: Filters;
+  region: { lo: number[]; hi: number[] } | null;
 };
 
 export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
@@ -126,6 +127,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       yieldStrength: p.yieldStrength,
       filters: p.filters,
       probe: p.probe,
+      region: p.region,
     };
     scene.update(state);
     const area = scene.sectionArea();

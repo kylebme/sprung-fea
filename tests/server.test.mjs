@@ -33,7 +33,12 @@ test("STEP → portable project → reopen → real solve → export", async () 
   const dir = await fs.mkdtemp(
     path.join(os.tmpdir(), "bettersim-server-test-"),
   );
-  const service = await createServer({ port: 0, dataDir: dir });
+  // Development keeps documents under .bettersim/: downloads must still work
+  // from a hidden folder.
+  const service = await createServer({
+    port: 0,
+    dataDir: path.join(dir, ".bettersim"),
+  });
   const base = `http://127.0.0.1:${service.port}`;
   try {
     const imported = await request(base, "/api/sample/beam", {});

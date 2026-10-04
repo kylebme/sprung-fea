@@ -75,6 +75,8 @@ import {
   type Condition,
   type ConditionKind,
   type ConvergenceOptions,
+  type Region,
+  type RegionResult,
   type Threads,
   type Cpus,
 } from "./types";
@@ -120,8 +122,10 @@ const defaultFilters = (geometry: Geometry): Filters => ({
   iso: { on: false, level: 0.5 },
   threshold: { on: false, level: 0.75 },
 });
-const fetchView = async (id: string) => {
-  const response = await fetch(`/api/documents/${id}/view`);
+const fetchView = async (id: string, region = false) => {
+  const response = await fetch(
+    `/api/documents/${id}/view${region ? "?region=1" : ""}`,
+  );
   if (!response.ok) throw Error((await response.json()).error);
   return decodeView(await response.arrayBuffer());
 };
@@ -149,6 +153,10 @@ export default function App() {
     [notice, setNotice] = useState(""),
     [plot, setPlot] = useState<Plot>("stress"),
     [frame, setFrame] = useState(0),
+    // Submodel: the box being edited, its solved result, and which is shown.
+    [regionDraft, setRegionDraft] = useState<Region | null>(null),
+    [regionResult, setRegionResult] = useState<RegionResult | null>(null),
+    [showRegion, setShowRegion] = useState(false),
     [convergeOptions, setConvergeOptions] = useState<ConvergenceOptions>({
       runs: 3,
       tolerance: 0.02,
@@ -260,6 +268,9 @@ export default function App() {
   };
   const clearResults = () => {
     setResult(null);
+    setRegionResult(null);
+    setRegionDraft(null);
+    setShowRegion(false);
     setFromProject(false);
     setProbe(null);
     setComparison(null);
@@ -702,11 +713,84 @@ export default function App() {
         )
       : [0, 0, 0],
   };
-  // The displayed frame of the result, and what it can show.
+  // The displayed result (the whole part or a refined region), its frame,
+  // and what it can show.
+  const regionShown = showRegion && !!regionResult;
+  const displayed: Result | null = regionShown ? regionResult : result;
   const shown = useMemo(
-    () => (result ? atFrame(result.view, frame) : null),
-    [result, frame],
+    () => (displayed ? atFrame(displayed.view, frame) : null),
+    [displayed, frame],
   );
+  const regionBox = useMemo(() => {
+    const r = regionDraft || (!regionShown && regionResult?.region) || null;
+    return r
+      ? {
+          lo: r.center.map((c, i) => c - r.size[i] / 2),
+          hi: r.center.map((c, i) => c + r.size[i] / 2),
+        }
+      : null;
+  }, [regionDraft, regionResult, regionShown]);
+  const viewGeometry = useMemo(
+    () =>
+      part && regionShown && regionResult
+        ? { ...part.geometry, bounds: regionResult.bounds, faces: [] }
+        : part?.geometry,
+    [part, regionShown, regionResult],
+  );
+  /** A starting box: a quarter of the part around the peak stress. */
+  const startRegion = () => {
+    if (!part || !result) return;
+    const node = peak(atFrame(result.view, 0), "stress", null).node;
+    const i = result.view.nodeIds.indexOf(node);
+    const center = Array.from(result.view.points.subarray(i * 3, i * 3 + 3));
+    const side = Math.max(
+      Math.max(...part.geometry.dimensions) / 4,
+      3 * (mesh?.size || study.meshSize),
+    );
+    setRegionDraft({
+      center: center.map((c) => Number(c.toPrecision(4))),
+      size: [side, side, side].map((v) => Number(v.toPrecision(3))),
+      meshSize: Number(((mesh?.size || study.meshSize) / 3).toPrecision(3)),
+    });
+  };
+  const solveRegion = async () => {
+    if (!part || !regionDraft || job) return;
+    const operation = ++sequence.current;
+    setError(null);
+    try {
+      const count =
+        threads === "single" ? 1 : threads === "all" && cpus ? cpus.logical : 0;
+      const j = await post(
+        `/documents/${part.id}/submodel${count ? "?threads=" + count : ""}`,
+        { study, region: regionDraft },
+      );
+      const data = await poll(j.job, "solve");
+      if (!data) return;
+      const view = await fetchView(part.id, true);
+      if (sequence.current !== operation) return;
+      setRegionResult({
+        ...normalizeResult(data.result as ResultInfo),
+        view,
+        region: regionDraft,
+        bounds: data.geometry.bounds,
+        faces: data.geometry.faces,
+      });
+      setRegionDraft(null);
+      setShowRegion(true);
+      setProbe(null);
+      setFrame(0);
+      const s = data.result.summary;
+      write(
+        "region",
+        `${fmt(data.mesh.elementCount)} elements · peak ${fmt(s.globalPeak, 3)} → ${fmt(s.maxStress, 3)} MPa`,
+        "done",
+      );
+    } catch (e) {
+      fail("Region solve failed", e);
+    } finally {
+      if (sequence.current === operation) finish();
+    }
+  };
   const yieldStrength = study.material?.yield || null;
   const plots = shown ? availablePlots(shown, yieldStrength) : [];
   const activePlot: Plot = plots.includes(plot) ? plot : plots[0] || plot;
@@ -751,11 +835,17 @@ export default function App() {
   };
   const exportSolver = async (kind: "deck" | "log" | "frd") => {
     if (!part) return;
+    const prefix = regionShown ? "region-" : "";
     try {
-      const response = await fetch(`/api/documents/${part.id}/export/${kind}`);
+      const response = await fetch(
+        `/api/documents/${part.id}/export/${prefix}${kind}`,
+      );
       if (!response.ok) throw Error((await response.json()).error);
       await saveFile(
-        { deck: "analysis.inp", log: "solver.log", frd: "analysis.frd" }[kind],
+        prefix +
+          { deck: "analysis.inp", log: "solver.log", frd: "analysis.frd" }[
+            kind
+          ],
         await response.text(),
       );
     } catch (e) {
@@ -853,7 +943,21 @@ export default function App() {
           shown &&
           stats && (
             <ResultsPanel
-              result={result}
+              result={displayed!}
+              region={{
+                draft: regionDraft,
+                result: regionResult,
+                showing: regionShown,
+                available: !fromProject && result.analysis === "static",
+                onStart: startRegion,
+                onDraft: setRegionDraft,
+                onSolve: solveRegion,
+                onShow: (on: boolean) => {
+                  setShowRegion(on);
+                  setProbe(null);
+                  setFrame(0);
+                },
+              }}
               mesh={mesh}
               study={study}
               plot={activePlot}
@@ -868,7 +972,7 @@ export default function App() {
               wire={wire}
               probe={probe}
               filters={filters!}
-              bounds={part.geometry.bounds}
+              bounds={viewGeometry!.bounds}
               scale={stats.scale}
               sectionArea={sectionArea}
               onFilters={setFilters}
@@ -1086,8 +1190,9 @@ export default function App() {
             <div className="viewport">
               <Viewer
                 ref={viewer}
-                geometry={part.geometry}
+                geometry={viewGeometry!}
                 view={shown || mesh?.view || null}
+                region={regionBox}
                 plot={result && plots.length ? activePlot : null}
                 study={shownStudy}
                 selected={selected}
@@ -1113,9 +1218,11 @@ export default function App() {
                     <b>{PLOTS[activePlot].name}</b>
                     <span>
                       {PLOTS[activePlot].unit} · nodal
-                      {result.frames.length > 1
-                        ? " · " + result.frames[frame]?.label
-                        : ""}
+                      {regionShown
+                        ? " · refined region"
+                        : result.frames.length > 1
+                          ? " · " + result.frames[frame]?.label
+                          : ""}
                     </span>
                   </>
                 ) : draft && isBody ? (
@@ -1250,7 +1357,7 @@ export default function App() {
             </div>
             <Console
               log={log}
-              result={result}
+              result={displayed}
               open={consoleOpen}
               tab={consoleTab}
               onOpen={setConsoleOpen}

@@ -39,6 +39,8 @@ import {
   type Load,
   type LoadKind,
   type PointMass,
+  type Region,
+  type RegionResult,
   type Material,
   type Mesh,
   type Part,
@@ -844,8 +846,20 @@ export type PlotStats = {
   scale: { min: number; max: number };
 };
 
+export type RegionState = {
+  draft: Region | null;
+  result: RegionResult | null;
+  showing: boolean;
+  available: boolean;
+  onStart: () => void;
+  onDraft: (r: Region | null) => void;
+  onSolve: () => void;
+  onShow: (on: boolean) => void;
+};
+
 export function ResultsPanel({
   result,
+  region,
   mesh,
   study,
   plot,
@@ -876,6 +890,7 @@ export function ResultsPanel({
   onSolverFile,
 }: {
   result: Result;
+  region: RegionState;
   mesh: Mesh | null;
   study: Study;
   plot: Plot;
@@ -1034,55 +1049,59 @@ export function ResultsPanel({
         sectionArea={sectionArea}
         onChange={onFilters}
       />
-      <div className="sec">
-        <h4>Mesh convergence</h4>
-        {result.convergence && (
-          <ConvergenceReport report={result.convergence} />
-        )}
-        {comparison && !result.convergence && (
-          <div className="comparison">
-            <Row label="Elements">
-              {fmt(comparison.before.elementCount)} → {fmt(result.elementCount)}
-            </Row>
-            {result.keys.map((k) => {
-              const before = comparison.before.keys.find(
-                (b) => b.id === k.id,
-              )?.value;
-              return (
-                before !== undefined && (
-                  <Row key={k.id} label={k.label + " change"}>
-                    {fmt(Math.abs(k.value / before - 1) * 100, 2)}
-                    <em>%</em>
-                  </Row>
-                )
-              );
-            })}
-            <div style={{ height: 8 }} />
-          </div>
-        )}
-        {!result.convergence && !comparison && (
-          <p className="note" style={{ marginTop: 0 }}>
-            Results depend on the mesh. Solve on finer meshes until the numbers
-            stop changing.
-          </p>
-        )}
-        <ConvergenceControls
-          options={convergeOptions}
-          onChange={onConvergeOptions}
-        />
-        <button
-          className="btn primary full"
-          onClick={onConverge}
-          disabled={busy}
-        >
-          <Layers size={14} />
-          Check mesh convergence
-        </button>
-        <button className="btn full" onClick={onRefine} disabled={busy}>
-          Re-solve once with {fmt((mesh?.size || study.meshSize) * 0.7, 2)} mm
-          mesh
-        </button>
-      </div>
+      {!region.showing && (
+        <div className="sec">
+          <h4>Mesh convergence</h4>
+          {result.convergence && (
+            <ConvergenceReport report={result.convergence} />
+          )}
+          {comparison && !result.convergence && (
+            <div className="comparison">
+              <Row label="Elements">
+                {fmt(comparison.before.elementCount)} →{" "}
+                {fmt(result.elementCount)}
+              </Row>
+              {result.keys.map((k) => {
+                const before = comparison.before.keys.find(
+                  (b) => b.id === k.id,
+                )?.value;
+                return (
+                  before !== undefined && (
+                    <Row key={k.id} label={k.label + " change"}>
+                      {fmt(Math.abs(k.value / before - 1) * 100, 2)}
+                      <em>%</em>
+                    </Row>
+                  )
+                );
+              })}
+              <div style={{ height: 8 }} />
+            </div>
+          )}
+          {!result.convergence && !comparison && (
+            <p className="note" style={{ marginTop: 0 }}>
+              Results depend on the mesh. Solve on finer meshes until the
+              numbers stop changing.
+            </p>
+          )}
+          <ConvergenceControls
+            options={convergeOptions}
+            onChange={onConvergeOptions}
+          />
+          <button
+            className="btn primary full"
+            onClick={onConverge}
+            disabled={busy}
+          >
+            <Layers size={14} />
+            Check mesh convergence
+          </button>
+          <button className="btn full" onClick={onRefine} disabled={busy}>
+            Re-solve once with {fmt((mesh?.size || study.meshSize) * 0.7, 2)} mm
+            mesh
+          </button>
+        </div>
+      )}
+      <RegionControls region={region} />
       <div className="sec">
         <h4>Export</h4>
         <div className="exports">
@@ -1309,6 +1328,124 @@ function FramePicker({
           onChange={(e) => onFrame(Number(e.target.value))}
         />
       </label>
+    </div>
+  );
+}
+
+/**
+ * Submodeling: re-solve a box around a hot spot on a finer mesh, driven by
+ * the whole-part solution at the box's cut faces.
+ */
+function RegionControls({ region }: { region: RegionState }) {
+  const { draft, result } = region;
+  const s = result?.summary;
+  return (
+    <div className="sec region">
+      <h4>Refine a region</h4>
+      {result && (
+        <div className="seg" role="group" aria-label="Show result">
+          {(
+            [
+              [false, "Whole part"],
+              [true, "Region"],
+            ] as const
+          ).map(([on, label]) => (
+            <button
+              key={label}
+              className={region.showing === on ? "on" : ""}
+              aria-pressed={region.showing === on}
+              onClick={() => region.onShow(on)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {result && s && (
+        <div style={{ marginTop: 8 }}>
+          <Row label="Peak stress, whole part">
+            {fmt(s.globalPeak as number, 3)}
+            <em>MPa</em>
+          </Row>
+          <Row label="Peak stress, refined region">
+            {fmt(s.maxStress!, 3)}
+            <em>MPa</em>
+          </Row>
+          <Row label="Cut-face agreement">
+            {fmt((s.boundaryDifference as number) * 100, 1)}
+            <em>% of peak</em>
+          </Row>
+          <p className="note">
+            {(s.boundaryDifference as number) <= 0.1
+              ? "The region's cut faces agree with the whole part, so the refined stress inside it can be trusted."
+              : "The cut faces disagree with the whole part: they are too close to the hot spot. Make the region larger."}
+          </p>
+        </div>
+      )}
+      {!region.available ? (
+        <p className="note" style={{ marginTop: 0 }}>
+          Solve the whole part in this session to refine a region.
+        </p>
+      ) : draft ? (
+        <>
+          <VectorField
+            label="Center, mm"
+            name="region center"
+            value={draft.center}
+            onChange={(center) => region.onDraft({ ...draft, center })}
+          />
+          <VectorField
+            label="Size, mm"
+            name="region size"
+            value={draft.size}
+            onChange={(size) => region.onDraft({ ...draft, size })}
+          />
+          <NumberField
+            label="Region element size"
+            unit="mm"
+            value={draft.meshSize}
+            onChange={(meshSize) => region.onDraft({ ...draft, meshSize })}
+          />
+          <p className="note">
+            Keep the box's faces away from the hot spot: they follow the
+            whole-part solution.
+          </p>
+          <div className="row2" style={{ marginTop: 10 }}>
+            <button className="btn" onClick={() => region.onDraft(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn primary"
+              onClick={region.onSolve}
+              disabled={
+                draft.size.some((v) => !(v > 0)) || !(draft.meshSize > 0)
+              }
+            >
+              Solve region
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {!result && (
+            <p className="note" style={{ marginTop: 0 }}>
+              Re-solve a box around a hot spot with a much finer mesh. The rest
+              of the part supplies its boundary.
+            </p>
+          )}
+          <button
+            className="btn full"
+            style={{ marginTop: 8 }}
+            onClick={() => {
+              region.onShow(false);
+              if (result) region.onDraft(result.region);
+              else region.onStart();
+            }}
+          >
+            {result ? "Edit region" : "Refine a region"}
+          </button>
+        </>
+      )}
     </div>
   );
 }

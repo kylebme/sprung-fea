@@ -46,6 +46,18 @@ const faces = (v) => {
     throw new RequestError("Select valid, unique faces.");
   return v;
 };
+/** A submodel region: a box (center and size in mm) and its element size. */
+export function validateRegion(r) {
+  if (!r || typeof r !== "object")
+    throw new RequestError("Define the region to refine.");
+  vector(r.center, "region center");
+  vector(r.size, "region size");
+  if (r.size.some((v) => v <= 0))
+    throw new RequestError("The region needs a positive size in X, Y and Z.");
+  number(r.meshSize, "Region element size", { positive: true });
+  return r;
+}
+
 export function validateStudy(s) {
   if (
     !s ||

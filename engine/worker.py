@@ -13,6 +13,7 @@ from model import (QUAD, triangle_weights, triangle_vector_weights, tetra_weight
 from calculix import SOLVERS, solver_of, find_ccx, read_log, parse_frd
 from analyses import ANALYSES, analysis_of, write_deck, solve
 from convergence import converge
+from submodel import submodel
 
 
 def validate(study, mesh):
@@ -37,6 +38,10 @@ def main():
             mesh,solved=converge(folder,payload['study'],payload.get('options') or {})
             (folder/'result.json').write_text(json.dumps(solved))
             result={'mesh':mesh_info(mesh),'result':{k:v for k,v in solved.items() if k not in FIELDS}}
+        elif command=='submodel':
+            # The payload carries the solved study and the region box.
+            mesh,solved,geometry=submodel(folder,payload['study'],payload['region'])
+            result={'mesh':mesh_info(mesh),'result':{k:v for k,v in solved.items() if k not in FIELDS},'geometry':geometry}
         else: raise ValueError('Unknown worker command.')
         print(json.dumps({'ok':True,'data':result}))
     except Exception as error:

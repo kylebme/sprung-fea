@@ -36,7 +36,8 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 6. Optionally add point masses for components you are not modeling, such as a motor: its mass, its center of mass, and the faces it is bolted to.
 7. Start with the Medium mesh. Preview it or run directly; Solve meshes automatically. The direct solver (SPOOLES) is the default; for large meshes choose an iterative solver (incomplete Cholesky or diagonal scaling), which needs far less memory. Mesh size and element count are not limited by the app.
 8. Inspect stress, movement, and yield margin. Click the part, or a section through it, to probe interpolated values, or show the peak node. Cut the part with a section plane, show an iso-surface, or threshold the critical region. Deformation magnification is displayed explicitly.
-9. Check mesh convergence: BetterSim solves on finer meshes until displacement and peak stress settle, charts them, and flags a peak stress that keeps rising at a sharp corner. Save a `.bsim` project, nodal CSV, viewport PNG, solver deck, or log.
+9. Refine a region: re-solve a box around a hot spot on a much finer mesh, driven by the whole-part solution at its cut faces. BetterSim reports whether the cut faces agree with the whole part.
+10. Check mesh convergence: BetterSim solves on finer meshes until displacement and peak stress settle, charts them, and flags a peak stress that keeps rising at a sharp corner. Save a `.bsim` project, nodal CSV, viewport PNG, solver deck, or log.
 
 Study edits invalidate results. Undo/redo preserves setup history. Autosave retains the most recent geometry and setup. A portable `.bsim` embeds both, plus the latest results, and can be opened on another machine. Saved results are shown only when the geometry and study match exactly, so stale plots are never presented as current.
 
