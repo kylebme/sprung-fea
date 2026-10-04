@@ -108,6 +108,11 @@ export function validateStudy(s) {
     if (m.conductivity != null)
       number(m.conductivity, "Thermal conductivity", { positive: true });
     if (m.expansion != null) number(m.expansion, "Thermal expansion");
+    // Plasticity: ultimate strength (MPa) and elongation at break (%).
+    if (m.ultimate != null)
+      number(m.ultimate, "Ultimate strength", { positive: true });
+    if (m.elongation != null)
+      number(m.elongation, "Elongation at break", { positive: true });
   };
   if (s.material) material(s.material);
   // Assemblies: bodies with their own material, by body id.
@@ -142,11 +147,9 @@ export function validateStudy(s) {
     number(c.value, "Thermal value", { positive: c.kind === "convection" });
     if (c.kind === "convection") number(c.ambient, "Ambient temperature");
   }
-  if (
-    s.largeDeformation !== undefined &&
-    typeof s.largeDeformation !== "boolean"
-  )
-    throw new RequestError("Large deformation must be on or off.");
+  for (const key of ["largeDeformation", "plasticity", "unload"])
+    if (s[key] !== undefined && typeof s[key] !== "boolean")
+      throw new RequestError("A study setting must be on or off.");
   // Harmonic response: frequency range (Hz), damping ratio, excitation.
   if (s.harmonic !== undefined) {
     const h = s.harmonic;

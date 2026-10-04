@@ -202,8 +202,43 @@ export function AnalysisPanel({
           <p className="note">
             For parts that bend or twist far enough to change how they carry
             load, such as thin strips, clips and springs. The load is applied in
-            steps and the solve takes longer. The material stays elastic.
+            steps and the solve takes longer.
           </p>
+          <div className="switch-row" style={{ marginTop: 10 }}>
+            <span>Plasticity</span>
+            <button
+              className={"switch" + (study.plasticity ? " on" : "")}
+              role="switch"
+              aria-checked={!!study.plasticity}
+              aria-label="Plasticity"
+              onClick={() =>
+                onChange({ ...study, plasticity: !study.plasticity })
+              }
+            />
+          </div>
+          <p className="note">
+            Lets the material yield: beyond the yield strength it hardens in a
+            straight line up to the ultimate strength at the elongation at
+            break. Shows plastic strain, and how loads beyond yield spread.
+          </p>
+          {study.plasticity && (
+            <div className="switch-row" style={{ marginTop: 10 }}>
+              <span>Then remove the loads</span>
+              <button
+                className={"switch" + (study.unload ? " on" : "")}
+                role="switch"
+                aria-checked={!!study.unload}
+                aria-label="Then remove the loads"
+                onClick={() => onChange({ ...study, unload: !study.unload })}
+              />
+            </div>
+          )}
+          {study.plasticity && (
+            <p className="note">
+              Unloading shows the permanent bend left behind, and the residual
+              stress locked in.
+            </p>
+          )}
         </div>
       )}
       {current.eigen && (
@@ -378,6 +413,18 @@ export function MaterialPanel({
           value={material.expansion ?? 0}
           unit="µm/(m·°C)"
           onChange={(v) => edit({ expansion: v || null })}
+        />
+        <NumberField
+          label="Ultimate strength"
+          value={material.ultimate ?? 0}
+          unit="MPa"
+          onChange={(v) => edit({ ultimate: v || null })}
+        />
+        <NumberField
+          label="Elongation at break"
+          value={material.elongation ?? 0}
+          unit="%"
+          onChange={(v) => edit({ elongation: v || null })}
         />
         <p className="note">
           Preset values are typical. Use your material's specification.
@@ -1520,10 +1567,7 @@ export function ResultsPanel({
             {w}
           </p>
         ))}
-      <p className="foot">
-        Linear elastic, isotropic, small deformation, static load. Peak stress
-        at supports and sharp corners can keep rising with refinement.
-      </p>
+      <p className="foot">{assumptions(study, result)}</p>
     </>
   );
 }
@@ -1987,4 +2031,33 @@ function HarmonicSettings({
       </p>
     </div>
   );
+}
+
+/** The modeling assumptions behind a result, in one line. */
+function assumptions(study: Study, result: Result) {
+  const material = study.plasticity
+    ? "Elastic–plastic, isotropic"
+    : "Linear elastic, isotropic";
+  const peak =
+    " Peak stress at supports and sharp corners can keep rising with refinement.";
+  switch (result.analysis) {
+    case "static":
+      return (
+        `${material}, ${study.largeDeformation ? "large" : "small"} deformation, slowly applied loads.` +
+        peak
+      );
+    case "thermalStress":
+      return (
+        "Linear elastic, isotropic, small deformation, steady temperatures." +
+        peak
+      );
+    case "thermal":
+      return "Steady heat conduction with constant conductivity; no radiation.";
+    case "frequency":
+      return "Linear elastic, small vibrations about the unloaded shape; no damping.";
+    case "buckling":
+      return "Linear buckling of a perfect shape: real parts buckle at lower loads.";
+    case "harmonic":
+      return "Linear elastic, steady sinusoidal vibration, the same damping in every mode.";
+  }
 }

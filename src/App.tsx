@@ -376,7 +376,11 @@ export default function App() {
     }
     // Load steps of a large-deformation solve: show full load, true scale.
     const steps = r.charts.some((c) => c.id === "loadPath");
-    if (steps) setFrame(r.frames.length - 1);
+    if (steps) {
+      // Full load: the last step at the highest load, before any unloading.
+      const loads = r.charts.find((c) => c.id === "loadPath")!.x.values;
+      setFrame(loads.lastIndexOf(Math.max(...loads)));
+    }
     setDeform(eigen || harmonic ? "auto" : steps ? "true" : "off");
   };
   const importPart = async (
@@ -527,6 +531,14 @@ export default function App() {
     !study.material ? "Material" : null,
     needs.thermal && study.material && !study.material.conductivity
       ? "Thermal conductivity"
+      : null,
+    study.analysis === "static" &&
+    study.plasticity &&
+    study.material &&
+    (!study.material.yield ||
+      !study.material.ultimate ||
+      !study.material.elongation)
+      ? "Yield, ultimate strength and elongation"
       : null,
     study.analysis === "thermalStress" &&
     study.material &&

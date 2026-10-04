@@ -63,8 +63,12 @@ def run(folder, name='analysis'):
     # No time limit: large models can solve for a long time, and the user can
     # cancel the job.
     log_path=folder/'solver.log'
+    # Stream through a pipe: written straight to a file, CalculiX loses its
+    # last buffered lines (the error message) when it exits with an error.
     with open(log_path,'w') as log:
-        process=subprocess.run([find_ccx(),'-i',name],cwd=folder,stdout=log,stderr=subprocess.STDOUT,env=env)
+        process=subprocess.Popen([find_ccx(),'-i',name],cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,text=True)
+        for line in process.stdout: log.write(line)
+        process.wait()
     error,tail,iterative=read_log(log_path)
     if process.returncode != 0 or error or not (folder/f'{name}.frd').exists():
         raise ValueError(failure(tail)+'\n'+tail[-2500:])

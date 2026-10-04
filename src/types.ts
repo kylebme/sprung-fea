@@ -37,6 +37,10 @@ export type Material = {
   conductivity?: number | null;
   /** Thermal expansion, µm/(m·°C); thermal stress needs it. */
   expansion?: number | null;
+  /** Ultimate tensile strength, MPa; plasticity needs it. */
+  ultimate?: number | null;
+  /** Elongation at break, %; plasticity needs it. */
+  elongation?: number | null;
 };
 export type Support = {
   id: string;
@@ -138,6 +142,10 @@ export type Study = {
   harmonic?: Harmonic;
   /** Static studies: follow the deformed shape (geometric nonlinearity). */
   largeDeformation?: boolean;
+  /** Static studies: let the material yield (bilinear hardening). */
+  plasticity?: boolean;
+  /** With plasticity: remove the loads afterwards, to show permanent set. */
+  unload?: boolean;
   /** Modes to find in vibration studies. */
   modes?: number;
   meshSize: number;
@@ -280,6 +288,8 @@ export const MATERIALS: Material[] = [
     yield: 276,
     conductivity: 167,
     expansion: 23.6,
+    ultimate: 310,
+    elongation: 12,
   },
   {
     name: "Structural steel",
@@ -289,6 +299,8 @@ export const MATERIALS: Material[] = [
     yield: 250,
     conductivity: 50,
     expansion: 12,
+    ultimate: 400,
+    elongation: 20,
   },
   {
     name: "Stainless steel 304",
@@ -298,6 +310,8 @@ export const MATERIALS: Material[] = [
     yield: 215,
     conductivity: 16.2,
     expansion: 17.3,
+    ultimate: 505,
+    elongation: 40,
   },
   {
     name: "Titanium Ti-6Al-4V",
@@ -307,6 +321,8 @@ export const MATERIALS: Material[] = [
     yield: 880,
     conductivity: 6.7,
     expansion: 8.6,
+    ultimate: 950,
+    elongation: 14,
   },
 ];
 export const emptyStudy = (): Study => ({

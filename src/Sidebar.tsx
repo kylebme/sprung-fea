@@ -125,8 +125,12 @@ export function StudyTree({
         label="Analysis"
         value={
           study.analysis === "static" && study.largeDeformation
-            ? "Large deformation"
-            : analysisName(study)
+            ? study.plasticity
+              ? "Large deformation, plastic"
+              : "Large deformation"
+            : study.analysis === "static" && study.plasticity
+              ? "Plastic"
+              : analysisName(study)
         }
         active={section === "analysis"}
         onClick={() => onSection("analysis")}

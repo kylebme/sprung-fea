@@ -129,6 +129,39 @@ class Analysis:
         raise NotImplementedError
 
 
+def plasticity(study):
+    value=study.get('plasticity',False)
+    if not isinstance(value,bool): raise ValueError('Plasticity must be on or off.')
+    return value
+
+
+def unloading(study):
+    value=study.get('unload',False)
+    if not isinstance(value,bool): raise ValueError('Unloading must be on or off.')
+    return value
+
+
+def check_plastic(m):
+    """An elastic–plastic material needs yield, ultimate strength above it,
+    and an elongation at break beyond the elastic strain at ultimate."""
+    name=m.get('name','The material')
+    if not m.get('yield'):
+        raise ValueError(f'Enter the yield strength of {name} for plasticity.')
+    if m.get('ultimate') is None or m.get('elongation') is None:
+        raise ValueError(f'Enter the ultimate strength and elongation at break of {name} for plasticity.')
+    if not m['ultimate']>m['yield']:
+        raise ValueError(f'The ultimate strength of {name} must be above its yield strength.')
+    if not m['elongation']/100>m['ultimate']/m['young']:
+        raise ValueError(f'The elongation at break of {name} is smaller than its elastic strain at ultimate strength.')
+
+
+def plastic_lines(m):
+    """Bilinear isotropic hardening: yield at no plastic strain, ultimate at
+    the plastic part of the elongation at break; flat beyond."""
+    strain=m['elongation']/100-m['ultimate']/m['young']
+    return ['*PLASTIC',f"{calculix.number(m['yield'])}, 0",f"{calculix.number(m['ultimate'])}, {calculix.number(strain)}"]
+
+
 def large_deformation(study):
     value=study.get('largeDeformation',False)
     if not isinstance(value,bool):
@@ -140,36 +173,54 @@ class Static(Analysis):
     id='static'
     name='Linear static'
 
+    def validate(self, study, mesh):
+        nodes,fixed=super().validate(study,mesh)
+        if plasticity(study):
+            for m in [study['material'],*(study.get('bodyMaterials') or {}).values()]: check_plastic(m)
+        unloading(study)
+        return nodes,fixed
+
     def deck(self, folder, study, mesh):
         nodes, fixed = self.validate(study, mesh)
         model=Model(mesh)
-        m=study['material']
-        loading=build_loads(study, model, m['density']*1e-12)
-        large=large_deformation(study)
-        lines=calculix.mesh_lines(model, 'static study, large deformation' if large else 'linear static study')
-        lines+=calculix.section_lines(model,study)+calculix.boundary_lines(fixed)
-        if large:
+        loading=build_loads(study, model)
+        large=large_deformation(study);plastic=plasticity(study)
+        title='static study'+(', large deformation' if large else '')+(', elastic–plastic' if plastic else '')
+        lines=calculix.mesh_lines(model, title if large or plastic else 'linear static study')
+        lines+=calculix.section_lines(model,study,plastic_lines if plastic else (lambda m:[]))
+        lines+=calculix.boundary_lines(fixed)
+        solver='*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]
+        output=['*NODE FILE','U, RF','*EL FILE','S, E'+(', PEEQ' if plastic else ''),'*NODE PRINT, NSET=HELD, TOTALS=YES','RF']
+        step='*STEP'+(', NLGEOM' if large else '')+', INC=200'
+        if large or plastic:
             # Automatic load steps: start at 10%, at most 25%, results at each.
-            lines+=['*STEP, NLGEOM, INC=200','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0],
-                    '0.1, 1.0, 1e-5, 0.25']
+            lines+=[step,solver,'0.1, 1.0, 1e-5, 0.25']
         else:
-            lines+=['*STEP','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]]
-        lines+=calculix.load_lines(loading)
-        lines+=['*NODE FILE','U, RF','*EL FILE','S, E','*NODE PRINT, NSET=HELD, TOTALS=YES','RF','*END STEP']
+            lines+=['*STEP',solver]
+        lines+=calculix.load_lines(loading)+output+['*END STEP']
+        if plastic and unloading(study):
+            # A second step removes every load: what stays is permanent.
+            lines+=[step,solver,'0.25, 1.0, 1e-5, 0.5','*CLOAD, OP=NEW','*DLOAD, OP=NEW']+output+['*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
         (folder/'applied.json').write_text(json.dumps({n:v.tolist() for n,v in loading.applied.items()}))
         return {'fixed':fixed,'loading':loading}
 
     def results(self, folder, study, model, frames, context):
-        large=large_deformation(study)
-        steps=frames if large else frames[-1:]
+        large=large_deformation(study);plastic=plasticity(study)
+        stepped=large or plastic
+        steps=frames if stepped else frames[-1:]
         ids=model.ids
         view=[]
         for f in steps:
             u=nodal(f,'DISP',ids,3,'displacement and stress')
-            view.append({'displacement':u,**measures(f,ids)})
-        frame=frames[-1]
-        displacements=view[-1]['displacement'];stress=view[-1]['vonMises']
+            fields={'displacement':u,**measures(f,ids)}
+            # Averaging integration points to nodes can dip below zero.
+            if plastic: fields['peeq']=np.maximum(0,nodal(f,'PE',ids,1,'plastic strain')[:,0])
+            view.append(fields)
+        # The fully loaded state: the last frame of the loading step.
+        full=max(i for i,f in enumerate(steps) if not stepped or f['value']<=1+1e-9)
+        frame=steps[full]
+        displacements=view[full]['displacement'];stress=view[full]['vonMises']
         movement=np.linalg.norm(displacements,axis=1)
         checks,reactions,total_load,balance=static_checks(frame,context['fixed'],context['loading'])
         follower=large and any(l['kind'] in ('pressure','rotation') for l in study['loads'])
@@ -181,12 +232,19 @@ class Static(Analysis):
         max_stress=float(stress.max()); max_move=float(movement.max())
         yield_strength=study['material'].get('yield')
         warnings=['Peak stress at sharp corners or support edges may increase with refinement. Check a finer mesh before relying on a result.']
-        if yield_strength and max_stress>yield_strength: warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation.')
+        if plastic:
+            peeq=max(float(v['peeq'].max()) for v in view)
+            warnings.append('Elastic–plastic material: stress beyond yield follows a straight hardening line up to the ultimate strength at the elongation at break, and stays flat beyond it. Unloading is elastic. Repeated loading and fatigue are not modeled.')
+            if peeq==0: warnings.append('The part does not yield under these loads: the elastic result applies.')
+            breaking=[m for m in [study['material'],*(study.get('bodyMaterials') or {}).values()] if peeq>m['elongation']/100]
+            if breaking: warnings.append('Plastic strain exceeds the elongation at break somewhere: the material would tear there.')
+        elif yield_strength and max_stress>yield_strength:
+            warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation: turn on Plasticity in the Analysis settings.')
         if calculix.solver_of(study)!='spooles' and balance>.005 and not follower:
             # CalculiX's incomplete-Cholesky solver occasionally stops early.
             warnings.append(f'The iterative solver stopped with a {balance*100:.2g}% force balance error. Use the direct solver for a tighter answer.')
         if large:
-            warnings.append('Large deformation: stiffness follows the deformed shape, so results are not proportional to the loads. The material is still linear elastic.')
+            warnings.append('Large deformation: stiffness follows the deformed shape, so results are not proportional to the loads.')
             if follower: warnings.append('Pressure follows the deformed surface and rotation the deformed shape, so their resultant changes with deformation: force balance is not checked.')
         elif max_move>.05*min(dims):
             warnings.append('Movement is large relative to the smallest part dimension, so the small-deformation assumption may not hold. Turn on Large deformation in the Analysis settings.')
@@ -194,28 +252,41 @@ class Static(Analysis):
                  'minSafety':yield_strength/max_stress if yield_strength and max_stress else None,'reactions':reactions.tolist(),
                  'appliedForce':total_load.tolist(),'forceBalanceError':balance,
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))]}
-        if large:
-            loads=[100*f['value'] for f in frames]
+        if plastic:
+            summary['maxPlastic']=peeq
+            if full<len(view)-1:
+                summary['permanentSet']=float(np.linalg.norm(view[-1]['displacement'],axis=1).max())
+                checks.append({'label':'Permanent displacement after unloading','values':[summary['permanentSet']],'unit':'mm','digits':4})
+            checks.append({'label':'Largest plastic strain','values':[peeq*100],'unit':'%','digits':3})
+        if stepped:
+            # Load fraction: time in the loading step, 2 − time in unloading.
+            loads=[100*(f['value'] if f['value']<=1+1e-9 else 2-f['value']) for f in steps]
             peaks=[float(np.linalg.norm(v['displacement'],axis=1).max()) for v in view]
-            labels=[{'label':f'Load {x:.4g}%','value':x,'unit':'%'} for x in loads]
-            # The straight line through the first load step: what linear
-            # theory would predict from the starting stiffness.
+            labels=[{'label':(f'Load {x:.4g}%' if i<=full else ('Unloaded' if i==len(steps)-1 else f'Unloading, load {x:.4g}%')),
+                     'value':x,'unit':'%'} for i,x in enumerate(loads)]
+            # The straight line through the first load step: what a linear
+            # elastic analysis would predict.
             linear=[peaks[0]/loads[0]*x for x in loads]
+            name='Elastic–plastic' if plastic and not large else 'Large deformation' if not plastic else 'Nonlinear'
             charts=[{'id':'loadPath','title':'Load and displacement','x':{'label':'Load','unit':'%','values':loads},
-                     'series':[{'label':'Large deformation','unit':'mm','values':peaks},
+                     'series':[{'label':name,'unit':'mm','values':peaks},
                                {'label':'Linear','unit':'mm','values':linear}]}]
         else:
             labels=[{'label':'Static load','value':None,'unit':''}];charts=[]
-        result={'frames':labels,'fields':['displacement',*STRESS_FIELDS],
+        result={'frames':labels,'fields':['displacement',*STRESS_FIELDS]+(['peeq'] if plastic else []),
                 'summary':summary,'warnings':warnings,'charts':charts,
                 'checks':[mass_check(study,model)]+checks,
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
+        if plastic: result['peeq']=view[full]['peeq'].tolist()
         return result,view
 
     def key_results(self, result):
         s=result['summary']
-        return [{'id':'maxMovement','label':'Maximum displacement','unit':'mm','value':s['maxMovement']},
-                {'id':'maxStress','label':'Peak stress','unit':'MPa','value':s['maxStress'],'peak':True}]
+        keys=[{'id':'maxMovement','label':'Maximum displacement','unit':'mm','value':s['maxMovement']},
+              {'id':'maxStress','label':'Peak stress','unit':'MPa','value':s['maxStress'],'peak':True}]
+        if 'maxPlastic' in s and s['maxPlastic']>0:
+            keys.append({'id':'maxPlastic','label':'Largest plastic strain','unit':'mm/mm','value':s['maxPlastic'],'peak':True})
+        return keys
 
 
 def modes_of(study, default=6):

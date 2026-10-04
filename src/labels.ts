@@ -188,8 +188,14 @@ export const ANALYSES: Record<
 };
 /** The analysis as named in the title bar and study tree. */
 export const analysisName = (study: Study) =>
-  study.analysis === "static" && study.largeDeformation
-    ? "Static, large deformation"
+  study.analysis === "static" && (study.largeDeformation || study.plasticity)
+    ? [
+        "Static",
+        study.largeDeformation && "large deformation",
+        study.plasticity && "plastic",
+      ]
+        .filter(Boolean)
+        .join(", ")
     : ANALYSES[study.analysis].name;
 /** Modes requested by default in each eigenvalue analysis. */
 export const DEFAULT_MODES: Partial<Record<Analysis, number>> = {
