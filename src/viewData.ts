@@ -79,7 +79,7 @@ export const PLOT_SOURCES: Record<
   heatflux: { field: "heatFlux" },
 };
 
-const MAGIC = "BSIMVIEW";
+const MAGIC = "SFEAVIEW";
 const TYPES = { float64: Float64Array, int32: Int32Array } as const;
 type Header = {
   version: number;
@@ -93,7 +93,7 @@ export function decodeView(buffer: ArrayBuffer): ViewData {
     bytes.length < 12 ||
     new TextDecoder().decode(bytes.subarray(0, 8)) !== MAGIC
   )
-    throw Error("Not a BetterSim view file.");
+    throw Error("Not a Sprung FEA view file.");
   const length = new DataView(buffer).getUint32(8, true);
   const header: Header = JSON.parse(
     new TextDecoder().decode(bytes.subarray(12, 12 + length)),

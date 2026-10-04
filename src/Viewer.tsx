@@ -100,7 +100,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         console.error(e);
         if (live)
           setFailure(
-            "The 3D view could not start. It needs WebGL 2 and WebAssembly; enable hardware acceleration and reopen BetterSim.",
+            "The 3D view could not start. It needs WebGL 2 and WebAssembly; enable hardware acceleration and reopen Sprung FEA.",
           );
       });
     return () => {

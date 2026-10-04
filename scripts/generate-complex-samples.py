@@ -3,7 +3,7 @@
 Committed STEP files make tests independent of CadQuery at runtime.
 Bearing-block construction draws on CadQuery's public quickstart example:
 https://cadquery.readthedocs.io/en/stable/quickstart.html
-All dimensions and other constructions are specific to BetterSim.
+All dimensions and other constructions are specific to Sprung FEA.
 """
 from pathlib import Path
 import json

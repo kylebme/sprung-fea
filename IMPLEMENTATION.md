@@ -1,4 +1,4 @@
-# BetterSim implementation
+# Sprung FEA implementation
 
 Version 0.1.0 · 2 October 2026 · implementation baseline: `738bb11`
 
@@ -6,11 +6,11 @@ This document describes the implemented application, its numerical and persisten
 
 ## 1. Scope and product decisions
 
-BetterSim analyzes a STEP part or bonded assembly with CalculiX: linear static stress, natural frequencies, linear buckling, steady heat transfer, thermal stress, and harmonic response. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
+Sprung FEA analyzes a STEP part or bonded assembly with CalculiX: linear static stress, natural frequencies, linear buckling, steady heat transfer, thermal stress, and harmonic response. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
 
 The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A study tree with the part's face list on the left, the model view in the center, and an inspector on the right keep these dependencies visible. A collapsible console under the view holds job output and solver checks. Light and dark themes follow the system setting until the user picks one. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
 
-Official SolidWorks documentation informed the workflow decisions before the interface was implemented. BetterSim uses an original layout, styling, assets, and integration code.
+Official SolidWorks documentation informed the workflow decisions before the interface was implemented. Sprung FEA uses an original layout, styling, assets, and integration code.
 
 Implemented analysis inputs are:
 
@@ -74,7 +74,7 @@ The study model avoids CalculiX deck syntax. The engine keeps three boundaries: 
 | Mesh | Nodes, quadratic tetrahedra, CAD face-to-node/triangle mappings, element count, size, and minimum quality |
 | Result | Schema version, analysis type, frames, nodal fields per frame, analysis summary, check rows, charts, warnings, and solver/mesh metadata |
 
-Studies, results, the engine and the view file always use the SI working units. The interface shows either SI or US units, a per-computer preference switched from the status bar and kept in browser storage (`bettersim-units`). US units are inches, pounds-force, psi, lb/in³, lb, °F, in/s², lbf·in, Btu/(hr·ft·°F), µin/(in·°F), Btu/(hr·ft²·°F) and Btu/(hr·ft²); hertz, rpm, watts, percentages and ratios are shared. [src/units.ts](src/units.ts) maps each SI working unit to its US unit (temperatures with an offset). Number fields convert what they show and read back, keep the typed text while it is edited, and show converted values to six significant digits; engine check rows, key results and charts convert by their unit strings, and the surface CSV follows the chosen system, with the unit in each column name. In SI the interface uses **mm, N, and MPa**. Material density is entered in **kg/m³**, and gravity in **m/s²**. The solver deck uses the consistent **mm–N–tonne–s** system: density is multiplied by `1e-12`, and acceleration by `1000`.
+Studies, results, the engine and the view file always use the SI working units. The interface shows either SI or US units, a per-computer preference switched from the status bar and kept in browser storage (`sprung-fea-units`). US units are inches, pounds-force, psi, lb/in³, lb, °F, in/s², lbf·in, Btu/(hr·ft·°F), µin/(in·°F), Btu/(hr·ft²·°F) and Btu/(hr·ft²); hertz, rpm, watts, percentages and ratios are shared. [src/units.ts](src/units.ts) maps each SI working unit to its US unit (temperatures with an offset). Number fields convert what they show and read back, keep the typed text while it is edited, and show converted values to six significant digits; engine check rows, key results and charts convert by their unit strings, and the surface CSV follows the chosen system, with the unit in each column name. In SI the interface uses **mm, N, and MPa**. Material density is entered in **kg/m³**, and gravity in **m/s²**. The solver deck uses the consistent **mm–N–tonne–s** system: density is multiplied by `1e-12`, and acceleration by `1000`.
 
 Face selections reference CAD entities rather than rendering triangles or mesh nodes. Face IDs survive remeshing of the same STEP source. They are scoped to that source's SHA-256 hash; selection transfer to a revised CAD file is not implemented.
 
@@ -242,13 +242,13 @@ The service limits STEP uploads to 50 MB, JSON request bodies to 70 MB (enough f
 
 ## 7. Persistence and recovery
 
-A `.bsim` file is JSON with `format: "bettersim"`, `version: 1`, a display name, base64 STEP bytes, and the study definition. Opening checks the format/version, study schema, STEP header, and file-size limit, then reimports the embedded geometry.
+A `.sfea` file is JSON with `format: "sprung-fea"`, `version: 1`, a display name, base64 STEP bytes, and the study definition. Opening checks the format/version, study schema, STEP header, and file-size limit, then reimports the embedded geometry.
 
 Saving after a solve also embeds the binary view file (volume mesh and nodal results, base64) and the result summary with the geometry hash and study they belong to. Opening shows them again only when both match exactly; otherwise they are skipped. Solver artifacts are not embedded, so their exports need a new solve.
 
 Autosave keeps one recovery copy, STEP and study, in the service's `recovery/` directory, outside pruning (`GET`/`POST /api/recovery`, `POST /api/recovery/open`). It is a convenience, not a substitute for saving a portable project.
 
-Development document data lives in `.bettersim/`. Packaged desktop document data lives under Electron's user-data directory in `studies/`. Native analysis artifacts remain available there for diagnosis.
+Development document data lives in `.sprung-fea/`. Packaged desktop document data lives under Electron's user-data directory in `studies/`. Native analysis artifacts remain available there for diagnosis.
 
 ## 8. Build and distribution
 
@@ -265,13 +265,13 @@ npm run build
 npm run package:mac
 ```
 
-`BETTERSIM_PYTHON` overrides the development worker interpreter, and `BETTERSIM_CCX` selects a solver executable. Browser development uses `npm run dev`; `BETTERSIM_CHROMIUM` overrides the browser executable used by end-to-end tests.
+`SPRUNG_FEA_PYTHON` overrides the development worker interpreter, and `SPRUNG_FEA_CCX` selects a solver executable. Browser development uses `npm run dev`; `SPRUNG_FEA_CHROMIUM` overrides the browser executable used by end-to-end tests.
 
 The Mac build freezes Python, Gmsh, and NumPy into a standalone worker. The bundler copies CalculiX and its non-system dynamic dependencies, rewrites library references to adjacent bundled files, and signs the relocated binaries. Electron Builder packages the renderer (including the VTK.wasm runtime, about 87 MB), service, engine, sample STEP files, offline fonts, and license notices. A final script ad-hoc signs and verifies the application.
 
-Output is `release/mac-arm64/BetterSim.app`. The tested app needs neither Python nor Homebrew on the destination PATH. `npm run dist:mac` additionally requests a DMG. Apple notarization, Intel Mac packaging, and Windows/Linux packaging remain future work.
+Output is `release/mac-arm64/Sprung FEA.app`. The tested app needs neither Python nor Homebrew on the destination PATH. `npm run dist:mac` additionally requests a DMG. Apple notarization, Intel Mac packaging, and Windows/Linux packaging remain future work.
 
-BetterSim is GPL-3.0-or-later. Dependency notices and public binary corresponding-source requirements are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Sprung FEA is GPL-3.0-or-later. Dependency notices and public binary corresponding-source requirements are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## 9. Acceptance evidence
 

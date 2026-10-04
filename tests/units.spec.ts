@@ -14,7 +14,7 @@ test("US units: switch, enter loads in lbf, read results in inches and psi", asy
 }) => {
   const errors = watchErrors(page);
   await page.goto("http://127.0.0.1:5173");
-  await page.evaluate(() => localStorage.removeItem("bettersim-units"));
+  await page.evaluate(() => localStorage.removeItem("sprung-fea-units"));
   await openBeam(page);
   await page.getByRole("button", { name: /Switch to US units/ }).click();
   await expect(page.locator("footer")).toContainText("in · lbf · psi");

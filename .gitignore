@@ -2,7 +2,7 @@ node_modules/
 dist/
 release/
 .venv/
-.bettersim/
+.sprung-fea/
 __pycache__/
 *.pyc
 output/

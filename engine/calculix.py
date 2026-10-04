@@ -20,13 +20,13 @@ def solver_of(study):
 
 
 def find_ccx():
-    candidates=[os.environ.get('BETTERSIM_CCX'),shutil.which('ccx'),shutil.which('ccx_2.23'),
+    candidates=[os.environ.get('SPRUNG_FEA_CCX'),shutil.which('ccx'),shutil.which('ccx_2.23'),
                 '/opt/homebrew/opt/calculix-ccx/bin/ccx_2.23','/usr/local/opt/calculix-ccx/bin/ccx_2.23']
     bundled=Path(__file__).resolve().parent.parent/'solver'/'ccx'
     candidates.insert(0,str(bundled))
     for p in candidates:
         if p and Path(p).is_file() and os.access(p,os.X_OK): return p
-    raise ValueError('CalculiX was not found. Install costerwi/calculix/calculix-ccx with Homebrew, or set BETTERSIM_CCX to the solver executable.')
+    raise ValueError('CalculiX was not found. Install costerwi/calculix/calculix-ccx with Homebrew, or set SPRUNG_FEA_CCX to the solver executable.')
 
 
 def read_log(path):
@@ -143,7 +143,7 @@ def rows(values, per=16):
 
 def mesh_lines(model, title):
     from cad import TET10_ORDER
-    lines=['*HEADING',f'BetterSim {title}; mm N MPa tonne s','*NODE']
+    lines=['*HEADING',f'Sprung FEA {title}; mm N MPa tonne s','*NODE']
     lines+=[f'{n}, '+', '.join(number(v) for v in xyz) for n,xyz in model.nodes.items()]
     lines+=['*ELEMENT, TYPE=C3D10, ELSET=PART']
     lines+=[f'{eid}, '+', '.join(str(c[i]) for i in TET10_ORDER) for eid,c in zip(model.mesh['elementIds'],model.mesh['elements'])]

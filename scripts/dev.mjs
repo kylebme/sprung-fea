@@ -13,7 +13,7 @@ if (process.argv.includes("--electron")) {
       children.push(
         spawn("node_modules/.bin/electron", ["."], {
           stdio: "inherit",
-          env: { ...process.env, BETTERSIM_DEV: "1" },
+          env: { ...process.env, SPRUNG_FEA_DEV: "1" },
         }),
       ),
     2000,

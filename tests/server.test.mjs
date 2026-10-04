@@ -31,13 +31,13 @@ const wait = async (base, id) => {
 };
 test("STEP → portable project → reopen → real solve → export", async () => {
   const dir = await fs.mkdtemp(
-    path.join(os.tmpdir(), "bettersim-server-test-"),
+    path.join(os.tmpdir(), "sprung-fea-server-test-"),
   );
-  // Development keeps documents under .bettersim/: downloads must still work
+  // Development keeps documents under .sprung-fea/: downloads must still work
   // from a hidden folder.
   const service = await createServer({
     port: 0,
-    dataDir: path.join(dir, ".bettersim"),
+    dataDir: path.join(dir, ".sprung-fea"),
   });
   const base = `http://127.0.0.1:${service.port}`;
   try {
@@ -82,7 +82,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
       "/api/documents/" + imported.id + "/save",
       { name: "beam.step", study },
     );
-    assert.equal(project.format, "bettersim");
+    assert.equal(project.format, "sprung-fea");
     assert.ok(
       Buffer.from(project.step, "base64").toString().includes("ISO-10303-21"),
     );
@@ -244,7 +244,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        format: "bettersim",
+        format: "sprung-fea",
         version: 1,
         step: "broken",
         study: {},
@@ -258,7 +258,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
 });
 test("recovery on disk, error statuses, and document pruning", async () => {
   const dir = await fs.mkdtemp(
-    path.join(os.tmpdir(), "bettersim-server-test-"),
+    path.join(os.tmpdir(), "sprung-fea-server-test-"),
   );
   const stale = path.join(dir, "00000000-0000-4000-8000-000000000000");
   await fs.mkdir(stale);
@@ -400,7 +400,7 @@ test("recovery on disk, error statuses, and document pruning", async () => {
     const step = Buffer.alloc(48 * 1024 * 1024, 32);
     step.write("ISO-10303-21;");
     const large = await post("/api/open", {
-      format: "bettersim",
+      format: "sprung-fea",
       version: 1,
       name: "large.step",
       step: step.toString("base64"),

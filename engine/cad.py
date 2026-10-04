@@ -9,8 +9,8 @@ def emit(stage, message):
 
 
 def threads():
-    """Thread count chosen by the service (BETTERSIM_THREADS), else all cores."""
-    value=os.environ.get('BETTERSIM_THREADS','')
+    """Thread count chosen by the service (SPRUNG_FEA_THREADS), else all cores."""
+    value=os.environ.get('SPRUNG_FEA_THREADS','')
     return max(1,int(value)) if value.isdigit() else (os.cpu_count() or 1)
 
 
@@ -122,7 +122,7 @@ TET10_ORDER=[0,1,2,3,4,5,6,7,9,8]
 
 
 def write_view(folder, arrays):
-    """Binary arrays for the VTK.wasm viewer: 'BSIMVIEW', a uint32 header
+    """Binary arrays for the VTK.wasm viewer: 'SFEAVIEW', a uint32 header
     length, a JSON header naming each little-endian array, then the arrays,
     each starting on an 8-byte boundary."""
     entries=[];blobs=[]
@@ -133,7 +133,7 @@ def write_view(folder, arrays):
     header=json.dumps({'version':1,'arrays':entries}).encode()
     header+=b' '*(-(12+len(header))%8)
     with open(folder/'view.bin.tmp','wb') as out:
-        out.write(b'BSIMVIEW'+np.uint32(len(header)).tobytes()+header)
+        out.write(b'SFEAVIEW'+np.uint32(len(header)).tobytes()+header)
         for blob in blobs: out.write(blob+b'\0'*(-len(blob)%8))
     os.replace(folder/'view.bin.tmp',folder/'view.bin')
 

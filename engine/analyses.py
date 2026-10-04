@@ -1,5 +1,5 @@
 """Analysis types. Each one validates a study, writes its CalculiX step, and
-turns the solver's frames into BetterSim's result schema.
+turns the solver's frames into Sprung FEA's result schema.
 
 Result schema (version 2), shared by every analysis:
   analysis    analysis type id

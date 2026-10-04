@@ -62,11 +62,11 @@ test("natural frequencies: choose the analysis, solve, browse modes, animate, re
   // Saved projects keep every mode.
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await (await download).saveAs("output/playwright/frequency.bsim");
+  await (await download).saveAs("output/playwright/frequency.sfea");
   await page.reload();
   await page
-    .locator('input[type=file][accept=".bsim"]')
-    .setInputFiles(path.resolve("output/playwright/frequency.bsim"));
+    .locator('input[type=file][accept=".sfea"]')
+    .setInputFiles(path.resolve("output/playwright/frequency.sfea"));
   await expect(page.getByText("Results loaded from project")).toBeVisible();
   await expect(modes.locator("tbody tr")).toHaveCount(10);
   expect(errors).toEqual([]);

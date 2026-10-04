@@ -1,4 +1,4 @@
-# BetterSim interaction design
+# Sprung FEA interaction design
 
 ## Product contract
 A person with a STEP solid and basic engineering intent should reach an inspectable, reproducible linear static result without learning a solver deck. Every displayed result must come from CalculiX. No synthetic result fallback. Version one supports one connected solid, isotropic elastic material, face supports, distributed total vector force, normal pressure, and gravity. Millimetres, newtons, megapascals are the explicit working units. STEP units are normalized by OpenCASCADE to millimetres; the import inspector displays dimensions before setup.

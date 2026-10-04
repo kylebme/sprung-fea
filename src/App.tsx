@@ -105,7 +105,8 @@ import {
 } from "./viewData";
 
 type Failure = { title: string; message: string };
-// Autosave used browser storage before it moved to the local service.
+// Autosave used browser storage before it moved to the local service. These
+// keys keep the project's former name so older autosaves can still be found.
 const LEGACY_RECOVERY = "bettersim-recovery";
 const LEGACY_RECOVERY_META = "bettersim-recovery-meta";
 const readStorage = (key: string) => {
@@ -178,40 +179,40 @@ export default function App() {
     [recovery, setRecovery] = useState<Recovery | null>(null),
     [recoveryStatus, setRecoveryStatus] = useState("saving");
   const [theme, setTheme] = useState<Theme>(
-    () => (readStorage("bettersim-theme") as Theme | null) || systemTheme(),
+    () => (readStorage("sprung-fea-theme") as Theme | null) || systemTheme(),
   );
   const [projection, setProjection] = useState<Projection>(() =>
-    readStorage("bettersim-projection") === "orthographic"
+    readStorage("sprung-fea-projection") === "orthographic"
       ? "orthographic"
       : "perspective",
   );
   // Units are a display preference kept on this computer; studies and
   // results stay in SI working units.
   const [units, setUnits] = useState<UnitSystem>(() =>
-    readStorage("bettersim-units") === "us" ? "us" : "si",
+    readStorage("sprung-fea-units") === "us" ? "us" : "si",
   );
   const unitsRef = useRef(units);
   unitsRef.current = units;
   const chooseUnits = (next: UnitSystem) => {
     try {
-      localStorage.setItem("bettersim-units", next);
+      localStorage.setItem("sprung-fea-units", next);
     } catch {}
     setUnits(next);
   };
   const [threads, setThreads] = useState<Threads>(() => {
-    const saved = readStorage("bettersim-threads");
+    const saved = readStorage("sprung-fea-threads");
     return saved === "single" || saved === "all" ? saved : "auto";
   });
   const [cpus, setCpus] = useState<Cpus | null>(null);
   const chooseThreads = (next: Threads) => {
     try {
-      localStorage.setItem("bettersim-threads", next);
+      localStorage.setItem("sprung-fea-threads", next);
     } catch {}
     setThreads(next);
   };
   const chooseProjection = (next: Projection) => {
     try {
-      localStorage.setItem("bettersim-projection", next);
+      localStorage.setItem("sprung-fea-projection", next);
     } catch {}
     setProjection(next);
   };
@@ -233,7 +234,7 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
   useEffect(() => {
-    if (readStorage("bettersim-theme")) return;
+    if (readStorage("sprung-fea-theme")) return;
     const media = matchMedia("(prefers-color-scheme: dark)");
     const change = () => setTheme(media.matches ? "dark" : "light");
     media.addEventListener("change", change);
@@ -242,7 +243,7 @@ export default function App() {
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     try {
-      localStorage.setItem("bettersim-theme", next);
+      localStorage.setItem("sprung-fea-theme", next);
     } catch {}
     setTheme(next);
   };
@@ -508,7 +509,7 @@ export default function App() {
       }
       if (
         await saveFile(
-          stripExt(part.name) + ".bsim",
+          stripExt(part.name) + ".sfea",
           JSON.stringify(data, null, data.results ? 0 : 2),
         )
       )
@@ -968,7 +969,7 @@ export default function App() {
         : quantity(probeAt, info.unit, units, info.digits);
   const csv = async () => {
     if (shown)
-      await saveFile("bettersim-surface-nodes.csv", surfaceCsv(shown, units));
+      await saveFile("sprung-fea-surface-nodes.csv", surfaceCsv(shown, units));
   };
   const exportSolver = async (kind: "deck" | "log" | "frd") => {
     if (!part) return;
@@ -991,7 +992,7 @@ export default function App() {
   };
   const screenshot = async () => {
     const content = viewer.current?.screenshot();
-    if (content) await saveFile("bettersim-view.png", content, "base64");
+    if (content) await saveFile("sprung-fea-view.png", content, "base64");
   };
 
   const inspector = () => {
@@ -1186,7 +1187,7 @@ export default function App() {
           if (job) return;
           const file = e.dataTransfer.files[0];
           if (file)
-            /\.bsim$/i.test(file.name) ? openProject(file) : importFile(file);
+            /\.sfea$/i.test(file.name) ? openProject(file) : importFile(file);
         }}
       >
         <input
@@ -1204,7 +1205,7 @@ export default function App() {
           className="hidden"
           ref={projectInput}
           type="file"
-          accept=".bsim"
+          accept=".sfea"
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) openProject(file);
@@ -1213,7 +1214,7 @@ export default function App() {
         />
         <header className="titlebar">
           <div className="crumb">
-            <b>BetterSim</b>
+            <b>Sprung FEA</b>
             {part && (
               <>
                 <span className="sep">/</span>

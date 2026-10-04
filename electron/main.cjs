@@ -10,7 +10,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 let engine, window;
 app.whenReady().then(async () => {
-  if (!process.env.BETTERSIM_DEV) {
+  if (!process.env.SPRUNG_FEA_DEV) {
     const { createServer } = await import("../server/index.mjs");
     const resources = app.isPackaged
       ? process.resourcesPath
@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
       dataDir: path.join(app.getPath("userData"), "studies"),
       resourceDir: resources,
       workerExecutable: app.isPackaged
-        ? path.join(resources, "runtime", "bettersim-engine")
+        ? path.join(resources, "runtime", "sprung-fea-engine")
         : null,
     });
   }
@@ -29,7 +29,7 @@ app.whenReady().then(async () => {
     height: 960,
     minWidth: 1040,
     minHeight: 720,
-    title: "BetterSim",
+    title: "Sprung FEA",
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0d0f11" : "#f3f4f6",
     titleBarStyle: "hiddenInset",
     webPreferences: {
@@ -44,7 +44,7 @@ app.whenReady().then(async () => {
   );
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const url = process.env.BETTERSIM_DEV
+  const url = process.env.SPRUNG_FEA_DEV
     ? "http://127.0.0.1:5173"
     : `http://127.0.0.1:${engine.port}`;
   window.webContents.on("will-navigate", (event, target) => {
@@ -54,7 +54,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
-        label: "BetterSim",
+        label: "Sprung FEA",
         submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
       },
       {

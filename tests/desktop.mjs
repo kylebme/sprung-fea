@@ -2,7 +2,7 @@ import { _electron as electron, expect } from "@playwright/test";
 import path from "node:path";
 import { configureComplexPart } from "./complex-workflow.mjs";
 const executable = path.resolve(
-  "release/mac-arm64/BetterSim.app/Contents/MacOS/BetterSim",
+  "release/mac-arm64/Sprung FEA.app/Contents/MacOS/Sprung FEA",
 );
 const app = await electron.launch({
   executablePath: executable,
@@ -14,7 +14,7 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const inspector = page.getByRole("complementary", { name: "Inspector" });
-  await expect(page.getByRole("heading", { name: "BetterSim" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sprung FEA" })).toBeVisible();
   await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
   await expect(
     page.getByRole("heading", { name: "Cantilever beam" }),

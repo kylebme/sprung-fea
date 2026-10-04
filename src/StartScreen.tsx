@@ -29,7 +29,7 @@ export function StartScreen({
               <Box size={16} />
             </div>
             <div>
-              <h1>BetterSim</h1>
+              <h1>Sprung FEA</h1>
               <span>0.1.0</span>
             </div>
           </div>
@@ -89,7 +89,7 @@ export function StartScreen({
             </button>
           </div>
           <p className="dropnote">
-            Drop a .step, .stp or .bsim file anywhere in this window.
+            Drop a .step, .stp or .sfea file anywhere in this window.
           </p>
         </div>
       </div>

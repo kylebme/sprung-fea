@@ -40,7 +40,7 @@ Revisit this if a future need cannot run in the browser: models beyond the memor
 
 - **Loader:** `@kitware/vtk-wasm` 3.0.5 (npm, Apache-2.0), pinned exactly.
 - **Runtime:** `vtk-wasm32-emscripten` **9.7.20260927**, from Kitware's VTK package registry, verified by SHA-256. The 9.7.1 release bundle was rejected because it lacks the per-class method manifests (`types/*.json`) that loader 3.x needs to dispatch method calls. Registry nightlies keep stable, versioned URLs. The `dist` branch of the GitHub mirror is resynced and was not used as the pin.
-- **Offline:** BetterSim is a desktop app with offline fonts, so the runtime is never loaded from a CDN. `scripts/fetch-vtk-wasm.mjs` (run by `npm run setup` and `npm run build`) downloads and verifies it once and writes the files to `public/vtk-wasm/`. Vite copies them to `dist/`, and the local service serves them. The files are not committed (an 87 MB `.wasm`).
+- **Offline:** Sprung FEA is a desktop app with offline fonts, so the runtime is never loaded from a CDN. `scripts/fetch-vtk-wasm.mjs` (run by `npm run setup` and `npm run build`) downloads and verifies it once and writes the files to `public/vtk-wasm/`. Vite copies them to `dist/`, and the local service serves them. The files are not committed (an 87 MB `.wasm`).
 - **Loose files, not the tarball:** the loader can unpack the `.tar.gz` in the page. Instead, the runtime is served as plain `.mjs` and `.wasm` files with one merged method index (`vtk-methods.json`, generated from the 846 manifests). This avoids gunzipping 90 MB on every start and avoids importing the glue code from a `blob:` URL. The runtime loads in about 0.2–0.5 s.
 - **Sessions:** the WebAssembly runtime is loaded once per page. Each viewer instance creates its own standalone session and disposes it on unmount, which frees its C++ objects.
 - **Types:** the loader can generate TypeScript declarations from the manifests. They were not adopted because the manifests collapse C++ overloads to one signature (for example `vtkMapper.SelectColorArray(name)` is missing; only the index form survives). The scene module uses the proxies untyped. Unknown method names still throw at call time, and the end-to-end tests exercise every pipeline.
@@ -61,7 +61,7 @@ Sections, probes, iso-surfaces and thresholds need the **volume** mesh and nodal
 The engine now writes `view.bin` after meshing (geometry only) and after solving (with results). The service serves it at `GET /api/documents/:id/view`, and job responses carry only metadata and the result summary.
 
 ```
-"BSIMVIEW" | uint32 header length | JSON header | arrays (each 8-byte aligned)
+"SFEAVIEW" | uint32 header length | JSON header | arrays (each 8-byte aligned)
 header: {"version": 1, "arrays": [{"name", "type": "float64"|"int32", "shape"}]}
 ```
 

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 if (process.platform !== "darwin") throw Error("Mac signing requires macOS.");
-const appPath = "release/mac-arm64/BetterSim.app";
+const appPath = "release/mac-arm64/Sprung FEA.app";
 for (const args of [
   ["--force", "--deep", "--sign", "-", appPath],
   ["--verify", "--deep", "--strict", appPath],

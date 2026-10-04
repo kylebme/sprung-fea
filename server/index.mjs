@@ -27,12 +27,12 @@ function cores() {
 }
 export async function createServer({
   port = 4318,
-  dataDir = path.join(root, ".bettersim"),
+  dataDir = path.join(root, ".sprung-fea"),
   resourceDir = root,
   workerExecutable = null,
   keepDocuments = 40,
   maxDocumentAge = 7 * 24 * 3600000,
-  python = process.env.BETTERSIM_PYTHON ||
+  python = process.env.SPRUNG_FEA_PYTHON ||
     path.join(
       root,
       ".venv",
@@ -66,7 +66,7 @@ export async function createServer({
     if (origin && !ownOrigins.has(origin))
       return res
         .status(403)
-        .json({ error: "Requests must originate from BetterSim." });
+        .json({ error: "Requests must originate from Sprung FEA." });
     if (req.headers["sec-fetch-site"] === "cross-site")
       return res
         .status(403)
@@ -130,10 +130,10 @@ export async function createServer({
       {
         env: {
           ...process.env,
-          BETTERSIM_THREADS: String(threads),
+          SPRUNG_FEA_THREADS: String(threads),
           ...(workerExecutable
             ? {
-                BETTERSIM_CCX: path.join(
+                SPRUNG_FEA_CCX: path.join(
                   resourceDir,
                   "runtime",
                   "solver",
@@ -373,7 +373,7 @@ export async function createServer({
     );
     await touch(req.params.id);
     res.json({
-      format: "bettersim",
+      format: "sprung-fea",
       version: 1,
       name: req.body.name,
       step: step.toString("base64"),
@@ -383,14 +383,14 @@ export async function createServer({
   app.post("/api/open", async (req, res) => {
     const project = req.body;
     if (
-      project.format !== "bettersim" ||
+      project.format !== "sprung-fea" ||
       project.version !== 1 ||
       typeof project.step !== "string" ||
       !project.study
     )
       return res
         .status(400)
-        .json({ error: "This is not a supported BetterSim project." });
+        .json({ error: "This is not a supported Sprung FEA project." });
     validateStudy(project.study);
     const bytes = Buffer.from(project.step, "base64");
     if (
@@ -454,7 +454,7 @@ export async function createServer({
       });
     }
     await touch(req.params.id);
-    // Development data lives in .bettersim/, which send() ignores by default.
+    // Development data lives in .sprung-fea/, which send() ignores by default.
     res.download(target, path.basename(file), { dotfiles: "allow" });
   });
   app.use(express.static(path.join(root, "dist")));
@@ -518,5 +518,5 @@ export async function createServer({
 }
 if (process.argv[1] === fileURLToPath(import.meta.url))
   createServer().then((s) =>
-    console.log(`BetterSim engine: http://127.0.0.1:${s.port}`),
+    console.log(`Sprung FEA engine: http://127.0.0.1:${s.port}`),
   );

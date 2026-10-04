@@ -33,7 +33,7 @@ const digest = createHash("sha256").update(archive).digest("hex");
 if (digest !== SHA256)
   throw Error(`VTK.wasm checksum mismatch: expected ${SHA256}, got ${digest}`);
 
-const temp = await fs.mkdtemp(path.join(os.tmpdir(), "bettersim-vtk-"));
+const temp = await fs.mkdtemp(path.join(os.tmpdir(), "sprung-fea-vtk-"));
 try {
   await fs.writeFile(path.join(temp, "bundle.tar.gz"), archive);
   const tar = spawnSync("tar", ["-xzf", "bundle.tar.gz"], { cwd: temp });

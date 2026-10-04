@@ -1,6 +1,6 @@
 # Third-party software
 
-BetterSim is GPL-3.0-or-later. Its original interface and integration code are in this repository. No SolidWorks code, assets, or proprietary UI components are used. Official SolidWorks documentation informed the workflow research recorded in `docs/interaction-design.md`.
+Sprung FEA is GPL-3.0-or-later. Its original interface and integration code are in this repository. No SolidWorks code, assets, or proprietary UI components are used. Official SolidWorks documentation informed the workflow research recorded in `docs/interaction-design.md`.
 
 | Component | Purpose | License | Upstream/source |
 |---|---|---|---|

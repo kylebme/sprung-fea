@@ -69,16 +69,16 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   const csvPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Surface CSV" }).click();
   const csv = await csvPromise;
-  expect(csv.suggestedFilename()).toBe("bettersim-surface-nodes.csv");
+  expect(csv.suggestedFilename()).toBe("sprung-fea-surface-nodes.csv");
   expect(await fs.readFile(await csv.path(), "utf8")).toMatch(/^surface_node,/);
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const download = await downloadPromise;
-  await download.saveAs("output/playwright/beam.bsim");
+  await download.saveAs("output/playwright/beam.sfea");
   await page.reload();
   await page
-    .locator('input[type=file][accept=".bsim"]')
-    .setInputFiles(path.resolve("output/playwright/beam.bsim"));
+    .locator('input[type=file][accept=".sfea"]')
+    .setInputFiles(path.resolve("output/playwright/beam.sfea"));
   // Saved results come back without solving again.
   await expect(
     page.getByRole("heading", { name: "von Mises stress" }),
@@ -170,7 +170,7 @@ test("free rotation and orthographic projection keep picking working", async ({
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("http://127.0.0.1:5173");
-  await page.evaluate(() => localStorage.removeItem("bettersim-projection"));
+  await page.evaluate(() => localStorage.removeItem("sprung-fea-projection"));
   await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
   await page.getByRole("button", { name: "Use example setup" }).click();
   await inspector(page)
@@ -201,7 +201,7 @@ test("free rotation and orthographic projection keep picking working", async ({
   await expect(page.locator(".probe-card")).toContainText("Interpolated");
   await page.screenshot({ path: "output/playwright/orthographic.png" });
   expect(
-    await page.evaluate(() => localStorage.getItem("bettersim-projection")),
+    await page.evaluate(() => localStorage.getItem("sprung-fea-projection")),
   ).toBe("orthographic");
   await page.getByRole("button", { name: "Perspective" }).click();
   await page.getByRole("button", { name: "Clear" }).click();
@@ -259,11 +259,11 @@ test("result filters: section area, section probing, iso-surface, threshold, and
   // Saved projects carry the volume results, so filters work after reopening.
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await (await download).saveAs("output/playwright/filters.bsim");
+  await (await download).saveAs("output/playwright/filters.sfea");
   await page.reload();
   await page
-    .locator('input[type=file][accept=".bsim"]')
-    .setInputFiles(path.resolve("output/playwright/filters.bsim"));
+    .locator('input[type=file][accept=".sfea"]')
+    .setInputFiles(path.resolve("output/playwright/filters.sfea"));
   await expect(page.getByText("Results loaded from project")).toBeVisible();
   await page.getByRole("switch", { name: "Section" }).click();
   await expect(page.locator(".filters")).toContainText(
@@ -346,7 +346,7 @@ test("invalid STEP reports an actionable import error", async ({ page }) => {
     buffer: Buffer.from("not a STEP solid"),
   });
   await expect(page.getByRole("alert")).toContainText("Import failed");
-  await expect(page.getByRole("heading", { name: "BetterSim" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sprung FEA" })).toBeVisible();
 });
 
 for (const name of [

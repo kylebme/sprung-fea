@@ -13,7 +13,7 @@ export default defineConfig({
     strictPort: true,
     watch: {
       ignored: [
-        "**/.bettersim/**",
+        "**/.sprung-fea/**",
         "**/runtime/**",
         "**/output/**",
         "**/release/**",

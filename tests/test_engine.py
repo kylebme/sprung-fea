@@ -53,7 +53,7 @@ class Pipeline(unittest.TestCase):
     def test_view_file_uses_vtk_quadratic_tetra_order(self):
         mesh=worker.mesh_part(self.folder,study())
         data=(self.folder/'view.bin').read_bytes()
-        self.assertEqual(data[:8],b'BSIMVIEW')
+        self.assertEqual(data[:8],b'SFEAVIEW')
         length=int(np.frombuffer(data[8:12],'<u4')[0])
         header=json.loads(data[12:12+length]);offset=12+length;arrays={}
         for a in header['arrays']:

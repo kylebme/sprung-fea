@@ -11,7 +11,7 @@ export default defineConfig({
     viewport: { width: 1440, height: 960 },
     launchOptions: {
       executablePath:
-        process.env.BETTERSIM_CHROMIUM ||
+        process.env.SPRUNG_FEA_CHROMIUM ||
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       args: ["--enable-webgl", "--use-gl=angle"],
     },
