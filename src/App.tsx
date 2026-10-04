@@ -39,7 +39,7 @@ import {
 } from "./logic";
 import {
   ANALYSES,
-  PLOTS,
+  plotInfo,
   STAGES,
   blankLoad,
   blankMass,
@@ -51,6 +51,7 @@ import { StartScreen, type Recovery } from "./StartScreen";
 import { FaceList, StudyTree, type Section } from "./Sidebar";
 import { Console, JobCard, type Job, type LogEntry } from "./Console";
 import {
+  AnalysisPanel,
   ConditionEditor,
   ConditionsPanel,
   MaterialPanel,
@@ -153,6 +154,7 @@ export default function App() {
     [notice, setNotice] = useState(""),
     [plot, setPlot] = useState<Plot>("stress"),
     [frame, setFrame] = useState(0),
+    [animate, setAnimate] = useState(false),
     // Submodel: the box being edited, its solved result, and which is shown.
     [regionDraft, setRegionDraft] = useState<Region | null>(null),
     [regionResult, setRegionResult] = useState<RegionResult | null>(null),
@@ -333,6 +335,22 @@ export default function App() {
     active.current = null;
     setJob(null);
   };
+  /** Display defaults for a new result: mode shapes animate. */
+  const present = (r: Result) => {
+    // Mode shapes read best moving; show the first elastic mode.
+    const eigen = ANALYSES[r.analysis].eigen;
+    setPlot(eigen ? "movement" : "stress");
+    setFrame(
+      eigen
+        ? Math.min(
+            (r.summary.rigidModes as number | undefined) ?? 0,
+            r.frames.length - 1,
+          )
+        : 0,
+    );
+    setAnimate(r.analysis === "frequency");
+    setDeform(eigen ? "auto" : "off");
+  };
   const importPart = async (
     action: () => Promise<any>,
     title: string,
@@ -375,11 +393,10 @@ export default function App() {
       } catch {}
       if (restored && hasResults(view)) {
         setMesh({ ...restored.mesh, view: view! });
-        setResult({ ...restored.result, view: view! });
+        const r = { ...restored.result, view: view! };
+        setResult(r);
         setFromProject(true);
-        setPlot("stress");
-        setFrame(0);
-        setDeform("off");
+        present(r);
         setSection("results");
         write("open", "Results loaded from the project", "done");
       } else if (saved)
@@ -477,10 +494,11 @@ export default function App() {
     return () => clearTimeout(t);
   }, [part, study, job]);
 
+  const needs = ANALYSES[study.analysis];
   const missing = [
     !study.material ? "Material" : null,
-    !study.supports.length ? "Support" : null,
-    !study.loads.length ? "Load" : null,
+    needs.supports && !study.supports.length ? "Support" : null,
+    needs.loads && !study.loads.length ? "Load" : null,
   ].filter(Boolean) as string[];
   const ready = !!part && !missing.length && !draft;
   const run = async (action: "mesh" | "solve" | "converge", refine = false) => {
@@ -552,9 +570,7 @@ export default function App() {
         setProbe(null);
         setFromProject(false);
         setWire(false);
-        setPlot("stress");
-        setFrame(0);
-        setDeform("off");
+        present(r);
         setSection("results");
         setSelected([]);
         if (refine && prior) setComparison({ before: prior, after: r });
@@ -797,8 +813,15 @@ export default function App() {
     }
   };
   const yieldStrength = study.material?.yield || null;
-  const plots = shown ? availablePlots(shown, yieldStrength) : [];
+  const resultAnalysis = displayed?.analysis ?? study.analysis;
+  // A yield margin means nothing for mode shapes scaled to 1 mm.
+  const plots = shown
+    ? availablePlots(shown, yieldStrength).filter(
+        (p) => !(ANALYSES[resultAnalysis].eigen && p === "safety"),
+      )
+    : [];
   const activePlot: Plot = plots.includes(plot) ? plot : plots[0] || plot;
+  const info = plotInfo(activePlot, resultAnalysis);
   const stats = useMemo(() => {
     if (!shown || !plots.length) return null;
     const stress = shown.fields.vonMises;
@@ -837,7 +860,7 @@ export default function App() {
       ? null
       : activePlot === "safety"
         ? fmt(probeAt, 2) + "×"
-        : fmt(probeAt, PLOTS[activePlot].digits) + " " + PLOTS[activePlot].unit;
+        : fmt(probeAt, info.digits) + " " + info.unit;
   const csv = async () => {
     if (shown) await saveFile("bettersim-surface-nodes.csv", surfaceCsv(shown));
   };
@@ -895,6 +918,17 @@ export default function App() {
             part={part}
             onMaterial={() => chooseSection("material")}
             onExample={exampleSetup}
+          />
+        );
+      case "analysis":
+        return (
+          <AnalysisPanel
+            study={study}
+            onChange={(next) => {
+              update(next);
+              if (next.analysis !== study.analysis)
+                announce(`${ANALYSES[next.analysis].name} study`);
+            }}
           />
         );
       case "material":
@@ -975,6 +1009,8 @@ export default function App() {
               deform={deform}
               autoScale={autoScale}
               wire={wire}
+              animate={animate}
+              onAnimate={setAnimate}
               probe={probe}
               filters={filters!}
               bounds={viewGeometry!.bounds}
@@ -1216,6 +1252,7 @@ export default function App() {
                 filters={filters!}
                 deformation={deformation}
                 wireframe={wire && !draft}
+                animate={animate && showingResult && deformation !== 0}
                 probe={draft ? null : probe}
                 probeLabel={probeLabel}
                 theme={theme}
@@ -1227,9 +1264,9 @@ export default function App() {
               <div className="vlabel">
                 {showingResult ? (
                   <>
-                    <b>{PLOTS[activePlot].name}</b>
+                    <b>{info.name}</b>
                     <span>
-                      {PLOTS[activePlot].unit} · nodal
+                      {info.unit} · nodal
                       {regionShown
                         ? " · refined region"
                         : result.frames.length > 1
@@ -1318,10 +1355,7 @@ export default function App() {
                 </button>
               </div>
               {showingResult && stats && (
-                <div
-                  className="legend"
-                  aria-label={PLOTS[activePlot].name + " scale"}
-                >
+                <div className="legend" aria-label={info.name + " scale"}>
                   <div
                     className="bar"
                     style={{
@@ -1347,7 +1381,7 @@ export default function App() {
                     ? "Undeformed"
                     : deform === "true"
                       ? "True scale"
-                      : `Displacement ×${fmt(deformation, deformation >= 100 ? 0 : 1)}`}
+                      : `${ANALYSES[resultAnalysis].eigen ? "Shape" : "Displacement"} ×${fmt(deformation, deformation >= 100 ? 0 : 1)}${animate && ANALYSES[resultAnalysis].eigen ? " · animated" : ""}`}
                 </div>
               )}
               {(!result || draft) && !job && selected.length > 0 && (

@@ -30,6 +30,8 @@ export type SceneState = {
   probe: Probe | null;
   /** Shows the part's origin and axes, for entering positions. */
   origin: boolean;
+  /** Oscillates the deformation, for mode shapes. */
+  animate: boolean;
   /** A box outline: the region being refined, by its corners. */
   region: { lo: number[]; hi: number[] } | null;
 };
@@ -149,6 +151,9 @@ export class Scene {
   private radius = 1;
   /** Radius of the region the camera was last fitted to. */
   private framed = 1;
+  /** Animation frame request and the current deformation phase (±1). */
+  private wave = 0;
+  private phase = 1;
   private size = { width: 1, height: 1, scale: 1 };
 
   // Long-lived VTK objects; per-model data is swapped inside them.
@@ -471,6 +476,7 @@ export class Scene {
       this.renderer.setBackground2(...rgb(COLORS[next.theme].viewA));
     }
     if (changed("origin", "bounds")) this.showOrigin();
+    if (model || changed("animate", "deformation")) this.oscillate();
     if (changed("study", "origin") && !changed("bounds")) {
       // A point placed beyond the framed region: zoom out to include it,
       // keeping the view direction.
@@ -590,7 +596,7 @@ export class Scene {
     const view = this.ta.toJSTypedArray(
       this.pointsArray as any,
     ) as Float64Array;
-    const scale = v.displacement ? s.deformation : 0;
+    const scale = v.displacement ? s.deformation * this.phase : 0;
     for (let i = 0; i < view.length; i++)
       view[i] = v.points[i] + (scale ? v.displacement![i] * scale : 0);
     this.pointsArray!.modified();
@@ -1030,6 +1036,31 @@ export class Scene {
     return { center, radius };
   }
 
+  /**
+   * Swings the deformation between ±1 times its scale, 0.6 cycles a second,
+   * while animation is on; otherwise holds it at +1.
+   */
+  private oscillate() {
+    const on = !!this.state?.animate && !!this.state.view.displacement;
+    if (on && !this.wave) {
+      const start = performance.now();
+      const tick = (time: number) => {
+        if (this.disposed) return;
+        this.phase = Math.cos(((time - start) / 1000) * 2 * Math.PI * 0.6);
+        this.deform();
+        this.render();
+        this.wave = requestAnimationFrame(tick);
+      };
+      this.wave = requestAnimationFrame(tick);
+    } else if (!on && this.wave) {
+      cancelAnimationFrame(this.wave);
+      this.wave = 0;
+      this.phase = 1;
+      this.deform();
+      this.invalidate();
+    }
+  }
+
   private originLength() {
     return this.radius * 0.35;
   }
@@ -1287,6 +1318,7 @@ export class Scene {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.frame);
+    cancelAnimationFrame(this.wave);
     for (const c of this.cleanup) c();
     this.window.finalize();
     this.session.dispose();

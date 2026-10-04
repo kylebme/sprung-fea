@@ -2,7 +2,7 @@
 
 An open-source mechanical FEA workspace built around engineering intent. Import a STEP solid, choose its material, select the faces that hold it, apply loads, and inspect real CalculiX results.
 
-**Version 0.1:** linear static analysis of one solid part. Electron + Vite + React, with VTK compiled to WebAssembly for the 3D view, OpenCASCADE/Gmsh for CAD and meshing and CalculiX for solving. GPL-3.0-or-later.
+**Version 0.1:** linear static, natural frequency and buckling analysis of one solid part. Electron + Vite + React, with VTK compiled to WebAssembly for the 3D view, OpenCASCADE/Gmsh for CAD and meshing and CalculiX for solving. GPL-3.0-or-later.
 
 ## Run on macOS
 
@@ -29,7 +29,7 @@ The Apple Silicon app is produced at `release/mac-arm64/BetterSim.app`. It bundl
 ## A first study
 
 1. Open the cantilever beam example, or import `.step`/`.stp` containing one solid.
-2. Check the dimensions shown after import. Working units are **mm, N, MPa**; STEP length units are converted to mm by OpenCASCADE.
+2. Choose the analysis: linear static (stress and deflection) natural frequencies (vibration modes), or buckling (how far the loads can grow before a slender part buckles). Check the dimensions shown after import. Working units are **mm, N, MPa**; STEP length units are converted to mm by OpenCASCADE.
 3. Choose a material. The built-in values are representative; enter the actual material specification when needed.
 4. Add a support and select CAD faces in the model or face list. "Fixed" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
 5. Add loads. Vector force is **one total force distributed over all selected faces**. Positive pressure pushes inward; gravity uses m/s² and material density. A remote force acts at a point away from the selected faces (its offset adds a moment); a moment twists the selected faces (N·mm); a bearing load presses a pin or shaft on the facing half of a cylindrical face; rotation spins the part about an axis (rpm).
@@ -53,7 +53,7 @@ Study edits invalidate results. Undo/redo preserves setup history. Autosave reta
 - CalculiX RF output is corrected for applied nodal loads before reporting support reactions. Force balance is available in result interpretation.
 - Stress contours use the solver's averaged nodal stress tensor, converted to von Mises stress.
 
-This analysis assumes isotropic elastic material, slowly applied loads, and small deformation. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Assemblies, shells, contact, thermal, modal, buckling, fatigue, nonlinear, and dynamic analyses are outside this first release.
+This analysis assumes isotropic elastic material, slowly applied loads, and small deformation. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Assemblies, shells, contact, thermal, fatigue, nonlinear, and forced-response dynamic analyses are outside this release.
 
 ## Tests
 

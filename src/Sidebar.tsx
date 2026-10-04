@@ -6,15 +6,17 @@ import {
   Box,
   Grid3X3,
   Layers,
+  Gauge,
   Search,
   Weight,
 } from "lucide-react";
 import { LISTS, conditionsOf, faceHint, fmt, type Draft } from "./logic";
 import {
+  ANALYSES,
   CONDITIONS,
   DETAIL_NAMES,
-  PLOTS,
   conditionValue,
+  plotInfo,
   facesLabel,
   stripExt,
 } from "./labels";
@@ -30,7 +32,14 @@ import type {
 } from "./types";
 
 export type Section =
-  "part" | "material" | "supports" | "loads" | "masses" | "mesh" | "results";
+  | "analysis"
+  | "part"
+  | "material"
+  | "supports"
+  | "loads"
+  | "masses"
+  | "mesh"
+  | "results";
 const ICONS = { support: Anchor, load: ArrowDown, mass: Weight };
 
 export function StudyTree({
@@ -89,6 +98,15 @@ export function StudyTree({
       />
       <Node
         depth={1}
+        icon={Gauge}
+        label="Analysis"
+        value={ANALYSES[study.analysis].name}
+        active={section === "analysis"}
+        onClick={() => onSection("analysis")}
+        disabled={busy}
+      />
+      <Node
+        depth={1}
         icon={Layers}
         label="Material"
         value={study.material?.name || "not set"}
@@ -96,36 +114,38 @@ export function StudyTree({
         onClick={() => onSection("material")}
         disabled={busy}
       />
-      {(["support", "load", "mass"] as const).map((kind) => (
-        <Fragment key={kind}>
-          <Group
-            icon={ICONS[kind]}
-            label={CONDITIONS[kind].group}
-            active={section === LISTS[kind] && !draft}
-            onClick={() => onSection(LISTS[kind])}
-            onAdd={() => onAdd(kind)}
-            addLabel={CONDITIONS[kind].add}
-            disabled={busy}
-          />
-          {conditionsOf(study, kind).map((c) => (
-            <Node
-              key={c.id}
-              depth={2}
-              swatch={kind}
-              label={c.name}
-              value={
-                kind === "support"
-                  ? facesLabel(c.faces)
-                  : conditionValue(kind, c)
-              }
-              active={draft?.value.id === c.id}
-              onClick={() => onEdit(kind, c)}
+      {(["support", "load", "mass"] as const)
+        .filter((kind) => kind !== "load" || ANALYSES[study.analysis].loads)
+        .map((kind) => (
+          <Fragment key={kind}>
+            <Group
+              icon={ICONS[kind]}
+              label={CONDITIONS[kind].group}
+              active={section === LISTS[kind] && !draft}
+              onClick={() => onSection(LISTS[kind])}
+              onAdd={() => onAdd(kind)}
+              addLabel={CONDITIONS[kind].add}
               disabled={busy}
             />
-          ))}
-          {draftRow(kind)}
-        </Fragment>
-      ))}
+            {conditionsOf(study, kind).map((c) => (
+              <Node
+                key={c.id}
+                depth={2}
+                swatch={kind}
+                label={c.name}
+                value={
+                  kind === "support"
+                    ? facesLabel(c.faces)
+                    : conditionValue(kind, c)
+                }
+                active={draft?.value.id === c.id}
+                onClick={() => onEdit(kind, c)}
+                disabled={busy}
+              />
+            ))}
+            {draftRow(kind)}
+          </Fragment>
+        ))}
       <Node
         depth={1}
         icon={Grid3X3}
@@ -152,7 +172,7 @@ export function StudyTree({
             <Node
               key={k}
               depth={2}
-              label={PLOTS[k].name}
+              label={plotInfo(k, result.analysis).name}
               active={section === "results" && plot === k}
               disabled={busy}
               onClick={() => onPlot(k)}
@@ -198,9 +218,10 @@ export function FaceList({
 }) {
   const use = new Map<number, { kind: ConditionKind; name: string }>();
   for (const kind of ["support", "load", "mass"] as const)
-    for (const c of conditionsOf(study, kind))
-      for (const f of c.faces)
-        if (!use.has(f)) use.set(f, { kind, name: c.name });
+    if (kind !== "load" || ANALYSES[study.analysis].loads)
+      for (const c of conditionsOf(study, kind))
+        for (const f of c.faces)
+          if (!use.has(f)) use.set(f, { kind, name: c.name });
   const q = query.trim().toLowerCase();
   return (
     <div className="faces">

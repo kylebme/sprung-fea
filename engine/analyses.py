@@ -20,7 +20,7 @@ import json, math, time
 import numpy as np
 import calculix
 from cad import emit, threads, mesh_view, write_view
-from model import Model, validate, build_loads
+from model import Model, validate, build_loads, validate_vibration, rbe3
 
 SCHEMA=2
 
@@ -129,7 +129,147 @@ class Static(Analysis):
                 {'id':'maxStress','label':'Peak stress','unit':'MPa','value':s['maxStress'],'peak':True}]
 
 
-ANALYSES={a.id:a for a in [Static()]}
+def modes_of(study, default=6):
+    n=study.get('modes',default)
+    if not isinstance(n,int) or not 1<=n<=50:
+        raise ValueError('Ask for 1 to 50 modes.')
+    return n
+
+
+def normalized(displacement, stress=None):
+    """A mode shape scaled to a peak displacement of 1 mm, with its stress
+    scaled alike (MPa per mm of peak motion)."""
+    peak=float(np.linalg.norm(displacement,axis=1).max()) or 1.
+    return displacement/peak, None if stress is None else stress/peak
+
+
+class Frequency(Analysis):
+    """Natural frequencies and mode shapes. Supports are optional: a part
+    with none is analyzed free, and its first six modes are rigid motions
+    at zero frequency. Point masses add inertia through RBE3 couplings."""
+    id='frequency'
+    name='Natural frequencies'
+
+    def validate(self, study, mesh):
+        model,fixed,rigid=validate_vibration(study,mesh)
+        modes_of(study)
+        return model.nodes,fixed
+
+    def deck(self, folder, study, mesh):
+        model,fixed,rigid=validate_vibration(study,mesh)
+        count=modes_of(study)
+        masses=study.get('masses') or []
+        lines=calculix.mesh_lines(model,'natural frequency study')
+        lines+=calculix.material_lines(study['material'])
+        if fixed: lines+=calculix.boundary_lines(fixed)
+        lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],fixed)
+        # A free part needs a negative shift: its stiffness is singular.
+        lines+=['*STEP','*FREQUENCY, SOLVER=SPOOLES',f'{count+rigid}, -1' if rigid else str(count)]
+        lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']
+        (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
+        return {'rigid':rigid}
+
+    def results(self, folder, study, model, frames, context):
+        ids=model.ids
+        dat=calculix.read_dat(folder/'analysis.dat')
+        eig=calculix.eigenvalues(dat)
+        effective,total=calculix.modal_mass(dat)
+        rigid=context['rigid']
+        if len(eig)<len(frames):
+            raise ValueError('CalculiX did not report every natural frequency. Inspect the solver log.')
+        view=[];info=[];frequencies=[];fractions=[]
+        for k,frame in enumerate(frames):
+            shape,stress=normalized(nodal(frame,'DISP',ids,3,'mode shape'),
+                                    np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'mode shape')]))
+            value=eig[k][1]
+            hz=max(0.,value[2]) if value[0]>0 else 0.
+            is_rigid=k<rigid
+            frequencies.append(hz)
+            mass=[e/t if t else 0 for e,t in zip(effective[k],total)] if k<len(effective) and total else [0,0,0]
+            fractions.append(mass)
+            info.append({'label':'Rigid motion' if is_rigid else f'Mode {k+1-rigid}','value':hz,'unit':'Hz'})
+            view.append({'displacement':shape,'vonMises':stress})
+        elastic=[f for k,f in enumerate(frequencies) if k>=rigid]
+        captured=np.sum(fractions[rigid:],axis=0) if elastic else np.zeros(3)
+        warnings=['Frequencies assume small vibrations about the unloaded shape. Loads, and stress stiffening from them, are not included.']
+        if rigid:
+            warnings.append(f'The part is free to move in {rigid} way{"s" if rigid>1 else ""}: the first {rigid} mode{"s are" if rigid>1 else " is a"} rigid motion{"s" if rigid>1 else ""} at about 0 Hz, listed separately.')
+        summary={'frequencies':frequencies,'rigidModes':rigid,'effectiveMass':fractions,
+                 'totalMass':total[0]*1e3 if total else None}
+        result={'frames':info,'fields':['displacement','vonMises'],'summary':summary,'warnings':warnings,'charts':[],
+                'checks':[mass_check(study,model),
+                          {'label':'Natural frequencies found','values':[len(elastic)],'unit':'','digits':0},
+                          {'label':'Effective mass captured X, Y, Z','values':(captured*100).tolist(),'unit':'%','digits':1}],
+                'solverNote':'eigen'}
+        return result,view
+
+    def key_results(self, result):
+        s=result['summary'];f=s['frequencies'][s['rigidModes']:]
+        return [{'id':'f1','label':'First natural frequency','unit':'Hz','value':f[0]}] if f else []
+
+
+class Buckling(Analysis):
+    """Linear buckling: the factors by which the applied loads can be
+    multiplied before the part buckles, and the buckled shapes."""
+    id='buckling'
+    name='Buckling'
+
+    def validate(self, study, mesh):
+        modes_of(study,3)
+        return validate(study, mesh)
+
+    def deck(self, folder, study, mesh):
+        nodes,fixed=self.validate(study,mesh)
+        count=modes_of(study,3)
+        model=Model(mesh)
+        m=study['material']
+        loading=build_loads(study,model,m['density']*1e-12)
+        lines=calculix.mesh_lines(model,'linear buckling study')
+        lines+=calculix.material_lines(m)+calculix.boundary_lines(fixed)
+        lines+=['*STEP','*BUCKLE, SOLVER=SPOOLES',str(count)]
+        lines+=calculix.load_lines(loading)
+        lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']
+        (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
+        return {}
+
+    def results(self, folder, study, model, frames, context):
+        ids=model.ids
+        factors=[v[0] for _,v in calculix.eigenvalues(calculix.read_dat(folder/'analysis.dat'))]
+        # The first frame is the reference state under the applied loads.
+        base,modes=frames[0],frames[1:]
+        if not factors or len(modes)<len(factors):
+            raise ValueError('CalculiX did not report the buckling factors. Inspect the solver log.')
+        stress=np.array([von_mises(s) for s in nodal(base,'STRESS',ids,6,'reference stress')])
+        view=[];info=[]
+        for k,(frame,factor) in enumerate(zip(modes,factors)):
+            shape,_=normalized(nodal(frame,'DISP',ids,3,'buckled shape'))
+            view.append({'displacement':shape})
+            info.append({'label':f'Mode {k+1}','value':factor,'unit':'× loads'})
+        first=next((f for f in factors if f>0),None)
+        warnings=['Real parts buckle below this load: small imperfections, residual stress and yielding lower it, often a lot for thin walls. Design for a factor of at least 2 to 3 on the first buckling load, more for thin shells.']
+        if first is not None and first<1:
+            warnings.append('The first buckling factor is below 1: the part buckles under the applied loads.')
+        if any(f<0 for f in factors):
+            warnings.append('Negative factors mean buckling if the loads were reversed.')
+        if first is None:
+            warnings.append('No buckling under these loads was found, only under reversed loads. Check the load directions.')
+        peak=float(stress.max())
+        yield_strength=study['material'].get('yield')
+        if first and yield_strength and peak*first>yield_strength:
+            warnings.append(f'At the first buckling load the stress would reach {peak*first:.3g} MPa, above the yield strength: the part yields before it buckles, so buckling does not limit it.')
+        summary={'factors':factors,'referenceStress':peak,'firstFactor':first}
+        result={'frames':info,'fields':['displacement'],'summary':summary,'warnings':warnings,'charts':[],
+                'checks':[{'label':'Peak stress under the applied loads','values':[peak],'unit':'MPa'},
+                          {'label':'First buckling factor','values':[first if first is not None else 0],'unit':'× loads','digits':4}],
+                'solverNote':'eigen'}
+        return result,view
+
+    def key_results(self, result):
+        f=result['summary']['firstFactor']
+        return [{'id':'factor','label':'First buckling factor','unit':'× loads','value':f}] if f else []
+
+
+ANALYSES={a.id:a for a in [Static(),Frequency(),Buckling()]}
 
 
 def analysis_of(study):
@@ -166,7 +306,9 @@ def solve(folder, study):
     result,view=analysis.results(folder,study,Model(mesh),frames,context)
     result['summary']['seconds']=time.monotonic()-start
     result['keys']=analysis.key_results(result)
-    result.update({'version':SCHEMA,'analysis':analysis.id,'solver':'CalculiX, '+calculix.SOLVERS[calculix.solver_of(study)][1],
+    eigen=result.pop('solverNote',None)=='eigen'
+    result.update({'version':SCHEMA,'analysis':analysis.id,
+                   'solver':'CalculiX, SPOOLES direct with ARPACK eigenvalues' if eigen else 'CalculiX, '+calculix.SOLVERS[calculix.solver_of(study)][1],
                    'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
                    'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']})
     (folder/'result.json').write_text(json.dumps(result))

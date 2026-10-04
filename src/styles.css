@@ -1523,3 +1523,21 @@ b.axis-z,
 .vec label.axis-z:focus-within {
   border-color: var(--axis);
 }
+.modes tbody tr {
+  cursor: pointer;
+}
+.modes tbody tr:hover td {
+  background: var(--line);
+}
+.modes tbody tr.on td {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.modes tbody tr.dim td {
+  color: var(--faint);
+}
+.modes th.axis-x,
+.modes th.axis-y,
+.modes th.axis-z {
+  color: var(--axis);
+}

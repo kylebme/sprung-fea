@@ -199,6 +199,31 @@ test("STEP → portable project → reopen → real solve → export", async () 
       converged.result.keys.map((k) => k.id),
       ["maxMovement", "maxStress"],
     );
+    // A vibration study: no loads needed, modes come back as frames.
+    const modal = { ...study, analysis: "frequency", modes: 3, loads: [] };
+    const manyModes = await fetch(`${base}/api/documents/${opened.id}/solve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...modal, modes: 80 }),
+    });
+    assert.equal(manyModes.status, 400);
+    const vibrating = await wait(
+      base,
+      (await request(base, `/api/documents/${opened.id}/solve`, modal)).job,
+    );
+    assert.equal(vibrating.result.analysis, "frequency");
+    assert.deepEqual(
+      vibrating.result.frames.map((f) => f.label),
+      ["Mode 1", "Mode 2", "Mode 3"],
+    );
+    assert.ok(Math.abs(vibrating.result.frames[0].value / 816 - 1) < 0.02);
+    const modeView = decodeView(
+      await (
+        await fetch(`${base}/api/documents/${opened.id}/view`)
+      ).arrayBuffer(),
+    );
+    assert.equal(modeView.frames.length, 3);
+    assert.ok(modeView.frames[2].displacement.length > 0);
     const foreign = await fetch(base + "/api/sample/beam", {
       method: "POST",
       headers: { Origin: "https://unrelated.example" },

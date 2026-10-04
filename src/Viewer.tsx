@@ -48,6 +48,8 @@ type Props = {
   region: { lo: number[]; hi: number[] } | null;
   /** Show the coordinate origin, while a position is being entered. */
   origin: boolean;
+  /** Oscillate the deformed shape, for mode shapes. */
+  animate: boolean;
 };
 
 export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
@@ -131,6 +133,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       probe: p.probe,
       region: p.region,
       origin: p.origin,
+      animate: p.animate,
     };
     scene.update(state);
     const area = scene.sectionArea();

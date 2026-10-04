@@ -6,7 +6,7 @@ This document describes the implemented application, its numerical and persisten
 
 ## 1. Scope and product decisions
 
-BetterSim performs linear static structural analysis of one STEP solid using CalculiX. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
+BetterSim analyzes one STEP solid with CalculiX: linear static stress, natural frequencies, and linear buckling. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
 
 The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A study tree with the part's face list on the left, the model view in the center, and an inspector on the right keep these dependencies visible. A collapsible console under the view holds job output and solver checks. Light and dark themes follow the system setting until the user picks one. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
 
@@ -115,6 +115,20 @@ A point mass is carried by its faces the same way as a remote force. In a static
 Rotation is a centrifugal body load, `*DLOAD CENTRIF` with ω² in rad²/s² about an axis through a point, entered in rpm. Only one rotation per study is allowed. Its equivalent nodal forces use the same four-point tetrahedron rule as CalculiX, so reaction recovery stays exact.
 
 Equivalent applied nodal contributions are retained for force, pressure, and gravity. They are required when interpreting the solver's nodal force output at supported nodes.
+
+### Natural frequencies
+
+A natural frequency study (`analysis: "frequency"`, `modes`: 1–50, default 6) runs `*FREQUENCY` with SPOOLES and ARPACK; the study's equation-solver choice applies to static studies only. Loads play no part and are hidden in the study tree. Supports are optional: the engine counts the rigid motions the supports leave free (the same rank check as static validation) and, for a free or partly held part, requests that many extra modes with a negative shift, since the stiffness matrix is singular. Those first modes are labelled rigid motions at 0 Hz and excluded from key results.
+
+Frequencies come from the `.dat` eigenvalue table; effective modal mass per direction is reported as a fraction of CalculiX's total effective mass, which counts only mass that can move (mass on supported nodes is left out). Each mode shape is scaled to a 1 mm peak displacement and its von Mises stress alike, so modal stress reads in MPa per mm of peak motion; yield margin is not offered. The key result for mesh convergence is the first elastic frequency.
+
+Point masses add inertia through RBE3 constraints: a `MASS` element on an extra node at the center of mass, tied by three `*EQUATION`s to its faces' area-weighted mean translation plus their mean rotation times the offset. At most 60 face nodes take part, thinned by farthest-point sampling with weights gathered to the nearest kept node. CalculiX cannot place mass on an equation's dependent side in an eigenvalue analysis, so each equation eliminates the face-node direction with the largest coefficient that is neither supported nor already eliminated; a mass on fully supported faces is rejected.
+
+The results panel lists modes with frequency and effective mass, and animates the selected mode shape.
+
+### Buckling
+
+A buckling study (`analysis: "buckling"`, `modes` default 3) runs `*BUCKLE` with the study's supports and loads as the reference load. Each factor multiplies all loads together; the first positive factor is the key result. The first `.frd` frame is the reference state, whose peak stress times the first factor is compared with the yield strength: above it, the part yields before it buckles. A first factor below 1 means buckling under the applied loads; negative factors mean buckling with the loads reversed, and a study with only negative factors has no key result. Shapes are scaled to a 1 mm peak and shown still. The panel reminds the user that imperfections and yielding make real buckling loads lower, and recommends a factor of at least 2 to 3.
 
 ### Solve and result decoding
 

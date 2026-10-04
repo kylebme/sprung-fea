@@ -80,13 +80,15 @@ export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
 export type Threads = "auto" | "single" | "all";
 export type Cpus = { logical: number; performance: number };
 /** Analysis types; projects saved before the choice are linear static. */
-export type Analysis = "static";
+export type Analysis = "static" | "frequency" | "buckling";
 export type Study = {
   analysis: Analysis;
   material: Material | null;
   supports: Support[];
   loads: Load[];
   masses: PointMass[];
+  /** Modes to find in vibration studies. */
+  modes?: number;
   meshSize: number;
   detail: "coarse" | "medium" | "fine" | "custom";
   solver: Solver;

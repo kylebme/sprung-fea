@@ -50,12 +50,59 @@ export const PLOTS: Record<
   temperature: { name: "Temperature", unit: "°C", digits: 2 },
   plastic: { name: "Plastic strain", unit: "mm/mm", digits: 5 },
 };
-export const ANALYSES: Record<Analysis, { name: string; note: string }> = {
+/**
+ * Analysis types and what each uses. `loads`: the study's loads apply.
+ * `supports`: at least one support is required. `eigen`: results are
+ * shapes scaled to a 1 mm peak, solved with the direct solver.
+ */
+export const ANALYSES: Record<
+  Analysis,
+  {
+    name: string;
+    note: string;
+    loads: boolean;
+    supports: boolean;
+    eigen: boolean;
+  }
+> = {
   static: {
     name: "Linear static",
     note: "Stress and deflection under steady loads.",
+    loads: true,
+    supports: true,
+    eigen: false,
+  },
+  frequency: {
+    name: "Natural frequencies",
+    note: "The frequencies a part vibrates at on its own, and the shape of each vibration. Keep them away from the frequencies of motors, rotors or road input.",
+    loads: false,
+    supports: false,
+    eigen: true,
+  },
+  buckling: {
+    name: "Buckling",
+    note: "How many times the loads can grow before a slender or thin-walled part suddenly buckles sideways, and the shape it buckles into.",
+    loads: true,
+    supports: true,
+    eigen: true,
   },
 };
+/** Modes requested by default in each eigenvalue analysis. */
+export const DEFAULT_MODES: Partial<Record<Analysis, number>> = {
+  frequency: 6,
+  buckling: 3,
+};
+
+/** A plot's name and unit, which depend on the analysis. */
+export function plotInfo(plot: Plot, analysis: Analysis) {
+  if (analysis === "buckling" && plot === "movement")
+    return { name: "Buckled shape", unit: "relative", digits: 3 };
+  if (ANALYSES[analysis].eigen && plot === "movement")
+    return { name: "Mode shape", unit: "relative", digits: 3 };
+  if (ANALYSES[analysis].eigen && plot === "stress")
+    return { name: "Modal stress", unit: "MPa per mm", digits: 3 };
+  return PLOTS[plot];
+}
 /** Short console labels for worker stages. */
 export const STAGES: Record<string, string> = {
   importing: "import",

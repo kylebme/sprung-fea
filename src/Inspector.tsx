@@ -12,12 +12,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { editMaterial, fmt, type Draft } from "./logic";
+import { editMaterial, fmt, sig, type Draft } from "./logic";
 import {
   DETAILS,
   DETAIL_NAMES,
+  ANALYSES,
   CONDITIONS,
+  DEFAULT_MODES,
   LOAD_KINDS,
+  plotInfo,
   conditionValue,
   isBodyLoad,
   PLOTS,
@@ -31,6 +34,7 @@ import { probeValue, type Probe } from "./viewData";
 import { ConvergenceControls, ConvergenceReport } from "./Convergence";
 import {
   MATERIALS,
+  type Analysis,
   type Axis,
   type Filters,
   type Condition,
@@ -91,6 +95,75 @@ export function PartPanel({
           </button>
         )}
       </div>
+    </>
+  );
+}
+
+/** Chooses the analysis type and its settings. */
+export function AnalysisPanel({
+  study,
+  onChange,
+}: {
+  study: Study;
+  onChange: (s: Study) => void;
+}) {
+  const current = ANALYSES[study.analysis];
+  return (
+    <>
+      <Head small="Analysis" title={current.name} />
+      <div className="sec">
+        <div className="presets" role="group" aria-label="Analysis type">
+          {(Object.keys(ANALYSES) as Analysis[]).map((id) => (
+            <button
+              key={id}
+              aria-pressed={study.analysis === id}
+              className={study.analysis === id ? "on" : ""}
+              onClick={() =>
+                study.analysis !== id &&
+                onChange({
+                  ...study,
+                  analysis: id,
+                  modes: DEFAULT_MODES[id] ?? study.modes,
+                })
+              }
+            >
+              <span>
+                {ANALYSES[id].name}
+                <small>{ANALYSES[id].note}</small>
+              </span>
+              {study.analysis === id && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      </div>
+      {current.eigen && (
+        <div className="sec">
+          <NumberField
+            label="Modes to find"
+            value={study.modes ?? DEFAULT_MODES[study.analysis]!}
+            step="1"
+            onChange={(v) =>
+              onChange({
+                ...study,
+                modes: Math.max(1, Math.min(50, Math.round(v) || 1)),
+              })
+            }
+          />
+          {study.analysis === "frequency" ? (
+            <p className="note">
+              Loads are not used: natural frequencies depend on stiffness, mass
+              and supports. Supports are optional. Without any, the part
+              vibrates freely, as if hung on soft springs. Point masses add
+              their inertia.
+            </p>
+          ) : (
+            <p className="note">
+              The loads are the reference: each buckling factor multiplies all
+              of them together. Usually only the first mode matters.
+            </p>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -754,10 +827,17 @@ export function MeshPanel({
       </div>
       <div className="sec">
         <h4>Solver</h4>
+        {ANALYSES[study.analysis].eigen && (
+          <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>
+            {ANALYSES[study.analysis].name} always use the direct solver; this
+            choice applies to static studies.
+          </p>
+        )}
         <div className="presets" role="group" aria-label="Solver">
           {SOLVERS.map((s) => (
             <button
               key={s.id}
+              disabled={ANALYSES[study.analysis].eigen}
               aria-pressed={study.solver === s.id}
               className={study.solver === s.id ? "on" : ""}
               onClick={() => onChange({ ...study, solver: s.id })}
@@ -869,6 +949,8 @@ export function ResultsPanel({
   deform,
   autoScale,
   wire,
+  animate,
+  onAnimate,
   probe,
   filters,
   bounds,
@@ -900,6 +982,8 @@ export function ResultsPanel({
   deform: "off" | "true" | "auto";
   autoScale: number;
   wire: boolean;
+  animate: boolean;
+  onAnimate: (on: boolean) => void;
   probe: Probe | null;
   filters: Filters;
   bounds: number[];
@@ -923,7 +1007,9 @@ export function ResultsPanel({
   const s = result.summary;
   const yieldStrength = study.material?.yield || null;
   const low = plot === "safety";
-  const digits = plot === "stress" ? 2 : PLOTS[plot].digits;
+  const info = plotInfo(plot, result.analysis);
+  const digits =
+    plot === "stress" && !ANALYSES[result.analysis].eigen ? 2 : info.digits;
   const peak = {
     value: fmt(stats.peak.value, digits),
     node: stats.peak.node,
@@ -934,16 +1020,34 @@ export function ResultsPanel({
     : undefined;
   return (
     <>
-      <Head small="Result" title={PLOTS[plot].name} />
-      {result.frames.length > 1 && (
-        <FramePicker result={result} frame={frame} onFrame={onFrame} />
+      <Head small="Result" title={info.name} />
+      {ANALYSES[result.analysis].eigen ? (
+        <ModeTable result={result} frame={frame} onFrame={onFrame} />
+      ) : (
+        result.frames.length > 1 && (
+          <FramePicker result={result} frame={frame} onFrame={onFrame} />
+        )
       )}
       <div className="sec">
-        <div className="big">
-          <strong>{peak.value}</strong>
-          <span>{PLOTS[plot].unit}</span>
-        </div>
-        <Row label={peak.label}>node {peak.node}</Row>
+        {ANALYSES[result.analysis].eigen ? (
+          <>
+            <div className="big">
+              <strong>{sig(result.frames[frame]?.value ?? 0, 5)}</strong>
+              <span>{result.frames[frame]?.unit}</span>
+            </div>
+            <Row label={result.frames[frame]?.label || ""}>
+              peak at node {peak.node}
+            </Row>
+          </>
+        ) : (
+          <>
+            <div className="big">
+              <strong>{peak.value}</strong>
+              <span>{info.unit}</span>
+            </div>
+            <Row label={peak.label}>node {peak.node}</Row>
+          </>
+        )}
         {plot === "safety" ? (
           <Row label="Yield strength">
             {fmt(yieldStrength || 0)}
@@ -951,8 +1055,8 @@ export function ResultsPanel({
           </Row>
         ) : (
           <Row label="Minimum">
-            {fmt(stats.min, PLOTS[plot].digits)}
-            <em>{PLOTS[plot].unit}</em>
+            {fmt(stats.min, info.digits)}
+            <em>{info.unit}</em>
           </Row>
         )}
         <div className="kv">
@@ -974,12 +1078,14 @@ export function ResultsPanel({
               >
                 Undeformed
               </button>
-              <button
-                className={deform === "true" ? "on" : ""}
-                onClick={() => onDeform("true")}
-              >
-                1×
-              </button>
+              {!ANALYSES[result.analysis].eigen && (
+                <button
+                  className={deform === "true" ? "on" : ""}
+                  onClick={() => onDeform("true")}
+                >
+                  1×
+                </button>
+              )}
               <button
                 className={deform === "auto" ? "on" : ""}
                 onClick={() => onDeform("auto")}
@@ -988,6 +1094,18 @@ export function ResultsPanel({
                 {fmt(autoScale, autoScale >= 100 ? 0 : 1)}×
               </button>
             </div>
+          </div>
+        )}
+        {ANALYSES[result.analysis].eigen && (
+          <div className="switch-row">
+            <span>Animate</span>
+            <button
+              className={"switch" + (animate ? " on" : "")}
+              role="switch"
+              aria-checked={animate}
+              aria-label="Animate"
+              onClick={() => onAnimate(!animate)}
+            />
           </div>
         )}
         <div className="switch-row">
@@ -1021,7 +1139,10 @@ export function ResultsPanel({
               {probe.point.map((n) => fmt(n, 2)).join(", ")}
               <em>mm</em>
             </Row>
-            {PROBE_ROWS.map(({ plot: p, label, digits }) => {
+            {PROBE_ROWS.map(({ plot: p, label: plain, digits }) => {
+              const label = ANALYSES[result.analysis].eigen
+                ? plotInfo(p, result.analysis).name
+                : plain;
               const value = probeValue(probe, p, yieldStrength);
               return (
                 value !== null && (
@@ -1029,7 +1150,9 @@ export function ResultsPanel({
                     {p === "safety" && value >= 1000
                       ? "> 1000"
                       : fmt(value, digits)}
-                    <em>{p === "safety" ? "×" : PLOTS[p].unit}</em>
+                    <em>
+                      {p === "safety" ? "×" : plotInfo(p, result.analysis).unit}
+                    </em>
                   </Row>
                 )
               );
@@ -1044,6 +1167,7 @@ export function ResultsPanel({
       <FilterControls
         filters={filters}
         plot={plot}
+        unitOf={info.unit}
         bounds={bounds}
         scale={scale}
         sectionArea={sectionArea}
@@ -1156,6 +1280,7 @@ export function ResultsPanel({
 function FilterControls({
   filters,
   plot,
+  unitOf,
   bounds,
   scale,
   sectionArea,
@@ -1163,13 +1288,14 @@ function FilterControls({
 }: {
   filters: Filters;
   plot: Plot;
+  unitOf: string;
   bounds: number[];
   scale: { min: number; max: number };
   sectionArea: number | null;
   onChange: (f: Filters) => void;
 }) {
   const { section, iso, threshold } = filters;
-  const unit = PLOTS[plot].unit;
+  const unit = unitOf;
   const digits =
     plot === "movement"
       ? 4
@@ -1446,6 +1572,73 @@ function RegionControls({ region }: { region: RegionState }) {
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Modes of an eigenvalue study: frequency and effective mass per direction
+ * for vibration, the load factor for buckling.
+ */
+function ModeTable({
+  result,
+  frame,
+  onFrame,
+}: {
+  result: Result;
+  frame: number;
+  onFrame: (k: number) => void;
+}) {
+  const mass = (result.summary.effectiveMass as number[][] | undefined) || [];
+  const vibration = result.analysis === "frequency";
+  return (
+    <div className="sec">
+      <h4>
+        Modes
+        {vibration && <span className="mono">effective mass, %</span>}
+      </h4>
+      <table className="mesh-table modes" aria-label="Modes">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>{vibration ? "Hz" : "Load factor"}</th>
+            {vibration && (
+              <>
+                <th className="axis-x">X</th>
+                <th className="axis-y">Y</th>
+                <th className="axis-z">Z</th>
+              </>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {result.frames.map((f, k) => (
+            <tr
+              key={k}
+              className={
+                (k === frame ? "on " : "") +
+                (f.label === "Rigid motion" ? "dim" : "")
+              }
+              onClick={() => onFrame(k)}
+              aria-selected={k === frame}
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && onFrame(k)}
+            >
+              <td>{f.label.replace("Mode ", "")}</td>
+              <td>{sig(f.value ?? 0, 5)}</td>
+              {vibration &&
+                (mass[k] || [0, 0, 0]).map((v, i) => (
+                  <td key={i}>{v < 5e-4 ? "0" : fmt(v * 100, 1)}</td>
+                ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="note">
+        {vibration
+          ? "A mode with a large effective mass in a direction responds strongly to shaking in that direction."
+          : "The part buckles when all loads are multiplied by the first factor. A negative factor means buckling with the loads reversed."}
+      </p>
     </div>
   );
 }

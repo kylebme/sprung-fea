@@ -1,0 +1,73 @@
+import { test, expect } from "@playwright/test";
+import {
+  check,
+  inspector,
+  numbers,
+  openBeam,
+  solve,
+  watchErrors,
+} from "./helpers";
+import path from "node:path";
+
+test("natural frequencies: choose the analysis, solve, browse modes, animate, reopen", async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  await openBeam(page);
+  await page.getByRole("button", { name: /^Analysis/ }).click();
+  await inspector(page)
+    .getByRole("button", { name: /^Natural frequencies/ })
+    .click();
+  await expect(page.locator("header")).toContainText("Natural frequencies");
+  // Loads play no part in a vibration study, so the tree hides them.
+  await expect(
+    page.getByRole("button", { name: "Loads", exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("Modes to find").fill("4");
+  await solve(page, "Mode shape");
+  const modes = page.getByRole("table", { name: "Modes" });
+  await expect(modes.locator("tbody tr")).toHaveCount(4);
+  // Mode 1: first bending, 816 Hz by beam theory.
+  const first = Number(
+    (await inspector(page).locator(".big strong").innerText()).replace(
+      /,/g,
+      "",
+    ),
+  );
+  expect(Math.abs(first / 816 - 1)).toBeLessThan(0.02);
+  await expect(page.getByRole("switch", { name: "Animate" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(page.locator(".vchip")).toContainText("animated");
+  await page.screenshot({ path: "output/playwright/frequency.png" });
+  await modes.locator("tbody tr").nth(1).click();
+  await expect(page.locator(".vlabel")).toContainText("Mode 2");
+  const second = Number(
+    (await inspector(page).locator(".big strong").innerText()).replace(
+      /,/g,
+      "",
+    ),
+  );
+  expect(second).toBeGreaterThan(first * 1.8);
+  await page.getByRole("switch", { name: "Animate" }).click();
+  await expect(page.locator(".vchip")).not.toContainText("animated");
+  expect(numbers(await check(page, "Natural frequencies found"))[0]).toBe(4);
+  // Without supports the part is free: six rigid motions come first.
+  await page.getByRole("button", { name: /^Fixed\s*Face 1$/ }).click();
+  await inspector(page).getByRole("button", { name: "Delete" }).click();
+  await solve(page, "Mode shape");
+  await expect(modes.locator("tbody tr.dim")).toHaveCount(6);
+  await expect(page.locator(".vlabel")).toContainText("Mode 1");
+  // Saved projects keep every mode.
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await (await download).saveAs("output/playwright/frequency.bsim");
+  await page.reload();
+  await page
+    .locator('input[type=file][accept=".bsim"]')
+    .setInputFiles(path.resolve("output/playwright/frequency.bsim"));
+  await expect(page.getByText("Results loaded from project")).toBeVisible();
+  await expect(modes.locator("tbody tr")).toHaveCount(10);
+  expect(errors).toEqual([]);
+});

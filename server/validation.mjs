@@ -19,7 +19,7 @@ const vector = (v, name) => {
   return v;
 };
 /** Analysis types the engine implements (engine/analyses.py). */
-export const ANALYSES = ["static"];
+export const ANALYSES = ["static", "frequency", "buckling"];
 // Errors caused by the request itself; the service reports them as 400.
 export class RequestError extends Error {
   status = 400;
@@ -79,6 +79,12 @@ export function validateStudy(s) {
   s.analysis ??= "static";
   if (!ANALYSES.includes(s.analysis))
     throw new RequestError("This analysis type is not available.");
+  // Mode count for vibration studies.
+  if (
+    s.modes !== undefined &&
+    (!Number.isInteger(s.modes) || s.modes < 1 || s.modes > 50)
+  )
+    throw new RequestError("Ask for 1 to 50 modes.");
   if (!SOLVERS.includes(s.solver))
     throw new RequestError("The solver setting is invalid.");
   if (s.material) {

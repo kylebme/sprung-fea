@@ -85,7 +85,7 @@ def failure(tail):
 
 
 # FRD blocks this reader keeps, by their CalculiX label.
-FIELDS={'DISP','DISPI','PDISP','STRESS','FORC','NDTEMP','PE','HFL','ERROR'}
+FIELDS={'DISP','DISPI','PDISP','STRESS','FORC','NDTEMP','PE','FLUX','RFL','ERROR'}
 
 
 def parse_frd(path, keep=FIELDS):
@@ -172,3 +172,65 @@ def load_lines(loading):
     dload+=[f'{eid}, P{face}, {number(p)}' for (eid,face),p in loading.pressures.items()]
     if dload: lines+=['*DLOAD']+dload
     return lines
+
+
+def mass_lines(model, masses, couplings, fixed=()):
+    """Point masses as MASS elements on extra nodes, tied to their faces by
+    *EQUATION constraints, one per direction. `couplings` holds model.rbe3
+    output per mass. Masses in kg.
+
+    CalculiX cannot put mass on the dependent side of an equation in an
+    eigenvalue analysis, so the mass node stays independent: each equation
+    eliminates the face-node direction with the largest coefficient that is
+    neither supported nor already eliminated."""
+    lines=[];node=max(model.ids);element=max(model.mesh['elementIds'])
+    equations=['*EQUATION'];used={(n,a+1) for n,a in fixed}
+    for m,terms in zip(masses,couplings):
+        node+=1;element+=1
+        lines+=['*NODE',f'{node}, '+', '.join(number(v) for v in m['point'])]
+        lines+=[f'*ELEMENT, TYPE=MASS, ELSET=M{element}',f'{element}, {node}',
+                f'*MASS, ELSET=M{element}',number(float(m['mass'])*1e-3)]
+        for k in range(3):
+            entries=[(n,j+1,-A[k,j]) for n,A in terms for j in range(3) if abs(A[k,j])>1e-12]
+            free=[e for e in entries if (e[0],e[1]) not in used]
+            if not free:
+                raise ValueError(f"The point mass “{m.get('name','')}” sits on faces that are fully supported. Attach it to faces that can move.")
+            first=max(free,key=lambda e:abs(e[2]))
+            used.add((first[0],first[1]))
+            entries=[first]+[e for e in entries if e is not first]+[(node,k+1,1.0)]
+            equations.append(str(len(entries)))
+            for i in range(0,len(entries),4):
+                equations.append(', '.join(f'{n}, {d}, {number(c)}' for n,d,c in entries[i:i+4]))
+    return lines+(equations if len(equations)>1 else [])
+
+
+def eigenvalues(dat):
+    """(mode, eigenvalue, frequency in Hz) rows of the first eigenvalue table
+    in a .dat file. Negative eigenvalues (rigid motions with round-off, or
+    buckling factors) keep their sign."""
+    out=[];inside=False
+    for line in dat.splitlines():
+        if 'E I G E N V A L U E   O U T P U T' in line or 'B U C K L I N G   F A C T O R   O U T P U T' in line:
+            inside=True;out=[];continue
+        if inside:
+            parts=line.split()
+            if len(parts)>=2 and parts[0].isdigit():
+                values=[float(p) for p in parts[1:]]
+                out.append((int(parts[0]),values))
+            elif out and not parts: continue
+            elif out: break
+    return out
+
+
+def modal_mass(dat):
+    """Effective modal mass per mode (X, Y, Z) and the total mass, in tonne."""
+    rows=[];total=None;section=None
+    for line in dat.splitlines():
+        if 'E F F E C T I V E   M O D A L   M A S S' in line: section='modes';continue
+        if 'T O T A L   E F F E C T I V E   M A S S' in line: section='total';continue
+        parts=line.split()
+        if section=='modes' and len(parts)==7 and parts[0].isdigit():
+            rows.append([float(p) for p in parts[1:4]])
+        elif section=='total' and len(parts)==6 and not parts[0][0].isalpha():
+            total=[float(p) for p in parts[:3]];section=None
+    return rows,total

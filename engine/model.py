@@ -378,3 +378,64 @@ def build_loads(study, model, density):
                     body+=omega**2*r
                 for n,Ni in zip(c,N): loading.add_applied(n,Ni*w*density*body)
     return loading
+
+
+def rbe3(model, faces, point, limit=60):
+    """Linear constraint making `point` follow the selected faces like an
+    RBE3 element: its displacement is the faces' area-weighted mean
+    translation plus their mean rotation times its offset. Returns
+    [(node, 3×3 coefficient matrix)] with u_point = Σ A·u_node. At most
+    `limit` nodes take part (CalculiX recommends short equations): face nodes
+    are thinned by farthest-point sampling, each sampled node taking the
+    weight of the nodes nearest to it."""
+    weights={}
+    for tri,N,_,_,w in model.face_quadrature(faces):
+        for n,Ni in zip(tri,N): weights[n]=weights.get(n,0)+Ni*w
+    nodes=[n for n,w in weights.items() if w>1e-12*sum(weights.values())]
+    xyz=np.array([model.nodes[n] for n in nodes]);w=np.array([weights[n] for n in nodes])
+    if len(nodes)>limit:
+        chosen=[int(np.argmax(w))];far=np.linalg.norm(xyz-xyz[chosen[0]],axis=1)
+        while len(chosen)<limit:
+            k=int(np.argmax(far));chosen.append(k)
+            far=np.minimum(far,np.linalg.norm(xyz-xyz[k],axis=1))
+        owner=np.argmin(np.linalg.norm(xyz[:,None,:]-xyz[chosen][None,:,:],axis=2),axis=1)
+        w=np.array([w[owner==i].sum() for i in range(len(chosen))])
+        nodes=[nodes[k] for k in chosen];xyz=xyz[chosen]
+    w=w/w.sum()
+    center=w@xyz
+    r=xyz-center
+    J=sum(wi*(np.dot(ri,ri)*np.eye(3)-np.outer(ri,ri)) for wi,ri in zip(w,r))
+    Jinv=np.linalg.pinv(J)
+    cross=lambda v:np.array([[0,-v[2],v[1]],[v[2],0,-v[0]],[-v[1],v[0],0]])
+    D=cross(np.asarray(point,float)-center)
+    return [(n,wi*(np.eye(3)-D@Jinv@cross(ri))) for n,wi,ri in zip(nodes,w,r)]
+
+
+def rigid_count(fixed, model):
+    """How many rigid motions the blocked directions leave free (0 to 6)."""
+    coords=model.coords
+    center=coords.mean(axis=0);scale=max(np.ptp(coords,axis=0))
+    rows=[]
+    for node,a in fixed:
+        x,y,z=(model.nodes[node]-center)/scale
+        rows.append([[1,0,0,0,z,-y],[0,1,0,-z,0,x],[0,0,1,y,-x,0]][a])
+    return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-8) if rows else 0))
+
+
+def validate_vibration(study, mesh):
+    """Material with density, valid supports (optional) and point masses.
+    Loads play no part. Returns (model, fixed, free rigid motions)."""
+    material=study.get('material')
+    if not material:
+        raise ValueError('Choose a material first.')
+    finite(material['young'],'Elastic modulus',True)
+    nu=finite(material['poisson'],'Poisson ratio')
+    if not -1<nu<.499:
+        raise ValueError('Poisson ratio must lie between -1 and 0.499. Nearly incompressible materials need a different formulation.')
+    finite(material['density'],'Density',True)
+    masses=study.get('masses') or []
+    check_faces(study.get('supports',[])+masses,mesh)
+    check_masses(masses)
+    model=Model(mesh)
+    fixed=fixed_dofs(study.get('supports',[]),model)
+    return model,fixed,rigid_count(fixed,model)
