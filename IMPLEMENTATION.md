@@ -252,24 +252,54 @@ Development document data lives in `.sprung-fea/`. Packaged desktop document dat
 
 ## 8. Build and distribution
 
-Development setup and commands are documented in [README.md](README.md). The main commands are:
+### Running from source on macOS
 
 ```sh
 npm ci
 npm run setup
 brew install costerwi/calculix/calculix-ccx
 npm run dev:desktop
+```
 
-npm run build
+`npm run setup` creates the Python engine environment (`.venv`) and downloads the pinned VTK.wasm runtime (13 MB, checksum-verified) into `public/vtk-wasm/`. The 3D view needs WebGL 2.
+
+For a browser development session, use `npm run dev` and visit http://127.0.0.1:5173. After `npm run build`, `npm start` opens the desktop application with its own local service. `SPRUNG_FEA_PYTHON` overrides the development worker interpreter, and `SPRUNG_FEA_CCX` selects a solver executable when CalculiX is installed elsewhere. `SPRUNG_FEA_CHROMIUM` overrides the browser executable used by end-to-end tests.
+
+### Standalone Mac app
+
+```sh
 .venv/bin/pip install pyinstaller
 npm run package:mac
 ```
 
-`SPRUNG_FEA_PYTHON` overrides the development worker interpreter, and `SPRUNG_FEA_CCX` selects a solver executable. Browser development uses `npm run dev`; `SPRUNG_FEA_CHROMIUM` overrides the browser executable used by end-to-end tests.
-
 The Mac build freezes Python, Gmsh, and NumPy into a standalone worker. The bundler copies CalculiX and its non-system dynamic dependencies, rewrites library references to adjacent bundled files, and signs the relocated binaries. Electron Builder packages the renderer (including the VTK.wasm runtime, about 87 MB), service, engine, sample STEP files, offline fonts, and license notices. A final script ad-hoc signs and verifies the application.
 
-Output is `release/mac-arm64/Sprung FEA.app`. The tested app needs neither Python nor Homebrew on the destination PATH. `npm run dist:mac` additionally requests a DMG. Apple notarization, Intel Mac packaging, and Windows/Linux packaging remain future work.
+Output is `release/mac-arm64/Sprung FEA.app`. The tested app needs neither Python nor Homebrew on the destination PATH. `npm run dist:mac` additionally produces a DMG. The build is ad-hoc signed for local testing, not Apple-notarized. Intel Mac packaging requires an Intel runtime and solver built on that architecture.
+
+### Windows and Linux
+
+```sh
+.venv/bin/pip install pyinstaller   # .venv\Scripts\pip on Windows
+npm run package:win                 # or: npm run package:linux
+npm run test:packaged               # solves with only the packaged engine and solver
+```
+
+These bundle the CalculiX found by `SPRUNG_FEA_CCX` (or on `PATH`) together with its shared libraries; CI uses conda-forge `calculix=2.23` (`micromamba create -n calculix calculix=2.23`). Linux packaging needs `patchelf`. Windows produces `release/Sprung-FEA-Setup-<version>.exe`, a one-click installer that installs for the current user without administrator rights. Linux produces `release/Sprung-FEA-<version>-x86_64.AppImage`, which runs without installation. Builds are unsigned.
+
+### Continuous integration
+
+[.github/workflows/build.yml](.github/workflows/build.yml) builds the macOS DMG, Windows installer and Linux AppImage on every push and pull request, runs a static and a frequency solve with each packaged engine, and uploads the installers as workflow artifacts. The README's download instructions point users to these artifacts until tagged releases exist.
+
+### README media
+
+The GIFs and video in `docs/media/` are recorded from the running app, not mocked. With `npm run dev` running:
+
+```sh
+node scripts/record-demo.mjs        # drives the app headless, frames to output/demo/
+.venv/bin/python scripts/demo-media.py   # cuts docs/media/*.gif and demo.mp4 (needs ffmpeg)
+```
+
+Controls are found by role and label, and CAD faces by number: before recording, the recorder sweeps the cursor over the mounting bracket in its opening view and reads which face the status bar reports at each point. Each GIF runs between the start and end marks of its clip; steps between clips appear only in the MP4.
 
 Sprung FEA is GPL-3.0-or-later. Dependency notices and public binary corresponding-source requirements are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -291,12 +321,25 @@ The complex fixtures are a bearing block with fillets and counterbores, a gusset
 CadQuery generates these fixtures through a separate STEP exporter, although both exporters/importers use OpenCASCADE. Committed STEP files allow normal tests to run without installing CadQuery. Exact measurements and numerical tolerances are in [validation.md](docs/validation.md) and [complex-validation.json](docs/complex-validation.json).
 
 ```sh
-npm run test:engine
-npm test
-npm run test:e2e
+npm run test:engine  # real STEP → mesh → CalculiX; analytical and conservation checks
+npm test             # local-service subsystem and study-logic invariants
+npm run test:e2e     # real browser interaction and solves
 npm run test:all
-npm run test:desktop
+npm run test:desktop # packaged .app, using only its bundled engine and solver
 ```
+
+Browser tests use installed Chrome by default; set `SPRUNG_FEA_CHROMIUM` to another Chromium executable. Screenshots and failure traces are written under `output/playwright/`. No mock solver substitutes for these acceptance tests.
+
+To regenerate the fixtures (optional; ordinary tests need no CadQuery installation):
+
+```sh
+.venv/bin/python scripts/generate-assembly-samples.py  # assembly fixtures (Gmsh)
+python3 -m venv .cad-venv
+.cad-venv/bin/pip install cadquery==2.7.0
+.cad-venv/bin/python scripts/generate-complex-samples.py
+```
+
+The generator credits the official [CadQuery quickstart](https://cadquery.readthedocs.io/en/stable/quickstart.html) for the bearing-block construction approach; the fixture dimensions and remaining constructions are specific to this project.
 
 The evidence does not yet include physical correlation, an independent commercial solver comparison, or a representative customer CAD corpus. Automated browser and packaged desktop checks passed; a separate manual native click-through was unavailable because the Mac was locked.
 

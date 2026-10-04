@@ -1,114 +1,114 @@
 # Sprung FEA
 
-An open-source mechanical FEA workspace built around engineering intent. Import a STEP solid, choose its material, select the faces that hold it, apply loads, and inspect real CalculiX results.
+Stress, vibration and heat analysis for mechanical parts, on your own computer.
 
-**Version 0.1:** linear static, natural frequency, buckling, heat transfer and thermal stress analysis of one solid part. Electron + Vite + React, with VTK compiled to WebAssembly for the 3D view, OpenCASCADE/Gmsh for CAD and meshing and CalculiX for solving. GPL-3.0-or-later.
+Open a STEP file, pick a material, click the faces that hold the part and the faces that carry load, and solve. Sprung FEA meshes the geometry, runs the open-source CalculiX solver locally, and shows you where the part is stressed, how far it moves, how it vibrates and how hot it gets.
 
-## Run on macOS
+It is free software (GPL-3.0) for macOS, Windows and Linux.
 
-```sh
-npm ci
-npm run setup
-brew install costerwi/calculix/calculix-ccx
-npm run dev:desktop
-```
+![Setting up a study: open the bracket, choose aluminum, click the two bolt holes as fixed supports, put 500 N on the base, and solve](docs/media/setup.gif)
 
-`npm run setup` creates the Python engine environment and downloads the pinned VTK.wasm runtime (13 MB, checksum-verified) into `public/vtk-wasm/`. The 3D view needs WebGL 2.
+*Setting up a wall-mounted bracket: material, supports, load, solve.*
 
-For a browser development session, use `npm run dev` and visit http://127.0.0.1:5173. After `npm run build`, `npm start` opens the desktop application with its own local service. If CalculiX is installed elsewhere, set `SPRUNG_FEA_CCX` to its executable. `SPRUNG_FEA_PYTHON` overrides the development Python runtime.
+## What it can analyze
 
-## Build a standalone Mac app
+| Analysis | What you learn |
+|---|---|
+| **Linear static** | Stress, strain and deflection under steady loads, and how much margin you have to yield. Optional large deformation for thin, flexible parts and plasticity for loads past yield. |
+| **Natural frequencies** | The frequencies the part vibrates at on its own, with an animated shape for each mode and how much mass moves in each direction. |
+| **Buckling** | How many times the loads can grow before a slender or thin-walled part buckles, and the shape it buckles into. |
+| **Heat transfer** | The temperatures the part settles at, with fixed temperatures, heat input, heat generated inside the part, and convection to air or liquid. |
+| **Thermal stress** | The stress and deflection caused by thermal expansion pushing against the supports, together with any mechanical loads. |
+| **Harmonic response** | How much the part vibrates when loads or its mounting shake it across a range of frequencies: where the resonances are and the stress they cause. |
 
-```sh
-.venv/bin/pip install pyinstaller
-npm run package:mac
-```
+Parts can be a single solid or an assembly. If a STEP file has several bodies, they are bonded where their faces touch, and each body can have its own material.
 
-The Apple Silicon app is produced at `release/mac-arm64/Sprung FEA.app`. It bundles the Python/Gmsh engine, CalculiX, all required native libraries, the VTK.wasm runtime, and offline fonts. It needs neither Python nor Homebrew on the destination Mac. The build is ad-hoc signed for local testing, not Apple-notarized. Intel Mac packaging requires an Intel runtime and solver built on that architecture. `npm run dist:mac` also produces a DMG.
+## Looking at results
 
-## Build for Windows and Linux
+![Static results: orbit the view, show magnified deflection, probe a point, switch to principal stress, and sweep a section plane through the bolt holes](docs/media/static-results.gif)
 
-```sh
-.venv/bin/pip install pyinstaller   # .venv\Scripts\pip on Windows
-npm run package:win                 # or: npm run package:linux
-npm run test:packaged               # solves with only the packaged engine and solver
-```
+Click anywhere on the part to read the values at that point. Switch between von Mises stress, principal stresses, maximum shear, strain, displacement and yield margin from the study tree. Deflection can be shown true-scale or magnified, and the magnification is always labeled. Filters let you cut the part with a section plane, draw an iso-surface, or show only the region above a stress limit.
 
-These bundle the CalculiX found by `SPRUNG_FEA_CCX` (or on `PATH`) together with its shared libraries; CI uses conda-forge `calculix=2.23` (`micromamba create -n calculix calculix=2.23`). Linux packaging needs `patchelf`. Windows produces `release/Sprung-FEA-Setup-<version>.exe`, a one-click installer that installs for the current user without administrator rights. Linux produces `release/Sprung-FEA-<version>-x86_64.AppImage`, which runs without installation. Builds are unsigned.
+![Natural frequencies: switch the analysis type, solve, and watch the bracket's first, second and highest modes animate](docs/media/natural-frequencies.gif)
 
-## Continuous integration
+Changing the analysis type keeps your material, supports and mesh. Here the same bracket finds six modes from 975 Hz to 10.9 kHz, and each one animates when you select it in the table.
 
-`.github/workflows/build.yml` builds the macOS DMG, Windows installer and Linux AppImage on every push and pull request, runs a static and a frequency solve with each packaged engine, and uploads the installers as workflow artifacts.
+![Heat transfer: hold the bolt holes at 20 °C, put 15 W into the base, and solve for the temperature field](docs/media/heat-transfer.gif)
 
-## A first study
+## Install
 
-1. Open an example, or import `.step`/`.stp`. A file with several solids is an assembly: bodies are bonded where their faces touch, and each body can have its own material.
-2. Pick SI or US units from the status bar (in, lbf, psi, °F); data is stored in SI either way. Choose the analysis: linear static (stress and deflection) natural frequencies (vibration modes), buckling (how far the loads can grow before a slender part buckles), heat transfer (settled temperatures), thermal stress (stress from expansion against the supports), or harmonic response (vibration under loads or base shaking over a frequency range). Check the dimensions shown after import. Working units are **mm, N, MPa**; STEP length units are converted to mm by OpenCASCADE.
-3. Choose a material. The built-in values are representative; enter the actual material specification when needed.
-4. Add a support and select CAD faces in the model or face list. "Fixed" blocks all three translations. Directional supports expose individual global X/Y/Z directions.
-5. Add loads. Vector force is **one total force distributed over all selected faces**. Positive pressure pushes inward; gravity uses m/s² and material density. A remote force acts at a point away from the selected faces (its offset adds a moment); a moment twists the selected faces (N·mm); a bearing load presses a pin or shaft on the facing half of a cylindrical face; rotation spins the part about an axis (rpm).
-6. Optionally add point masses for components you are not modeling, such as a motor: its mass, its center of mass, and the faces it is bolted to.
-7. Start with the Medium mesh. Preview it or run directly; Solve meshes automatically. The direct solver (SPOOLES) is the default; for large meshes choose an iterative solver (incomplete Cholesky or diagonal scaling), which needs far less memory. Mesh size and element count are not limited by the app.
-8. Inspect stress, movement, and yield margin. Click the part, or a section through it, to probe interpolated values, or show the peak node. Cut the part with a section plane, show an iso-surface, or threshold the critical region. Deformation magnification is displayed explicitly.
-9. Refine a region: re-solve a box around a hot spot on a much finer mesh, driven by the whole-part solution at its cut faces. Sprung FEA reports whether the cut faces agree with the whole part.
-10. Check mesh convergence: Sprung FEA solves on finer meshes until displacement and peak stress settle, charts them, and flags a peak stress that keeps rising at a sharp corner. Save a `.sfea` project, nodal CSV, viewport PNG, solver deck, or log.
+There are no tagged releases yet. Every commit is built for all three platforms by GitHub Actions, and the installers are attached to the run.
 
-Study edits invalidate results. Undo/redo preserves setup history. Autosave retains the most recent geometry and setup. A portable `.sfea` embeds both, plus the latest results, and can be opened on another machine. Saved results are shown only when the geometry and study match exactly, so stale plots are never presented as current.
+1. Open the [Build workflow](https://github.com/kylebme/sprung-fea/actions/workflows/build.yml) and click the most recent run with a green check.
+2. Under **Artifacts**, download `sprung-fea-macOS`, `sprung-fea-Windows` or `sprung-fea-Linux`. You need to be signed in to GitHub to download.
+3. Unzip it and install as below.
 
-## Numerical behavior
+The builds are not yet signed with a paid certificate, so your operating system will warn you the first time.
 
-- Curvature-aware, ten-node quadratic tetrahedra (CalculiX C3D10).
-- STEP CAD face IDs survive remeshing of the same source geometry. IDs are scoped to the STEP content hash; this release does not transfer selections to revised CAD geometry.
-- Vector loads use consistent quadratic surface integration, not equal per-node force splitting.
-- Normal pressures map CAD faces to CalculiX element faces; overlapping pressures and gravity loads add.
-- A six-mode rigid-motion rank check rejects unstable support definitions. No automatic soft springs.
-- Meshing, assembly, the direct solver and stress recovery use multiple threads (Auto: performance cores; 1 or All selectable in the Mesh panel). OpenMP stays single-threaded, because combined with CalculiX's own threads it produced nondeterministic stresses and reactions; with that pinned, repeated solves are bit-identical. Iterative solves are rejected if CalculiX stops short of its convergence tolerance.
-- Mesh inversion checks, finite-value validation, cancellation, diagnostics, and retained solver artifacts.
-- CalculiX RF output is corrected for applied nodal loads before reporting support reactions. Force balance is available in result interpretation.
-- Stress contours use the solver's averaged nodal stress tensor, converted to von Mises stress.
+- **macOS** (Apple Silicon): open the DMG and drag Sprung FEA to Applications. The first time you open it, macOS will refuse. Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
+- **Windows** (64-bit): run `Sprung-FEA-Setup-<version>.exe`. If SmartScreen appears, click **More info → Run anyway**. It installs for your user account and does not need administrator rights.
+- **Linux** (x86-64): the AppImage runs without installing. Make it executable with `chmod +x Sprung-FEA-*.AppImage`, then run it.
 
-Static analysis assumes isotropic elastic material and slowly applied loads; small deformation unless Large deformation is turned on in the Analysis settings. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Shells, sliding contact between bodies, transient heat, fatigue, and transient dynamic analyses are outside this release. Plasticity is bilinear (yield to ultimate strength), for a single load and optional unloading.
+Everything the app needs, including the solver, is bundled. Nothing is uploaded anywhere: meshing and solving happen on your machine.
 
-## Tests
+## Your first study
 
-```sh
-npm run test:engine  # real STEP → mesh → CalculiX; analytical and conservation checks
-npm test            # local-service subsystem (save/open/solve/export, recovery, validation) and study-logic invariants
-npm run test:e2e    # real browser interaction and solves
-npm run test:all
-npm run test:desktop # packaged .app, using only its bundled engine and solver
-```
+The **Examples** on the start screen (a cantilever beam, the mounting bracket from the clips above, and a two-body assembly) are a good place to start. Each has a **Use example setup** button that fills in a working study.
 
-Browser tests use installed Chrome by default; set `SPRUNG_FEA_CHROMIUM` to another Chromium executable. Screenshots and failure traces are written under `output/playwright/`. No mock solver substitutes for these acceptance tests.
+1. **Import a part.** Use **Import STEP…** or drop a `.step` / `.stp` file onto the window. Check the size shown in the inspector against your CAD model: STEP units are converted to millimetres on import.
+2. **Choose the analysis.** Linear static is the default. Pick another under **Analysis** in the study tree.
+3. **Set the material.** Choose a preset (aluminum 6061-T6, structural steel, stainless 304, titanium Ti-6Al-4V) or type in the values from your material's datasheet. The presets are typical values, not a specification.
+4. **Add supports.** Click faces in the 3D view or the face list. **Fixed** holds a face completely; **Directional** blocks only the X, Y or Z directions you choose. The study needs enough support to stop the part from sliding or spinning freely, and Sprung FEA tells you if it doesn't.
+5. **Add loads.**
+   - **Force** is one total force shared across all the selected faces.
+   - **Pressure** acts normal to the faces; positive pushes inward.
+   - **Gravity** uses the material's density.
+   - **Remote force** acts at a point away from the faces, so an offset adds a moment.
+   - **Moment** twists the selected faces.
+   - **Bearing** presses a pin or shaft against the loaded half of a hole.
+   - **Rotation** spins the part about an axis (rpm).
+6. **Add masses** (optional). A point mass stands in for something you are not modeling, such as a motor: give its mass, where its center of mass is, and the faces it is bolted to.
+7. **Solve.** Click **Solve** or press ⌘↵ (Ctrl+Enter). The part is meshed automatically. **Medium** mesh is a sensible start; **Preview mesh** shows the elements before you commit.
 
-## Complex STEP acceptance parts
+Any change to the study clears the old results, so what you see always matches the setup.
 
-The committed `samples/` corpus includes a filleted bearing block with counterbores, a gusseted bracket, a pocketed housing with crossing bores, and a toroidal tube elbow with annular collars. These were exported by CadQuery 2.7.0, independently of the Gmsh importer. Engine tests check imported CAD volume and dimensions, face identities, positive element quality, reaction equilibrium, doubled-load linearity, and global displacement refinement. Browser tests import and solve each through the complete study UI.
+## Checking your answer
 
-To regenerate these fixtures (optional; ordinary tests need no CadQuery installation):
+A finite element result depends on the mesh, the supports and the material data you gave it. Sprung FEA has a few tools to help you decide whether to trust a number.
 
-```sh
-.venv/bin/python scripts/generate-assembly-samples.py  # assembly fixtures (Gmsh)
-python3 -m venv .cad-venv
-.cad-venv/bin/pip install cadquery==2.7.0
-.cad-venv/bin/python scripts/generate-complex-samples.py
-```
+- **Mesh convergence** re-solves on finer and finer meshes until displacement and peak stress stop changing, and charts the result. It warns you when peak stress keeps rising at a sharp corner, which usually means the peak is a modeling artifact rather than a real value.
+- **Refine a region** re-solves a box around a hot spot on a much finer mesh, driven by the whole-part solution at its edges, and reports how well the two agree.
+- The **Checks** tab under the view shows support reactions, force balance and solver diagnostics.
+- Yield is flagged, and so is movement large enough to make a small-deflection analysis questionable.
 
-See `docs/validation.md` for measured results and their limits. The generator credits the official [CadQuery quickstart](https://cadquery.readthedocs.io/en/stable/quickstart.html) for the bearing-block construction approach; the fixture dimensions and remaining constructions are specific to this project.
+## Units
 
-## Architecture
+Work in SI (mm, N, MPa, °C) or US customary (in, lbf, psi, °F). Switch at any time from the units display in the bottom-right corner of the status bar. Values are stored in SI either way, so switching never changes the model.
 
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the implemented architecture, numerical pipeline, API and persistence contracts, validation coverage, and proposed extension sequence.
+## Saving and sharing
 
-- `src/`: study state, contextual editors, and the VTK.wasm view (`scene.ts`): face picking, contours, sections, probes, iso-surfaces and thresholds.
-- `electron/`: sandboxed desktop shell and native save dialog.
-- `server/`: loopback-only service, bounded file import, portable project handling, cancellable isolated jobs.
-- `engine/worker.py`: STEP topology, meshing, support checks, CalculiX deck generation and result decoding.
-- `scripts/bundle-runtime.py`: standalone engine and native library relocation.
-- `docs/interaction-design.md`: pre-implementation workflow research and design decisions.
-- `docs/vtk-wasm.md`: decisions behind the VTK.wasm viewer and result filters.
-- `tests/`: subsystem and end-to-end acceptance tests.
+- **Save** (⌘S) writes a `.sfea` project containing the geometry, the setup and the latest results. It opens on any machine with Sprung FEA, without the original STEP file.
+- The app autosaves as you work. If it closes unexpectedly, your last study is on the start screen under **Recent**.
+- Undo and redo (⌘Z, ⇧⌘Z) cover every change to the study.
+- **Export** gives you surface node values as CSV, the current view as PNG, and the CalculiX input deck, results file and solver log for checking the run elsewhere.
 
-The project remains solver-independent at the study model boundary. Future solver adapters can consume the same material/support/load definitions. Study types and assembly contact need explicit domain models before extending the UI.
+On Windows and Linux, use Ctrl in place of ⌘.
 
-See `THIRD_PARTY_NOTICES.md` for dependencies, licenses, and binary redistribution requirements.
+## Limits
+
+Sprung FEA 0.1 uses ten-node tetrahedral solid elements and assumes:
+
+- Isotropic materials. Plasticity, when turned on, is bilinear from yield to ultimate strength.
+- Slowly applied loads.
+- Small deflections unless **Large deformation** is on.
+- Bodies in an assembly are bonded. There is no sliding or separating contact.
+
+It does not do shells or beams, transient heat, fatigue, or transient dynamics. Stresses right at sharp internal corners and at the edges of supports are often higher than the real part would see. Use the convergence study, and judge those spots with care.
+
+## Building from source
+
+Development setup, packaging, tests and the internals are in [IMPLEMENTATION.md](IMPLEMENTATION.md). Measured validation results are in [docs/validation.md](docs/validation.md).
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
