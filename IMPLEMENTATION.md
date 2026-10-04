@@ -116,6 +116,10 @@ Rotation is a centrifugal body load, `*DLOAD CENTRIF` with ω² in rad²/s² abo
 
 Equivalent applied nodal contributions are retained for force, pressure, and gravity. They are required when interpreting the solver's nodal force output at supported nodes.
 
+### Large deformation
+
+A static study with `largeDeformation: true` runs `*STEP, NLGEOM` with automatic load steps (start at 10% of the load, at most 25% per step, at most 200 steps): stiffness follows the deformed shape, so thin strips, clips and springs that bend or twist far are not overpredicted. The material stays linear elastic. Every load step becomes a result frame, shown at full load and true scale by default; a load–displacement chart compares the peak displacement with the straight line through the first step, which is what linear theory would predict. Pressure follows the deformed surface and rotation the deformed shape, so with either of them the force balance check is left out. A linear static study whose movement exceeds 5% of the smallest part dimension suggests turning large deformation on. Steps that cannot converge report that the load could not be applied in small enough steps. Against the Bisshopp–Drucker elastica for a cantilever with PL²/EI = 1, the beam's tip moves within 1% of 0.3017 L down and 0.0566 L inward.
+
 ### Natural frequencies
 
 A natural frequency study (`analysis: "frequency"`, `modes`: 1–50, default 6) runs `*FREQUENCY` with SPOOLES and ARPACK; the study's equation-solver choice applies to static studies only. Loads play no part and are hidden in the study tree. Supports are optional: the engine counts the rigid motions the supports leave free (the same rank check as static validation) and, for a free or partly held part, requests that many extra modes with a negative shift, since the stiffness matrix is singular. Those first modes are labelled rigid motions at 0 Hz and excluded from key results.

@@ -39,6 +39,7 @@ import {
 } from "./logic";
 import {
   ANALYSES,
+  analysisName,
   plotInfo,
   STAGES,
   blankLoad,
@@ -352,7 +353,10 @@ export default function App() {
         : 0,
     );
     setAnimate(r.analysis === "frequency");
-    setDeform(eigen ? "auto" : "off");
+    // Load steps of a large-deformation solve: show full load, true scale.
+    const steps = r.charts.some((c) => c.id === "loadPath");
+    if (steps) setFrame(r.frames.length - 1);
+    setDeform(eigen ? "auto" : steps ? "true" : "off");
   };
   const importPart = async (
     action: () => Promise<any>,
@@ -1133,7 +1137,7 @@ export default function App() {
               <span className="sep">/</span>
               <span>{stripExt(part.name)}</span>
               <span className="sep">/</span>
-              <span className="faint">{ANALYSES[study.analysis].name}</span>
+              <span className="faint">{analysisName(study)}</span>
             </>
           )}
         </div>

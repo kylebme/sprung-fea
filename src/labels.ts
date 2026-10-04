@@ -169,6 +169,11 @@ export const ANALYSES: Record<
     eigen: false,
   },
 };
+/** The analysis as named in the title bar and study tree. */
+export const analysisName = (study: Study) =>
+  study.analysis === "static" && study.largeDeformation
+    ? "Static, large deformation"
+    : ANALYSES[study.analysis].name;
 /** Modes requested by default in each eigenvalue analysis. */
 export const DEFAULT_MODES: Partial<Record<Analysis, number>> = {
   frequency: 6,

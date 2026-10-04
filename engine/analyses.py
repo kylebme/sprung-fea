@@ -92,6 +92,13 @@ class Analysis:
         raise NotImplementedError
 
 
+def large_deformation(study):
+    value=study.get('largeDeformation',False)
+    if not isinstance(value,bool):
+        raise ValueError('Large deformation must be on or off.')
+    return value
+
+
 class Static(Analysis):
     id='static'
     name='Linear static'
@@ -101,9 +108,15 @@ class Static(Analysis):
         model=Model(mesh)
         m=study['material']
         loading=build_loads(study, model, m['density']*1e-12)
-        lines=calculix.mesh_lines(model, 'linear static study')
+        large=large_deformation(study)
+        lines=calculix.mesh_lines(model, 'static study, large deformation' if large else 'linear static study')
         lines+=calculix.material_lines(m)+calculix.boundary_lines(fixed)
-        lines+=['*STEP','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]]
+        if large:
+            # Automatic load steps: start at 10%, at most 25%, results at each.
+            lines+=['*STEP, NLGEOM, INC=200','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0],
+                    '0.1, 1.0, 1e-5, 0.25']
+        else:
+            lines+=['*STEP','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]]
         lines+=calculix.load_lines(loading)
         lines+=['*NODE FILE','U, RF','*EL FILE','S','*NODE PRINT, NSET=HELD, TOTALS=YES','RF','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
@@ -111,27 +124,54 @@ class Static(Analysis):
         return {'fixed':fixed,'loading':loading}
 
     def results(self, folder, study, model, frames, context):
-        frame=frames[-1]
+        large=large_deformation(study)
+        steps=frames if large else frames[-1:]
         ids=model.ids
-        displacements=nodal(frame,'DISP',ids,3,'displacement and stress')
-        stress=np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'displacement and stress')])
+        view=[]
+        for f in steps:
+            u=nodal(f,'DISP',ids,3,'displacement and stress')
+            s=np.array([von_mises(x) for x in nodal(f,'STRESS',ids,6,'displacement and stress')])
+            view.append({'displacement':u,'vonMises':s})
+        frame=frames[-1]
+        displacements=view[-1]['displacement'];stress=view[-1]['vonMises']
         movement=np.linalg.norm(displacements,axis=1)
         checks,reactions,total_load,balance=static_checks(frame,context['fixed'],context['loading'])
+        follower=large and any(l['kind'] in ('pressure','rotation') for l in study['loads'])
+        if follower:
+            # Pressure and rotation follow the deformed shape, so their
+            # resultant is no longer the undeformed one checked against.
+            checks=[c for c in checks if c['label']!='Force balance error']
         dims=np.ptp(model.coords,axis=0)
         max_stress=float(stress.max()); max_move=float(movement.max())
         yield_strength=study['material'].get('yield')
         warnings=['Peak stress at sharp corners or support edges may increase with refinement. Check a finer mesh before relying on a result.']
         if yield_strength and max_stress>yield_strength: warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation.')
-        if max_move>.05*min(dims): warnings.append('Movement is large relative to the smallest part dimension. A small-deformation analysis may not be appropriate.')
+        if large:
+            warnings.append('Large deformation: stiffness follows the deformed shape, so results are not proportional to the loads. The material is still linear elastic.')
+            if follower: warnings.append('Pressure follows the deformed surface and rotation the deformed shape, so their resultant changes with deformation: force balance is not checked.')
+        elif max_move>.05*min(dims):
+            warnings.append('Movement is large relative to the smallest part dimension, so the small-deformation assumption may not hold. Turn on Large deformation in the Analysis settings.')
         summary={'maxStress':max_stress,'maxMovement':max_move,
                  'minSafety':yield_strength/max_stress if yield_strength and max_stress else None,'reactions':reactions.tolist(),
                  'appliedForce':total_load.tolist(),'forceBalanceError':balance,
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))]}
-        result={'frames':[{'label':'Static load','value':None,'unit':''}],'fields':['displacement','vonMises'],
-                'summary':summary,'warnings':warnings,'charts':[],
+        if large:
+            loads=[100*f['value'] for f in frames]
+            peaks=[float(np.linalg.norm(v['displacement'],axis=1).max()) for v in view]
+            labels=[{'label':f'Load {x:.4g}%','value':x,'unit':'%'} for x in loads]
+            # The straight line through the first load step: what linear
+            # theory would predict from the starting stiffness.
+            linear=[peaks[0]/loads[0]*x for x in loads]
+            charts=[{'id':'loadPath','title':'Load and displacement','x':{'label':'Load','unit':'%','values':loads},
+                     'series':[{'label':'Large deformation','unit':'mm','values':peaks},
+                               {'label':'Linear','unit':'mm','values':linear}]}]
+        else:
+            labels=[{'label':'Static load','value':None,'unit':''}];charts=[]
+        result={'frames':labels,'fields':['displacement','vonMises'],
+                'summary':summary,'warnings':warnings,'charts':charts,
                 'checks':[mass_check(study,model)]+checks,
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
-        return result,[{'displacement':displacements,'vonMises':stress}]
+        return result,view
 
     def key_results(self, result):
         s=result['summary']

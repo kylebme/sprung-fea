@@ -33,6 +33,7 @@ import {
 import { Head, NumberField, Row } from "./ui";
 import { probeValue, type Probe } from "./viewData";
 import { ConvergenceControls, ConvergenceReport } from "./Convergence";
+import { LineChart } from "./Chart";
 import {
   MATERIALS,
   type Analysis,
@@ -157,6 +158,30 @@ export function AnalysisPanel({
           <p className="note" style={{ marginTop: 0 }}>
             Add thermal conditions in the study tree. At least one fixed
             temperature or convection is needed, so heat can leave the part.
+          </p>
+        </div>
+      )}
+      {study.analysis === "static" && (
+        <div className="sec">
+          <div className="switch-row">
+            <span>Large deformation</span>
+            <button
+              className={"switch" + (study.largeDeformation ? " on" : "")}
+              role="switch"
+              aria-checked={!!study.largeDeformation}
+              aria-label="Large deformation"
+              onClick={() =>
+                onChange({
+                  ...study,
+                  largeDeformation: !study.largeDeformation,
+                })
+              }
+            />
+          </div>
+          <p className="note">
+            For parts that bend or twist far enough to change how they carry
+            load, such as thin strips, clips and springs. The load is applied in
+            steps and the solve takes longer. The material stays elastic.
           </p>
         </div>
       )}
@@ -1194,13 +1219,15 @@ export function ResultsPanel({
                   1×
                 </button>
               )}
-              <button
-                className={deform === "auto" ? "on" : ""}
-                onClick={() => onDeform("auto")}
-                aria-label="Magnified"
-              >
-                {fmt(autoScale, autoScale >= 100 ? 0 : 1)}×
-              </button>
+              {(autoScale > 1 || ANALYSES[result.analysis].eigen) && (
+                <button
+                  className={deform === "auto" ? "on" : ""}
+                  onClick={() => onDeform("auto")}
+                  aria-label="Magnified"
+                >
+                  {fmt(autoScale, autoScale >= 100 ? 0 : 1)}×
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1272,6 +1299,27 @@ export function ResultsPanel({
           </p>
         )}
       </div>
+      {result.charts.map((c) => (
+        <div className="sec" key={c.id}>
+          <h4>{c.title}</h4>
+          <LineChart
+            label={c.title}
+            x={c.x.values}
+            series={c.series.map((s) => ({ label: s.label, values: s.values }))}
+            xLabel={`${c.x.label}, ${c.x.unit}`}
+            yLabel={c.series[0].unit}
+            selected={c.id === "loadPath" ? frame : undefined}
+            onSelect={c.id === "loadPath" ? onFrame : undefined}
+          />
+          <p className="legend-note">
+            {c.series.map((s, k) => (
+              <span key={s.label} className={"key s" + k}>
+                {s.label}
+              </span>
+            ))}
+          </p>
+        </div>
+      ))}
       <FilterControls
         filters={filters}
         plot={plot}
@@ -1541,9 +1589,7 @@ function FramePicker({
   const frames = result.frames;
   const label = (k: number) => {
     const f = frames[k];
-    return f.value === null
-      ? f.label
-      : `${f.label} · ${fmt(f.value, 4)} ${f.unit}`.trim();
+    return f.label;
   };
   return (
     <div className="sec">

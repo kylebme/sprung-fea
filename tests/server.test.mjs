@@ -310,6 +310,11 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       });
       assert.equal(response.status, 400, load.kind);
     }
+    const notBoolean = await post(`/api/documents/${imported.id}/solve`, {
+      ...study,
+      largeDeformation: "yes",
+    });
+    assert.equal(notBoolean.status, 400);
     // Thermal conditions need a known kind, faces, and a positive film
     // coefficient for convection.
     for (const condition of [

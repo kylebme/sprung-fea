@@ -16,6 +16,7 @@ import {
   ANALYSES,
   CONDITIONS,
   DETAIL_NAMES,
+  analysisName,
   conditionValue,
   plotInfo,
   facesLabel,
@@ -114,7 +115,11 @@ export function StudyTree({
         depth={1}
         icon={Gauge}
         label="Analysis"
-        value={ANALYSES[study.analysis].name}
+        value={
+          study.analysis === "static" && study.largeDeformation
+            ? "Large deformation"
+            : analysisName(study)
+        }
         active={section === "analysis"}
         onClick={() => onSection("analysis")}
         disabled={busy}

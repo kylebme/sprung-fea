@@ -109,6 +109,8 @@ export type Study = {
   thermal: ThermalCondition[];
   /** Temperature at which the part is free of thermal stress, °C. */
   referenceTemperature?: number;
+  /** Static studies: follow the deformed shape (geometric nonlinearity). */
+  largeDeformation?: boolean;
   /** Modes to find in vibration studies. */
   modes?: number;
   meshSize: number;

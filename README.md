@@ -53,7 +53,7 @@ Study edits invalidate results. Undo/redo preserves setup history. Autosave reta
 - CalculiX RF output is corrected for applied nodal loads before reporting support reactions. Force balance is available in result interpretation.
 - Stress contours use the solver's averaged nodal stress tensor, converted to von Mises stress.
 
-This analysis assumes isotropic elastic material, slowly applied loads, and small deformation. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Assemblies, shells, contact, transient heat, fatigue, nonlinear, and forced-response dynamic analyses are outside this release.
+Static analysis assumes isotropic elastic material and slowly applied loads; small deformation unless Large deformation is turned on in the Analysis settings. Yield exceedance and large movement are highlighted. One finer-mesh comparison is evidence, not proof of convergence; sharp corners and support boundaries can produce stress singularities. Assemblies, shells, contact, transient heat, fatigue, nonlinear, and forced-response dynamic analyses are outside this release.
 
 ## Tests
 

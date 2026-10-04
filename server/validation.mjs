@@ -120,10 +120,17 @@ export function validateStudy(s) {
     if (!THERMAL.includes(c.kind))
       throw new RequestError("Unsupported thermal condition.");
     if (c.kind !== "generation" && !c.faces.length)
-      throw new RequestError("A thermal condition must select at least one face.");
+      throw new RequestError(
+        "A thermal condition must select at least one face.",
+      );
     number(c.value, "Thermal value", { positive: c.kind === "convection" });
     if (c.kind === "convection") number(c.ambient, "Ambient temperature");
   }
+  if (
+    s.largeDeformation !== undefined &&
+    typeof s.largeDeformation !== "boolean"
+  )
+    throw new RequestError("Large deformation must be on or off.");
   if (s.referenceTemperature !== undefined)
     number(s.referenceTemperature, "Stress-free temperature");
   // Studies saved before point masses have none.
