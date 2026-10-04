@@ -150,7 +150,7 @@ Support reactions subtract equivalent applied loads from the constrained compone
 
 ## 5. Interface state and result validity
 
-Condition editors use drafts: selecting faces and changing values does not modify the study until Save. Cancel discards the draft. Saved conditions can be named, edited, and removed. The face list exposes surface type, area, and position and highlights the corresponding model surface.
+Condition editors use drafts: selecting faces and changing values does not modify the study until Save. Cancel (or Escape) discards the draft. While a draft is open the view shows the part rather than any result, so faces can be picked; saving changes the study and invalidates the result, while cancelling shows the result again. Editors that take a position (remote force, rotation, point mass, refinement region) show the part's origin with X, Y and Z arrows over the model. Every X/Y/Z input and button uses the arrows' colors: red X, green Y, blue Z. Saved conditions can be named, edited, and removed. The face list exposes surface type, area, and position and highlights the corresponding model surface.
 
 Physical study edits invalidate results. Mesh-size edits invalidate both mesh and results. Camera movement, plot choice, node probing, and deformation display do not change the physical setup. Undo/redo stores up to 30 study edits; undoing a physical edit does not silently resurrect a previously computed result, and keeps the mesh when the element size is unchanged. In the desktop app, Edit > Undo and Redo apply to the focused text field, or otherwise to the study history. Jobs don't block the window: the view stays usable and the inspector is inert until the job finishes or is cancelled.
 

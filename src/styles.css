@@ -1486,3 +1486,40 @@ svg {
 .note + .field {
   margin-top: 10px;
 }
+/* X, Y and Z inputs use the colors of the view's axis arrows. */
+:root {
+  --x: #e5484d;
+  --y: #3dae6b;
+  --z: #3f74e0;
+}
+.axis-x {
+  --axis: var(--x);
+}
+.axis-y {
+  --axis: var(--y);
+}
+.axis-z {
+  --axis: var(--z);
+}
+b.axis-x,
+b.axis-y,
+b.axis-z,
+.axes button b.axis-x,
+.axes button b.axis-y,
+.axes button b.axis-z {
+  color: var(--axis);
+  font-weight: 600;
+}
+.vec label.axis-x span,
+.vec label.axis-y span,
+.vec label.axis-z span {
+  color: var(--axis);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--axis) 12%, transparent);
+  border-right-color: color-mix(in srgb, var(--axis) 35%, transparent);
+}
+.vec label.axis-x:focus-within,
+.vec label.axis-y:focus-within,
+.vec label.axis-z:focus-within {
+  border-color: var(--axis);
+}

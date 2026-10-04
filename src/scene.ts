@@ -28,6 +28,8 @@ export type SceneState = {
   yieldStrength: number | null;
   filters: Filters;
   probe: Probe | null;
+  /** Shows the part's origin and axes, for entering positions. */
+  origin: boolean;
   /** A box outline: the region being refined, by its corners. */
   region: { lo: number[]; hi: number[] } | null;
 };
@@ -82,6 +84,7 @@ const COLORS = {
     viewB: "#e8ebee",
   },
 };
+// Axis colors, shared with the X, Y and Z inputs (--x, --y, --z in CSS).
 const AXES = ["#e5484d", "#3dae6b", "#3f74e0"];
 const VIEW_ANGLE = 35;
 const VTK_QUADRATIC_TETRA = 24;
@@ -153,6 +156,8 @@ export class Scene {
   private renderer: Obj;
   private overlay: Obj;
   private triad: Obj;
+  private origin: Obj;
+  private originReach: Obj;
   private triadRenderer: Obj;
   private camera: Obj;
   private points: Obj;
@@ -226,22 +231,27 @@ export class Scene {
     this.triadRenderer.setLayer(1);
     this.triadRenderer.setInteractive(0);
     this.triadRenderer.getActiveCamera().setParallelProjection(1);
-    this.triad = make("vtkAxesActor");
-    this.triad.setShaftTypeToCylinder();
-    this.triad.setCylinderRadius(0.04);
-    this.triad.setConeRadius(0.5);
-    this.triad.setNormalizedTipLength(0.22, 0.22, 0.22);
-    ["X", "Y", "Z"].forEach((axis, i) => {
-      this.triad[`get${axis}AxisShaftProperty`]().setColor(...rgb(AXES[i]));
-      this.triad[`get${axis}AxisTipProperty`]().setColor(...rgb(AXES[i]));
-      const label = this.triad[`get${axis}AxisCaptionActor2D`]();
-      const text = label.getCaptionTextProperty();
-      text.setColor(...rgb(AXES[i]));
-      text.setBold(1);
-      text.setShadow(0);
-      text.setFontSize(13);
-    });
+    this.triad = this.axes();
     this.triadRenderer.addActor(this.triad);
+    // The part's coordinate origin, drawn over the model while a position
+    // is being entered. An invisible ball in the model renderer keeps it
+    // inside the camera's clipping range.
+    this.origin = this.axes();
+    // Captions size to a share of their renderer: the triad's is small, the
+    // model view's is the whole viewport.
+    for (const axis of ["X", "Y", "Z"]) {
+      const caption = this.origin[`get${axis}AxisCaptionActor2D`]();
+      caption.setWidth(0.04);
+      caption.setHeight(0.045);
+    }
+    this.origin.setVisibility(0);
+    this.overlay.addActor(this.origin);
+    const reach = make("vtkSphereSource");
+    this.originReach = this.actor(this.mapper({ port: reach }));
+    this.originReach.$userData.source = reach;
+    this.originReach.getProperty().setOpacity(0);
+    this.originReach.pickableOff();
+    this.originReach.setVisibility(0);
     this.window.addRenderer(this.triadRenderer);
 
     // Model: one set of (deformed) points shared by surface and volume.
@@ -342,6 +352,26 @@ export class Scene {
     this.listen();
   }
 
+  /** X, Y and Z arrows in the axis colors, labelled at their tips. */
+  private axes() {
+    const axes = this.vtk.vtkAxesActor();
+    axes.setShaftTypeToCylinder();
+    axes.setCylinderRadius(0.04);
+    axes.setConeRadius(0.5);
+    axes.setNormalizedTipLength(0.22, 0.22, 0.22);
+    ["X", "Y", "Z"].forEach((axis, i) => {
+      axes[`get${axis}AxisShaftProperty`]().setColor(...rgb(AXES[i]));
+      axes[`get${axis}AxisTipProperty`]().setColor(...rgb(AXES[i]));
+      const label = axes[`get${axis}AxisCaptionActor2D`]();
+      const text = label.getCaptionTextProperty();
+      text.setColor(...rgb(AXES[i]));
+      text.setBold(1);
+      text.setShadow(0);
+      text.setFontSize(13);
+    });
+    return axes;
+  }
+
   private mapper(input: { port: Obj } | { data: Obj }) {
     const mapper = this.vtk.vtkPolyDataMapper();
     if ("port" in input) mapper.setInputConnection(input.port.getOutputPort(0));
@@ -440,7 +470,8 @@ export class Scene {
       this.renderer.setBackground(...rgb(COLORS[next.theme].viewB));
       this.renderer.setBackground2(...rgb(COLORS[next.theme].viewA));
     }
-    if (changed("study") && !changed("bounds")) {
+    if (changed("origin", "bounds")) this.showOrigin();
+    if (changed("study", "origin") && !changed("bounds")) {
       // A point placed beyond the framed region: zoom out to include it,
       // keeping the view direction.
       const radius = this.extent().radius;
@@ -982,6 +1013,10 @@ export class Scene {
           ...study.masses.map((m) => m.point),
         ]
       : [];
+    if (this.state?.origin) {
+      const l = this.originLength();
+      points.push([0, 0, 0], [l, 0, 0], [0, l, 0], [0, 0, l]);
+    }
     let center = this.center,
       radius = this.radius;
     for (const p of points) {
@@ -993,6 +1028,19 @@ export class Scene {
       radius = grown;
     }
     return { center, radius };
+  }
+
+  private originLength() {
+    return this.radius * 0.35;
+  }
+
+  private showOrigin() {
+    const on = this.state!.origin ? 1 : 0;
+    const l = this.originLength();
+    this.origin.setTotalLength(l, l, l);
+    this.origin.setVisibility(on);
+    this.originReach.$userData.source.setRadius(l * 1.2);
+    this.originReach.setVisibility(on);
   }
 
   /** Swaps projection while keeping the view direction and visible size. */

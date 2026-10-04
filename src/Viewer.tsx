@@ -46,6 +46,8 @@ type Props = {
   yieldStrength: number | null;
   filters: Filters;
   region: { lo: number[]; hi: number[] } | null;
+  /** Show the coordinate origin, while a position is being entered. */
+  origin: boolean;
 };
 
 export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
@@ -128,6 +130,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       filters: p.filters,
       probe: p.probe,
       region: p.region,
+      origin: p.origin,
     };
     scene.update(state);
     const area = scene.sectionArea();
@@ -141,6 +144,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
     <div
       className="view-host"
       ref={host}
+      data-origin={p.origin ? "shown" : "hidden"}
       aria-label="Interactive 3D part. Drag to rotate, right-drag to pan, scroll to zoom, click a face to select."
     >
       <canvas ref={canvas} tabIndex={-1} />

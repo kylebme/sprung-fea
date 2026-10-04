@@ -612,8 +612,7 @@ export default function App() {
         e.preventDefault();
         step(e.shiftKey ? "redo" : "undo");
       } else if (e.key === "Escape" && !job) {
-        setDraft(null);
-        setSelected([]);
+        cancelDraft();
       }
     };
     window.addEventListener("keydown", handler);
@@ -621,7 +620,7 @@ export default function App() {
   });
 
   const selectFace = (id: number) => {
-    if (job || result) return;
+    if (job || (result && !draft)) return;
     setSelected((s) =>
       s.includes(id) ? s.filter((f) => f !== id) : [...s, id],
     );
@@ -659,6 +658,12 @@ export default function App() {
     }
   };
   const isBody = draft?.kind === "load" && isBodyLoad(draft.value);
+  /** Leaves the editor unchanged; an existing result is shown again. */
+  const cancelDraft = () => {
+    setDraft(null);
+    setSelected([]);
+    if (result) setSection("results");
+  };
   const commitDraft = () => {
     if (!draft) return;
     const faces = isBody ? [] : selected;
@@ -814,8 +819,11 @@ export default function App() {
     part && stats?.maxMovement
       ? (Math.max(...part.geometry.dimensions) * 0.08) / stats.maxMovement
       : 0;
+  // Editing a condition needs the part itself, to pick faces: the result is
+  // hidden until the draft is saved (which invalidates it) or cancelled.
+  const showingResult = !!result && !draft;
   const deformation =
-    result && mesh && shown?.displacement
+    showingResult && mesh && shown?.displacement
       ? deform === "auto"
         ? autoScale
         : deform === "true"
@@ -875,10 +883,7 @@ export default function App() {
             )
           }
           onRemoveFace={selectFace}
-          onCancel={() => {
-            setDraft(null);
-            setSelected([]);
-          }}
+          onCancel={cancelDraft}
           onSave={commitDraft}
           onDelete={() => remove(draft.kind, draft.value.id)}
         />
@@ -1178,7 +1183,7 @@ export default function App() {
               selected={selected}
               hover={hover}
               draftKind={draft?.kind || null}
-              disabled={!!job || !!result}
+              disabled={!!job || (!!result && !draft)}
               query={query}
               onQuery={setQuery}
               onSelect={selectFace}
@@ -1190,10 +1195,17 @@ export default function App() {
             <div className="viewport">
               <Viewer
                 ref={viewer}
-                geometry={viewGeometry!}
-                view={shown || mesh?.view || null}
-                region={regionBox}
-                plot={result && plots.length ? activePlot : null}
+                geometry={draft ? part.geometry : viewGeometry!}
+                view={draft ? null : shown || mesh?.view || null}
+                region={draft ? null : regionBox}
+                origin={
+                  !!regionDraft ||
+                  draft?.kind === "mass" ||
+                  (draft?.kind === "load" &&
+                    (draft.value.kind === "remote" ||
+                      draft.value.kind === "rotation"))
+                }
+                plot={showingResult && plots.length ? activePlot : null}
                 study={shownStudy}
                 selected={selected}
                 hovered={hover}
@@ -1203,8 +1215,8 @@ export default function App() {
                 onSectionArea={setSectionArea}
                 filters={filters!}
                 deformation={deformation}
-                wireframe={wire}
-                probe={probe}
+                wireframe={wire && !draft}
+                probe={draft ? null : probe}
                 probeLabel={probeLabel}
                 theme={theme}
                 projection={projection}
@@ -1213,7 +1225,7 @@ export default function App() {
                 yieldStrength={yieldStrength}
               />
               <div className="vlabel">
-                {result ? (
+                {showingResult ? (
                   <>
                     <b>{PLOTS[activePlot].name}</b>
                     <span>
@@ -1305,7 +1317,7 @@ export default function App() {
                   <Camera size={14} />
                 </button>
               </div>
-              {result && stats && (
+              {showingResult && stats && (
                 <div
                   className="legend"
                   aria-label={PLOTS[activePlot].name + " scale"}
@@ -1329,7 +1341,7 @@ export default function App() {
                   ))}
                 </div>
               )}
-              {result && shown?.displacement && (
+              {showingResult && shown?.displacement && (
                 <div className="vchip">
                   {deform === "off"
                     ? "Undeformed"
@@ -1338,7 +1350,7 @@ export default function App() {
                       : `Displacement ×${fmt(deformation, deformation >= 100 ? 0 : 1)}`}
                 </div>
               )}
-              {!result && !job && selected.length > 0 && (
+              {(!result || draft) && !job && selected.length > 0 && (
                 <div className="selpill">
                   <MousePointer2 size={13} />
                   {selected.length === 1

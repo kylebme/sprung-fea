@@ -460,7 +460,7 @@ function SupportFields({
                   })
                 }
               >
-                <b>{a}</b>
+                <b className={"axis-" + a.toLowerCase()}>{a}</b>
                 {support.axes[i] ? "Blocked" : "Free"}
               </button>
             ))}
@@ -502,7 +502,7 @@ function VectorField({
       </span>
       <div className="vec">
         {["X", "Y", "Z"].map((a, i) => (
-          <label key={a}>
+          <label key={a} className={"axis-" + a.toLowerCase()}>
             <span>{a}</span>
             <input
               aria-label={a + " " + name}
@@ -612,7 +612,7 @@ function LoadFields({
                     aria-pressed={!!on}
                     onClick={() => onChange({ axis })}
                   >
-                    {a}
+                    <b className={"axis-" + a.toLowerCase()}>{a}</b>
                   </button>
                 );
               })}
@@ -1234,7 +1234,7 @@ function FilterControls({
                     })
                   }
                 >
-                  {a}
+                  <b className={"axis-" + a.toLowerCase()}>{a}</b>
                 </button>
               ))}
               <button
