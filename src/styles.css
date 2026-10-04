@@ -1541,3 +1541,25 @@ b.axis-z,
 .modes th.axis-z {
   color: var(--axis);
 }
+:root[data-theme="dark"],
+:root {
+  --thermal: #e8606a;
+  --thermal-soft: rgba(232, 96, 106, 0.14);
+}
+:root[data-theme="light"] {
+  --thermal: #d23f4b;
+  --thermal-soft: rgba(210, 63, 75, 0.1);
+}
+.swatch.thermal {
+  background: var(--thermal);
+}
+.face-row.selected.thermal {
+  background: var(--thermal-soft);
+}
+.face-row .tag.thermal {
+  color: var(--thermal);
+}
+.chip.thermal {
+  background: var(--thermal-soft);
+  border-color: var(--thermal);
+}

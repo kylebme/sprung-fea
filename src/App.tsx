@@ -44,6 +44,7 @@ import {
   blankLoad,
   blankMass,
   blankSupport,
+  blankThermal,
   isBodyLoad,
   stripExt,
 } from "./labels";
@@ -339,7 +340,9 @@ export default function App() {
   const present = (r: Result) => {
     // Mode shapes read best moving; show the first elastic mode.
     const eigen = ANALYSES[r.analysis].eigen;
-    setPlot(eigen ? "movement" : "stress");
+    setPlot(
+      eigen ? "movement" : r.analysis === "thermal" ? "temperature" : "stress",
+    );
     setFrame(
       eigen
         ? Math.min(
@@ -497,8 +500,23 @@ export default function App() {
   const needs = ANALYSES[study.analysis];
   const missing = [
     !study.material ? "Material" : null,
+    needs.thermal && study.material && !study.material.conductivity
+      ? "Thermal conductivity"
+      : null,
+    study.analysis === "thermalStress" &&
+    study.material &&
+    study.material.expansion == null
+      ? "Thermal expansion"
+      : null,
     needs.supports && !study.supports.length ? "Support" : null,
-    needs.loads && !study.loads.length ? "Load" : null,
+    // Thermal stress can come from temperatures alone.
+    needs.loads && !needs.thermal && !study.loads.length ? "Load" : null,
+    needs.thermal &&
+    !study.thermal.some(
+      (c) => c.kind === "temperature" || c.kind === "convection",
+    )
+      ? "Temperature or convection"
+      : null,
   ].filter(Boolean) as string[];
   const ready = !!part && !missing.length && !draft;
   const run = async (action: "mesh" | "solve" | "converge", refine = false) => {
@@ -660,7 +678,9 @@ export default function App() {
         ? { kind, value: blankSupport() }
         : kind === "load"
           ? { kind, value: blankLoad() }
-          : { kind, value: blankMass(center.selection || center.part) },
+          : kind === "thermal"
+            ? { kind, value: blankThermal() }
+            : { kind, value: blankMass(center.selection || center.part) },
     );
   };
   const remove = (kind: ConditionKind, id: string) => {
@@ -673,7 +693,9 @@ export default function App() {
       setSelected([]);
     }
   };
-  const isBody = draft?.kind === "load" && isBodyLoad(draft.value);
+  const isBody =
+    (draft?.kind === "load" && isBodyLoad(draft.value)) ||
+    (draft?.kind === "thermal" && draft.value.kind === "generation");
   /** Leaves the editor unchanged; an existing result is shown again. */
   const cancelDraft = () => {
     setDraft(null);
@@ -713,10 +735,18 @@ export default function App() {
     );
   };
 
-  const shownStudy = useMemo(
-    () => previewStudy(study, draft, selected),
-    [study, draft, selected],
-  );
+  // The view annotates only the conditions this analysis uses.
+  const shownStudy = useMemo(() => {
+    const s = previewStudy(study, draft, selected);
+    const a = ANALYSES[s.analysis];
+    return {
+      ...s,
+      supports: a.mechanical ? s.supports : [],
+      masses: a.mechanical ? s.masses : [],
+      loads: a.loads ? s.loads : [],
+      thermal: a.thermal ? s.thermal : [],
+    };
+  }, [study, draft, selected]);
   const selectedFaces =
     part?.geometry.faces.filter((f) => selected.includes(f.id)) || [];
   const selectedArea = selectedFaces.reduce((sum, f) => sum + f.area, 0);
@@ -944,9 +974,15 @@ export default function App() {
         );
       case "supports":
       case "loads":
-      case "masses": {
+      case "masses":
+      case "thermal": {
         const kind = (
-          { supports: "support", loads: "load", masses: "mass" } as const
+          {
+            supports: "support",
+            loads: "load",
+            masses: "mass",
+            thermal: "thermal",
+          } as const
         )[section];
         return (
           <ConditionsPanel

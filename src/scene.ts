@@ -17,7 +17,7 @@ export type SceneState = {
   study: Study;
   selected: number[];
   hovered: number | null;
-  draftKind: "support" | "load" | "mass" | null;
+  draftKind: "support" | "load" | "mass" | "thermal" | null;
   /** The plotted result, or null before solving. */
   plot: Plot | null;
   deformation: number;
@@ -64,6 +64,8 @@ const COLORS = {
     loadFace: "#b08050",
     mass: "#b08cf0",
     massFace: "#8f7ab8",
+    thermal: "#e8606a",
+    thermalFace: "#b5646b",
     select: "#4d9bff",
     ghost: "#aab3bb",
     viewA: "#1d2227",
@@ -80,6 +82,8 @@ const COLORS = {
     loadFace: "#e8bf93",
     mass: "#7a4fc9",
     massFace: "#c9b6ea",
+    thermal: "#d23f4b",
+    thermalFace: "#efb4b8",
     select: "#2f6fd8",
     ghost: "#7f8b95",
     viewA: "#ffffff",
@@ -100,6 +104,7 @@ const FIELD: Record<Plot, string> = {
   safety: "Margin",
   temperature: "temperature",
   plastic: "peeq",
+  heatflux: "heatFlux",
 };
 /** Arrays that are geometry or derived, not engine fields, when probing. */
 const NOT_PROBED = new Set([
@@ -663,10 +668,13 @@ export class Scene {
           ? colors.load
           : s.draftKind === "mass"
             ? colors.mass
-            : colors.select;
+            : s.draftKind === "thermal"
+              ? colors.thermal
+              : colors.select;
     const supported = new Set(s.study.supports.flatMap((c) => c.faces));
     const loaded = new Set(s.study.loads.flatMap((c) => c.faces));
     const massed = new Set(s.study.masses.flatMap((c) => c.faces));
+    const heated = new Set((s.study.thermal || []).flatMap((c) => c.faces));
     const byFace = new Map<number, number[]>();
     for (const f of s.faces) {
       let c = rgb(
@@ -678,7 +686,9 @@ export class Scene {
               ? colors.loadFace
               : massed.has(f.id)
                 ? colors.massFace
-                : colors.base,
+                : heated.has(f.id)
+                  ? colors.thermalFace
+                  : colors.base,
       );
       if (f.id === s.hovered) c = mix(c, rgb(colors.hover), 0.35);
       byFace.set(

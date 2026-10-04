@@ -206,7 +206,7 @@ def check_masses(masses):
         vector(m.get('point'),'center of mass')
 
 
-def check_loads(loads):
+def check_loads(loads, required=True):
     nonzero = False
     for l in loads:
         kind=l['kind']
@@ -226,7 +226,7 @@ def check_loads(loads):
             vector(l.get('point'),'axis position')
         else:
             raise ValueError('Unsupported load type.')
-    if not nonzero:
+    if required and not nonzero:
         raise ValueError('All loads are zero. Enter a nonzero load.')
 
 

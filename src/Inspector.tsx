@@ -20,6 +20,7 @@ import {
   CONDITIONS,
   DEFAULT_MODES,
   LOAD_KINDS,
+  THERMAL_KINDS,
   plotInfo,
   conditionValue,
   isBodyLoad,
@@ -43,6 +44,7 @@ import {
   type Load,
   type LoadKind,
   type PointMass,
+  type ThermalCondition,
   type Region,
   type RegionResult,
   type Material,
@@ -136,6 +138,28 @@ export function AnalysisPanel({
           ))}
         </div>
       </div>
+      {study.analysis === "thermalStress" && (
+        <div className="sec">
+          <NumberField
+            label="Stress-free temperature"
+            value={study.referenceTemperature ?? 20}
+            unit="°C"
+            onChange={(v) => onChange({ ...study, referenceTemperature: v })}
+          />
+          <p className="note">
+            The temperature at which the part, as modeled, has no thermal
+            stress: usually the assembly or room temperature.
+          </p>
+        </div>
+      )}
+      {current.thermal && (
+        <div className="sec">
+          <p className="note" style={{ marginTop: 0 }}>
+            Add thermal conditions in the study tree. At least one fixed
+            temperature or convection is needed, so heat can leave the part.
+          </p>
+        </div>
+      )}
       {current.eigen && (
         <div className="sec">
           <NumberField
@@ -245,6 +269,18 @@ export function MaterialPanel({
           unit="MPa"
           onChange={(v) => edit({ yield: v || null })}
         />
+        <NumberField
+          label="Thermal conductivity"
+          value={material.conductivity ?? 0}
+          unit="W/(m·K)"
+          onChange={(v) => edit({ conductivity: v || null })}
+        />
+        <NumberField
+          label="Thermal expansion"
+          value={material.expansion ?? 0}
+          unit="µm/(m·°C)"
+          onChange={(v) => edit({ expansion: v || null })}
+        />
         <p className="note">
           Preset values are typical. Use your material's specification.
         </p>
@@ -292,7 +328,9 @@ export function ConditionsPanel({
               {c.name}
               <span className="val">
                 {kind !== "support" ? conditionValue(kind, c) + " · " : ""}
-                {kind === "load" && isBodyLoad(c as Load)
+                {(kind === "load" && isBodyLoad(c as Load)) ||
+                (kind === "thermal" &&
+                  (c as ThermalCondition).kind === "generation")
                   ? "whole part"
                   : facesLabel(c.faces)}
               </span>
@@ -331,6 +369,13 @@ export function ConditionsPanel({
   );
 }
 
+const DRAFT_NAMES = {
+  support: "support",
+  load: "load",
+  mass: "mass",
+  thermal: "condition",
+} as const;
+
 export function ConditionEditor({
   draft,
   exists,
@@ -356,7 +401,9 @@ export function ConditionEditor({
   onDelete: () => void;
 }) {
   const v = draft.value;
-  const body = draft.kind === "load" && isBodyLoad(draft.value);
+  const body =
+    (draft.kind === "load" && isBodyLoad(draft.value)) ||
+    (draft.kind === "thermal" && draft.value.kind === "generation");
   const zero = (v?: number[]) => !v || v.every((x) => x === 0);
   const invalid =
     !v.name.trim() ||
@@ -374,7 +421,7 @@ export function ConditionEditor({
   return (
     <>
       <Head
-        small={(exists ? "Edit " : "New ") + draft.kind}
+        small={(exists ? "Edit " : "New ") + DRAFT_NAMES[draft.kind]}
         title={v.name || "Untitled"}
       />
       <div className="sec">
@@ -390,6 +437,8 @@ export function ConditionEditor({
           <SupportFields support={draft.value} onChange={onChange} />
         ) : draft.kind === "load" ? (
           <LoadFields load={draft.value} center={center} onChange={onChange} />
+        ) : draft.kind === "thermal" ? (
+          <ThermalFields condition={draft.value} onChange={onChange} />
         ) : (
           <MassFields mass={draft.value} center={center} onChange={onChange} />
         )}
@@ -428,7 +477,7 @@ export function ConditionEditor({
             Cancel
           </button>
           <button className="btn primary" disabled={invalid} onClick={onSave}>
-            Save {draft.kind}
+            Save {DRAFT_NAMES[draft.kind]}
           </button>
         </div>
         {exists && (
@@ -438,6 +487,65 @@ export function ConditionEditor({
           </button>
         )}
       </div>
+    </>
+  );
+}
+
+function ThermalFields({
+  condition,
+  onChange,
+}: {
+  condition: ThermalCondition;
+  onChange: (changes: Record<string, unknown>) => void;
+}) {
+  const kind = THERMAL_KINDS.find((k) => k.id === condition.kind)!;
+  return (
+    <>
+      <div className="field">
+        <span>Type</span>
+        <div className="seg wrap" role="group" aria-label="Thermal type">
+          {THERMAL_KINDS.map((k) => (
+            <button
+              key={k.id}
+              className={condition.kind === k.id ? "on" : ""}
+              aria-pressed={condition.kind === k.id}
+              onClick={() =>
+                condition.kind !== k.id &&
+                onChange({
+                  kind: k.id,
+                  name: THERMAL_KINDS.some((t) => t.name === condition.name)
+                    ? k.name
+                    : condition.name,
+                  value:
+                    k.id === "temperature"
+                      ? 100
+                      : k.id === "convection"
+                        ? 10
+                        : 10,
+                  ambient: condition.ambient ?? 20,
+                })
+              }
+            >
+              {k.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      <NumberField
+        label={kind.label}
+        value={condition.value}
+        unit={kind.unit}
+        onChange={(value) => onChange({ value })}
+      />
+      {condition.kind === "convection" && (
+        <NumberField
+          label="Air or fluid temperature"
+          value={condition.ambient ?? 20}
+          unit="°C"
+          onChange={(ambient) => onChange({ ambient })}
+        />
+      )}
+      <p className="note">{kind.note}</p>
     </>
   );
 }
@@ -1225,7 +1333,7 @@ export function ResultsPanel({
           </button>
         </div>
       )}
-      <RegionControls region={region} />
+      {result.analysis === "static" && <RegionControls region={region} />}
       <div className="sec">
         <h4>Export</h4>
         <div className="exports">

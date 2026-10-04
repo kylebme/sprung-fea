@@ -10,6 +10,8 @@ import type {
   Solver,
   Study,
   Support,
+  ThermalCondition,
+  ThermalKind,
 } from "./types";
 
 export const DETAILS = [
@@ -49,10 +51,64 @@ export const PLOTS: Record<
   safety: { name: "Yield margin", unit: "× yield", digits: 2 },
   temperature: { name: "Temperature", unit: "°C", digits: 2 },
   plastic: { name: "Plastic strain", unit: "mm/mm", digits: 5 },
+  heatflux: { name: "Heat flux", unit: "W/m²", digits: 1 },
 };
+/** Thermal condition kinds, in the editor's order, with their help text. */
+export const THERMAL_KINDS: {
+  id: ThermalKind;
+  name: string;
+  unit: string;
+  label: string;
+  note: string;
+}[] = [
+  {
+    id: "temperature",
+    name: "Temperature",
+    unit: "°C",
+    label: "Temperature",
+    note: "Holds the faces at a fixed temperature, such as a surface clamped to a cold plate.",
+  },
+  {
+    id: "heat",
+    name: "Heat flow",
+    unit: "W",
+    label: "Total heat flow into the faces",
+    note: "Heat entering through the faces, such as from a heater or a chip. Negative values remove heat.",
+  },
+  {
+    id: "convection",
+    name: "Convection",
+    unit: "W/(m²·K)",
+    label: "Film coefficient",
+    note: "Heat exchanged with surrounding air or liquid. Typical: still air 5–10, moving air 20–100, water 500–10,000 W/(m²·K).",
+  },
+  {
+    id: "generation",
+    name: "Generation",
+    unit: "W",
+    label: "Heat generated in the part",
+    note: "Heat produced evenly through the whole part, such as from electrical losses.",
+  },
+];
+export const thermalValue = (c: ThermalCondition) =>
+  c.kind === "temperature"
+    ? fmt(c.value) + " °C"
+    : c.kind === "convection"
+      ? fmt(c.value) + " W/m²K"
+      : fmt(c.value) + " W";
+export const blankThermal = (): ThermalCondition => ({
+  id: crypto.randomUUID(),
+  name: "Temperature",
+  kind: "temperature",
+  faces: [],
+  value: 100,
+  ambient: 20,
+});
 /**
- * Analysis types and what each uses. `loads`: the study's loads apply.
- * `supports`: at least one support is required. `eigen`: results are
+ * Analysis types and what each uses. `loads`: loads apply and are shown.
+ * `supports`: at least one support is required. `mechanical`: supports and
+ * point masses take part and are shown. `thermal`: thermal conditions take
+ * part, and a temperature or convection is required. `eigen`: results are
  * shapes scaled to a 1 mm peak, solved with the direct solver.
  */
 export const ANALYSES: Record<
@@ -62,6 +118,8 @@ export const ANALYSES: Record<
     note: string;
     loads: boolean;
     supports: boolean;
+    mechanical: boolean;
+    thermal: boolean;
     eigen: boolean;
   }
 > = {
@@ -70,6 +128,8 @@ export const ANALYSES: Record<
     note: "Stress and deflection under steady loads.",
     loads: true,
     supports: true,
+    mechanical: true,
+    thermal: false,
     eigen: false,
   },
   frequency: {
@@ -77,6 +137,8 @@ export const ANALYSES: Record<
     note: "The frequencies a part vibrates at on its own, and the shape of each vibration. Keep them away from the frequencies of motors, rotors or road input.",
     loads: false,
     supports: false,
+    mechanical: true,
+    thermal: false,
     eigen: true,
   },
   buckling: {
@@ -84,7 +146,27 @@ export const ANALYSES: Record<
     note: "How many times the loads can grow before a slender or thin-walled part suddenly buckles sideways, and the shape it buckles into.",
     loads: true,
     supports: true,
+    mechanical: true,
+    thermal: false,
     eigen: true,
+  },
+  thermal: {
+    name: "Heat transfer",
+    note: "The temperatures a part settles at with heat flowing in and out: heaters, cooled faces, air.",
+    loads: false,
+    supports: false,
+    mechanical: false,
+    thermal: true,
+    eigen: false,
+  },
+  thermalStress: {
+    name: "Thermal stress",
+    note: "Temperatures, and the stress and deflection from thermal expansion that the supports resist, together with any loads.",
+    loads: true,
+    supports: true,
+    mechanical: true,
+    thermal: true,
+    eigen: false,
   },
 };
 /** Modes requested by default in each eigenvalue analysis. */
@@ -178,6 +260,12 @@ export const CONDITIONS: Record<
     empty:
       "Loads are forces, pressures, moments, gravity or rotation acting on the part.",
   },
+  thermal: {
+    group: "Thermal",
+    add: "Add thermal condition",
+    empty:
+      "Fixed temperatures, heat flows, convection to air, or heat generated in the part.",
+  },
   mass: {
     group: "Masses",
     add: "Add mass",
@@ -190,7 +278,9 @@ export const conditionValue = (kind: ConditionKind, c: Condition) =>
     ? loadValue(c as Load)
     : kind === "mass"
       ? massValue(c as PointMass)
-      : "";
+      : kind === "thermal"
+        ? thermalValue(c as ThermalCondition)
+        : "";
 export const blankMass = (point: number[]): PointMass => ({
   id: crypto.randomUUID(),
   name: "Point mass",

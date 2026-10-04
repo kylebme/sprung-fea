@@ -8,6 +8,7 @@ import type {
   MeshInfo,
   PointMass,
   ResultInfo,
+  ThermalCondition,
   Study,
   Support,
 } from "./types";
@@ -17,6 +18,7 @@ export const LISTS = {
   support: "supports",
   load: "loads",
   mass: "masses",
+  thermal: "thermal",
 } as const satisfies Record<ConditionKind, keyof Study>;
 export const conditionsOf = (study: Study, kind: ConditionKind) =>
   study[LISTS[kind]] as Condition[];
@@ -28,6 +30,7 @@ export function normalizeStudy(study: Study): Study {
     analysis: study.analysis ?? "static",
     solver: study.solver ?? "spooles",
     masses: study.masses ?? [],
+    thermal: study.thermal ?? [],
   };
 }
 
@@ -168,7 +171,8 @@ export function faceHint(face: Face) {
 export type Draft =
   | { kind: "support"; value: Support }
   | { kind: "load"; value: Load }
-  | { kind: "mass"; value: PointMass };
+  | { kind: "mass"; value: PointMass }
+  | { kind: "thermal"; value: ThermalCondition };
 
 /** The study as it would be if the draft condition were saved now. */
 export function previewStudy(

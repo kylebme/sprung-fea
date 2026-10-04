@@ -47,6 +47,29 @@ def mass_check(study, model):
     return {'label':label,'values':[part+extra],'unit':'kg','digits':4}
 
 
+def static_checks(frame, fixed, loading):
+    """Support reactions and force balance. CalculiX's RF includes applied
+    loads, so their equivalent nodal forces are subtracted at supported
+    nodes. Returns (check rows, reactions, applied resultant, balance)."""
+    reactions=np.zeros(3)
+    forces=frame['fields'].get('FORC',{})
+    for n,a in fixed:
+        reactions[a]+=forces.get(n,[0,0,0])[a]-loading.applied.get(n,np.zeros(3))[a]
+    total=loading.total()
+    # Resultants can cancel for pressure around a bore. Normalize by the
+    # larger of the resultant and absolute equivalent nodal loading; a
+    # purely thermal study has neither, and its reactions must cancel.
+    scale=max(np.linalg.norm(total),sum(np.linalg.norm(v) for v in loading.applied.values()))
+    # Without applied loads (thermal stress alone) the reactions must cancel:
+    # judge them against their own size, above a 1 µN floor of round-off.
+    if scale<1e-9: scale=max(sum(abs(forces.get(n,[0,0,0])[a]) for n,a in fixed),1e-6)
+    balance=float(np.linalg.norm(reactions+total)/scale)
+    checks=[{'label':'Applied force X, Y, Z','values':total.tolist(),'unit':'N'},
+            {'label':'Reaction X, Y, Z','values':reactions.tolist(),'unit':'N'},
+            {'label':'Force balance error','values':[balance*100],'unit':'%'}]
+    return checks,reactions,total,balance
+
+
 class Analysis:
     id=''
     name=''
@@ -93,17 +116,7 @@ class Static(Analysis):
         displacements=nodal(frame,'DISP',ids,3,'displacement and stress')
         stress=np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'displacement and stress')])
         movement=np.linalg.norm(displacements,axis=1)
-        loading=context['loading']
-        reactions=np.zeros(3)
-        # CCX RF includes applied loads: subtract them to obtain support reactions.
-        forces=frame['fields'].get('FORC',{})
-        for n,a in context['fixed']:
-            reactions[a]+=forces.get(n,[0,0,0])[a]-loading.applied.get(n,np.zeros(3))[a]
-        total_load=loading.total()
-        # Resultants can cancel for pressure around a bore. Normalize by the
-        # larger of the resultant and absolute equivalent nodal loading.
-        load_scale=max(np.linalg.norm(total_load),sum(np.linalg.norm(v) for v in loading.applied.values()),1e-9)
-        balance=float(np.linalg.norm(reactions+total_load)/load_scale)
+        checks,reactions,total_load,balance=static_checks(frame,context['fixed'],context['loading'])
         dims=np.ptp(model.coords,axis=0)
         max_stress=float(stress.max()); max_move=float(movement.max())
         yield_strength=study['material'].get('yield')
@@ -116,10 +129,7 @@ class Static(Analysis):
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))]}
         result={'frames':[{'label':'Static load','value':None,'unit':''}],'fields':['displacement','vonMises'],
                 'summary':summary,'warnings':warnings,'charts':[],
-                'checks':[mass_check(study,model),
-                          {'label':'Applied force X, Y, Z','values':total_load.tolist(),'unit':'N'},
-                          {'label':'Reaction X, Y, Z','values':reactions.tolist(),'unit':'N'},
-                          {'label':'Force balance error','values':[balance*100],'unit':'%'}],
+                'checks':[mass_check(study,model)]+checks,
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
         return result,[{'displacement':displacements,'vonMises':stress}]
 
@@ -269,7 +279,8 @@ class Buckling(Analysis):
         return [{'id':'factor','label':'First buckling factor','unit':'× loads','value':f}] if f else []
 
 
-ANALYSES={a.id:a for a in [Static(),Frequency(),Buckling()]}
+from thermal import Thermal, ThermalStress
+ANALYSES={a.id:a for a in [Static(),Frequency(),Buckling(),Thermal(),ThermalStress()]}
 
 
 def analysis_of(study):

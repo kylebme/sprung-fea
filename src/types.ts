@@ -25,6 +25,10 @@ export type Material = {
   poisson: number;
   density: number;
   yield: number | null;
+  /** Thermal conductivity, W/(m·K); thermal studies need it. */
+  conductivity?: number | null;
+  /** Thermal expansion, µm/(m·°C); thermal stress needs it. */
+  expansion?: number | null;
 };
 export type Support = {
   id: string;
@@ -68,9 +72,23 @@ export type PointMass = {
   mass: number;
   point: number[];
 };
+/**
+ * A thermal condition. `value` is a temperature (°C), a heat flow into the
+ * faces (W), a film coefficient (W/(m²·K)) with `ambient` (°C), or heat
+ * generated in the whole part (W, no faces).
+ */
+export type ThermalKind = "temperature" | "heat" | "convection" | "generation";
+export type ThermalCondition = {
+  id: string;
+  name: string;
+  kind: ThermalKind;
+  faces: number[];
+  value: number;
+  ambient?: number;
+};
 /** Conditions applied to faces, edited through drafts. */
-export type ConditionKind = "support" | "load" | "mass";
-export type Condition = Support | Load | PointMass;
+export type ConditionKind = "support" | "load" | "mass" | "thermal";
+export type Condition = Support | Load | PointMass | ThermalCondition;
 /** CalculiX equation solver: direct SPOOLES or preconditioned conjugate gradients. */
 export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
 /**
@@ -80,13 +98,17 @@ export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
 export type Threads = "auto" | "single" | "all";
 export type Cpus = { logical: number; performance: number };
 /** Analysis types; projects saved before the choice are linear static. */
-export type Analysis = "static" | "frequency" | "buckling";
+export type Analysis =
+  "static" | "frequency" | "buckling" | "thermal" | "thermalStress";
 export type Study = {
   analysis: Analysis;
   material: Material | null;
   supports: Support[];
   loads: Load[];
   masses: PointMass[];
+  thermal: ThermalCondition[];
+  /** Temperature at which the part is free of thermal stress, °C. */
+  referenceTemperature?: number;
   /** Modes to find in vibration studies. */
   modes?: number;
   meshSize: number;
@@ -227,6 +249,8 @@ export const MATERIALS: Material[] = [
     poisson: 0.33,
     density: 2700,
     yield: 276,
+    conductivity: 167,
+    expansion: 23.6,
   },
   {
     name: "Structural steel",
@@ -234,6 +258,8 @@ export const MATERIALS: Material[] = [
     poisson: 0.3,
     density: 7850,
     yield: 250,
+    conductivity: 50,
+    expansion: 12,
   },
   {
     name: "Stainless steel 304",
@@ -241,6 +267,8 @@ export const MATERIALS: Material[] = [
     poisson: 0.29,
     density: 8000,
     yield: 215,
+    conductivity: 16.2,
+    expansion: 17.3,
   },
   {
     name: "Titanium Ti-6Al-4V",
@@ -248,6 +276,8 @@ export const MATERIALS: Material[] = [
     poisson: 0.342,
     density: 4430,
     yield: 880,
+    conductivity: 6.7,
+    expansion: 8.6,
   },
 ];
 export const emptyStudy = (): Study => ({
@@ -256,6 +286,7 @@ export const emptyStudy = (): Study => ({
   supports: [],
   loads: [],
   masses: [],
+  thermal: [],
   meshSize: 0,
   detail: "medium",
   solver: "spooles",

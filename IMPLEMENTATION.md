@@ -6,7 +6,7 @@ This document describes the implemented application, its numerical and persisten
 
 ## 1. Scope and product decisions
 
-BetterSim analyzes one STEP solid with CalculiX: linear static stress, natural frequencies, and linear buckling. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
+BetterSim analyzes one STEP solid with CalculiX: linear static stress, natural frequencies, linear buckling, steady heat transfer, and thermal stress. The current packaged application targets macOS Apple Silicon. Electron, Vite, React, and VTK compiled to WebAssembly (VTK.wasm) provide the desktop shell and interface; Gmsh with OpenCASCADE imports CAD geometry and creates the volume mesh.
 
 The application follows engineering intent: import a part, choose its material, define where it is held, apply loads, inspect the mesh, and examine results. A study tree with the part's face list on the left, the model view in the center, and an inspector on the right keep these dependencies visible. A collapsible console under the view holds job output and solver checks. Light and dark themes follow the system setting until the user picks one. Basic controls use physical descriptions; advanced controls expose material properties, global support directions, and mesh size.
 
@@ -129,6 +129,14 @@ The results panel lists modes with frequency and effective mass, and animates th
 ### Buckling
 
 A buckling study (`analysis: "buckling"`, `modes` default 3) runs `*BUCKLE` with the study's supports and loads as the reference load. Each factor multiplies all loads together; the first positive factor is the key result. The first `.frd` frame is the reference state, whose peak stress times the first factor is compared with the yield strength: above it, the part yields before it buckles. A first factor below 1 means buckling under the applied loads; negative factors mean buckling with the loads reversed, and a study with only negative factors has no key result. Shapes are scaled to a 1 mm peak and shown still. The panel reminds the user that imperfections and yielding make real buckling loads lower, and recommends a factor of at least 2 to 3.
+
+### Heat transfer and thermal stress
+
+Thermal studies use thermal conditions on faces: a fixed temperature (°C), a total heat flow into the faces (W, spread as a uniform flux over their area), and convection (film coefficient in W/(m²·K) with an air or fluid temperature); heat generation (W) acts evenly through the whole part. At least one fixed temperature or convection is required, or no steady state exists. Where faces with different fixed temperatures meet, the later condition sets the shared edge. The material needs thermal conductivity (W/(m·K), unchanged in the mm–N–s deck), and thermal stress also needs expansion (µm/(m·°C), × 1e-6 in the deck). In deck units 1 W is 1000 N·mm/s and film coefficients are multiplied by 1e-3. Radiation is not modeled.
+
+Heat transfer runs `*HEAT TRANSFER, STEADY STATE` with `*BOUNDARY` on degree of freedom 11, `*DFLUX` surface and body flux, and `*FILM`. Results are temperature and heat flux magnitude (W/m²). Thermal stress runs `*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE` with the supports, any loads and point masses, `*EXPANSION, ZERO` at the stress-free temperature (default 20 °C), and initial temperatures at that value. Its results add temperature to the static fields and checks.
+
+The heat balance check adds up heat flowing in and out: heat flows and generation, convection integrated from nodal temperatures with the quadratic face shape functions, and the heat supplied at fixed temperatures. CalculiX's `RFL` at those nodes, like force reactions, also contains the share of distributed heat landing on them, which is subtracted. A purely thermal stress study has no applied force, so its force balance compares the reactions with their own size. The `.frd` file stores five significant digits, which bounds the precision of every result read from it.
 
 ### Solve and result decoding
 

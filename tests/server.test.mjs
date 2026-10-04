@@ -72,6 +72,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
         },
       ],
       masses: [],
+      thermal: [],
       meshSize: 4,
       detail: "medium",
       solver: "iterative-cholesky",
@@ -89,7 +90,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     const reopened = await wait(base, opened.job);
     assert.equal(reopened.hash, geo.hash);
     assert.deepEqual(opened.study, study);
-    const { solver, analysis, masses, ...older } = study;
+    const { solver, analysis, masses, thermal, ...older } = study;
     const legacy = await request(base, "/api/open", {
       ...project,
       study: { ...older, detail: "balanced" },
@@ -100,6 +101,7 @@ test("STEP → portable project → reopen → real solve → export", async () 
     assert.equal(legacy.study.solver, "spooles");
     assert.equal(legacy.study.analysis, "static");
     assert.deepEqual(legacy.study.masses, []);
+    assert.deepEqual(legacy.study.thermal, []);
     const unknown = await fetch(base + "/api/open", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -283,6 +285,7 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       solver: "spooles",
       analysis: "static",
       masses: [],
+      thermal: [],
     });
     assert.equal((await wait(base, restored.job)).hash, geo.hash);
 
@@ -306,6 +309,20 @@ test("recovery on disk, error statuses, and document pruning", async () => {
         loads: [{ id: "l", name: "Load", magnitude: 0, ...load }],
       });
       assert.equal(response.status, 400, load.kind);
+    }
+    // Thermal conditions need a known kind, faces, and a positive film
+    // coefficient for convection.
+    for (const condition of [
+      { kind: "radiation", faces: [2], value: 1 },
+      { kind: "temperature", faces: [], value: 20 },
+      { kind: "convection", faces: [2], value: -5, ambient: 20 },
+    ]) {
+      const response = await post(`/api/documents/${imported.id}/solve`, {
+        ...study,
+        analysis: "thermal",
+        thermal: [{ id: "t", name: "Heat", ...condition }],
+      });
+      assert.equal(response.status, 400, condition.kind);
     }
     // Point masses need a positive mass, a center and faces.
     for (const mass of [

@@ -19,7 +19,15 @@ const vector = (v, name) => {
   return v;
 };
 /** Analysis types the engine implements (engine/analyses.py). */
-export const ANALYSES = ["static", "frequency", "buckling"];
+export const ANALYSES = [
+  "static",
+  "frequency",
+  "buckling",
+  "thermal",
+  "thermalStress",
+];
+/** Thermal conditions; generation acts on the whole part. */
+export const THERMAL = ["temperature", "heat", "convection", "generation"];
 // Errors caused by the request itself; the service reports them as 400.
 export class RequestError extends Error {
   status = 400;
@@ -96,12 +104,33 @@ export function validateStudy(s) {
       throw new RequestError("Poisson ratio must lie between -1 and 0.499.");
     number(m.density, "Density", { positive: true });
     if (m.yield !== null) number(m.yield, "Yield strength", { positive: true });
+    // Thermal properties are optional; thermal studies require them.
+    if (m.conductivity != null)
+      number(m.conductivity, "Thermal conductivity", { positive: true });
+    if (m.expansion != null) number(m.expansion, "Thermal expansion");
   }
+  // Studies saved before thermal analysis have no thermal conditions.
+  s.thermal ??= [];
+  if (!Array.isArray(s.thermal) || s.thermal.length > 100)
+    throw new RequestError("This project contains an invalid study setup.");
+  for (const c of s.thermal) {
+    text(c.id, "Condition identifier");
+    text(c.name, "Condition name");
+    faces(c.faces);
+    if (!THERMAL.includes(c.kind))
+      throw new RequestError("Unsupported thermal condition.");
+    if (c.kind !== "generation" && !c.faces.length)
+      throw new RequestError("A thermal condition must select at least one face.");
+    number(c.value, "Thermal value", { positive: c.kind === "convection" });
+    if (c.kind === "convection") number(c.ambient, "Ambient temperature");
+  }
+  if (s.referenceTemperature !== undefined)
+    number(s.referenceTemperature, "Stress-free temperature");
   // Studies saved before point masses have none.
   s.masses ??= [];
   if (!Array.isArray(s.masses) || s.masses.length > 100)
     throw new RequestError("This project contains an invalid study setup.");
-  const conditions = [...s.supports, ...s.loads, ...s.masses];
+  const conditions = [...s.supports, ...s.loads, ...s.masses, ...s.thermal];
   for (const c of conditions) {
     text(c.id, "Condition identifier");
     text(c.name, "Condition name");

@@ -41,7 +41,7 @@ type Props = {
   probeLabel: string | null;
   theme: Theme;
   projection: Projection;
-  draftKind: "support" | "load" | "mass" | null;
+  draftKind: "support" | "load" | "mass" | "thermal" | null;
   marginMax: number;
   yieldStrength: number | null;
   filters: Filters;

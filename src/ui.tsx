@@ -85,7 +85,7 @@ export function Node({
 }: {
   depth?: number;
   icon?: LucideIcon;
-  swatch?: "support" | "load" | "mass";
+  swatch?: "support" | "load" | "mass" | "thermal";
   label: string;
   value?: string;
   active?: boolean;

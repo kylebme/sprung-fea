@@ -40,7 +40,8 @@ export type Probe = {
   displacement: number[] | null;
 };
 
-export type Plot = "stress" | "movement" | "safety" | "temperature" | "plastic";
+export type Plot =
+  "stress" | "movement" | "safety" | "temperature" | "plastic" | "heatflux";
 /**
  * A plot shows one scalar per node: an engine field, or a quantity derived
  * from them (displacement magnitude, yield margin). Ranges start at zero
@@ -55,6 +56,7 @@ export const PLOT_SOURCES: Record<
   safety: { field: "vonMises", derived: true },
   temperature: { field: "temperature", signed: true },
   plastic: { field: "peeq" },
+  heatflux: { field: "heatFlux" },
 };
 
 const MAGIC = "BSIMVIEW";
@@ -272,6 +274,7 @@ const CSV_COLUMNS: Record<string, string> = {
   vonMises: "von_mises_MPa",
   temperature: "temperature_C",
   peeq: "plastic_strain",
+  heatFlux: "heat_flux_W_m2",
 };
 
 /** Nodes on the part surface with the displayed frame's results, as CSV. */
