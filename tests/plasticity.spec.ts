@@ -44,5 +44,19 @@ test("plasticity: overload the cantilever, see plastic strain and the permanent 
   await page.keyboard.press("End");
   await expect(page.locator(".vlabel")).toContainText("Unloaded");
   await page.screenshot({ path: "output/playwright/plasticity.png" });
+  // One stress–strain point at the ultimate strength and elongation is the
+  // same straight line. Solving remeshes, so the peak agrees only to the
+  // mesh's variation.
+  await page.getByRole("button", { name: /^Material/ }).click();
+  await inspector(page).getByRole("button", { name: "Add point" }).click();
+  await expect(inspector(page).getByLabel("Stress 1")).toHaveValue("310");
+  await expect(inspector(page).getByLabel("Strain 1")).toHaveValue("12");
+  await page.getByRole("button", { name: "Apply material" }).click();
+  await solve(page);
+  await expect(inspector(page)).toContainText(
+    "follows the stress–strain points",
+  );
+  const [curve] = numbers(await check(page, "Largest plastic strain"));
+  expect(Math.abs(curve / plastic - 1)).toBeLessThan(0.1);
   expect(errors).toEqual([]);
 });

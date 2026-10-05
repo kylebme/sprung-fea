@@ -50,6 +50,23 @@ class Plasticity(unittest.TestCase):
         np.testing.assert_allclose(result['summary']['reactions'],[-stress*200,0,0],rtol=1e-4,atol=.05)
         self.assertIn('*PLASTIC',(self.folder/'analysis.inp').read_text())
 
+    def test_stress_strain_points_set_the_plastic_strain(self):
+        # Points from a tensile test replace the straight line: at a stress
+        # between two of them, the plastic strain is interpolated between
+        # theirs (plastic = total strain − stress / E).
+        points=[[2,290],[6,300],[15,305]]
+        stress=295
+        p1,p2=[e/100-s/E for e,s in points[:2]]
+        plastic=p1+(p2-p1)*(stress-290)/(300-290)
+        result=worker.solve(self.folder,study(stress,material={**MATERIAL,'hardening':points}))
+        np.testing.assert_allclose(result['peeq'],plastic,rtol=1e-3)
+        u=np.asarray(result['displacements'])[self.end,0].mean()
+        self.assertAlmostEqual(u,(stress/E+plastic)*100,delta=2e-3)
+        mesh=json.loads((self.folder/'mesh.json').read_text())
+        for bad in [[[2,250]],[[2,290],[1,300]]]:
+            with self.subTest(points=bad),self.assertRaisesRegex(ValueError,'stress–strain points'):
+                worker.write_deck(self.folder,study(stress,material={**MATERIAL,'hardening':bad}),mesh)
+
     def test_below_yield_matches_the_elastic_answer(self):
         result=worker.solve(self.folder,study(.5*Sy))
         self.assertEqual(result['summary']['maxPlastic'],0)

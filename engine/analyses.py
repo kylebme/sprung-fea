@@ -20,7 +20,7 @@ import json, math, time
 import numpy as np
 import calculix
 from cad import emit, threads, mesh_view, write_view
-from model import Model, validate, build_loads, validate_vibration, rbe3
+from model import Model, finite, validate, build_loads, validate_vibration, rbe3
 
 SCHEMA=2
 
@@ -84,14 +84,16 @@ def mass_check(study, model):
     return {'label':label,'values':[part+extra],'unit':'kg','digits':4}
 
 
-def static_checks(frame, fixed, loading):
+def static_checks(frame, held, loading):
     """Support reactions and force balance. CalculiX's RF includes applied
     loads, so their equivalent nodal forces are subtracted at supported
-    nodes. Returns (check rows, reactions, applied resultant, balance)."""
+    nodes; in a node's free directions the two cancel. Returns (check rows,
+    reactions, applied resultant, balance)."""
     reactions=np.zeros(3)
     forces=frame['fields'].get('FORC',{})
-    for n,a in fixed:
-        reactions[a]+=forces.get(n,[0,0,0])[a]-loading.applied.get(n,np.zeros(3))[a]
+    held_nodes=held.nodes()
+    for n in held_nodes:
+        reactions+=np.asarray(forces.get(n,[0,0,0])[:3])-loading.applied.get(n,np.zeros(3))
     total=loading.total()
     # Resultants can cancel for pressure around a bore. Normalize by the
     # larger of the resultant and absolute equivalent nodal loading; a
@@ -99,7 +101,7 @@ def static_checks(frame, fixed, loading):
     scale=max(np.linalg.norm(total),sum(np.linalg.norm(v) for v in loading.applied.values()))
     # Without applied loads (thermal stress alone) the reactions must cancel:
     # judge them against their own size, above a 1 µN floor of round-off.
-    if scale<1e-9: scale=max(sum(abs(forces.get(n,[0,0,0])[a]) for n,a in fixed),1e-6)
+    if scale<1e-9: scale=max(sum(np.abs(forces.get(n,[0,0,0])[:3]).sum() for n in held_nodes),1e-6)
     balance=float(np.linalg.norm(reactions+total)/scale)
     checks=[{'label':'Applied force X, Y, Z','values':total.tolist(),'unit':'N'},
             {'label':'Reaction X, Y, Z','values':reactions.tolist(),'unit':'N'},
@@ -142,11 +144,25 @@ def unloading(study):
 
 
 def check_plastic(m):
-    """An elastic–plastic material needs yield, ultimate strength above it,
-    and an elongation at break beyond the elastic strain at ultimate."""
+    """An elastic–plastic material needs a yield strength and a hardening
+    curve beyond it: points of stress (MPa) and total strain (%) from a
+    tensile test, or the ultimate strength at the elongation at break."""
     name=m.get('name','The material')
     if not m.get('yield'):
         raise ValueError(f'Enter the yield strength of {name} for plasticity.')
+    if m.get('hardening'):
+        points=m['hardening']
+        if not isinstance(points,list) or any(not isinstance(p,(list,tuple)) or len(p)!=2 for p in points):
+            raise ValueError(f'The stress–strain points of {name} are invalid.')
+        for strain,stress in points:
+            finite(strain,'Strain',True);finite(stress,'Stress',True)
+        plastic=[p for _,p in hardening(m)]
+        stresses=[m['yield']]+[s for _,s in points]
+        if any(b<a for a,b in zip(stresses,stresses[1:])):
+            raise ValueError(f'The stress–strain points of {name} must not fall below the yield strength or each other.')
+        if not plastic[1]>0 or any(b<=a for a,b in zip(plastic[1:],plastic[2:])):
+            raise ValueError(f'The stress–strain points of {name} need increasing strain beyond the elastic strain at their stress.')
+        return
     if m.get('ultimate') is None or m.get('elongation') is None:
         raise ValueError(f'Enter the ultimate strength and elongation at break of {name} for plasticity.')
     if not m['ultimate']>m['yield']:
@@ -155,11 +171,23 @@ def check_plastic(m):
         raise ValueError(f'The elongation at break of {name} is smaller than its elastic strain at ultimate strength.')
 
 
+def hardening(m):
+    """(stress, plastic strain) points of isotropic hardening, starting at
+    yield with no plastic strain: the material's stress–strain points
+    (plastic strain = total strain − stress / E), or a straight line to the
+    ultimate strength at the elongation at break. Flat beyond the last."""
+    points=m.get('hardening') or [[m['elongation'],m['ultimate']]]
+    return [(m['yield'],0.)]+[(stress,strain/100-stress/m['young']) for strain,stress in points]
+
+
+def breaking_strain(m):
+    """Plastic strain at which the material tears: at the elongation at
+    break, or at the last stress–strain point."""
+    return m['elongation']/100 if m.get('elongation') else hardening(m)[-1][1]
+
+
 def plastic_lines(m):
-    """Bilinear isotropic hardening: yield at no plastic strain, ultimate at
-    the plastic part of the elongation at break; flat beyond."""
-    strain=m['elongation']/100-m['ultimate']/m['young']
-    return ['*PLASTIC',f"{calculix.number(m['yield'])}, 0",f"{calculix.number(m['ultimate'])}, {calculix.number(strain)}"]
+    return ['*PLASTIC']+[f'{calculix.number(s)}, {calculix.number(e)}' for s,e in hardening(m)]
 
 
 def large_deformation(study):
@@ -203,7 +231,7 @@ class Static(Analysis):
             lines+=[step,solver,'0.25, 1.0, 1e-5, 0.5','*CLOAD, OP=NEW','*DLOAD, OP=NEW']+output+['*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
         (folder/'applied.json').write_text(json.dumps({n:v.tolist() for n,v in loading.applied.items()}))
-        return {'fixed':fixed,'loading':loading}
+        return {'held':fixed,'loading':loading}
 
     def results(self, folder, study, model, frames, context):
         large=large_deformation(study);plastic=plasticity(study)
@@ -213,7 +241,7 @@ class Static(Analysis):
         view=[]
         for f in steps:
             u=nodal(f,'DISP',ids,3,'displacement and stress')
-            fields={'displacement':u,**measures(f,ids)}
+            fields={'displacement':u,**measures(f,ids),'force':nodal(f,'FORC',ids,3,'nodal force')}
             # Averaging integration points to nodes can dip below zero.
             if plastic: fields['peeq']=np.maximum(0,nodal(f,'PE',ids,1,'plastic strain')[:,0])
             view.append(fields)
@@ -222,7 +250,7 @@ class Static(Analysis):
         frame=steps[full]
         displacements=view[full]['displacement'];stress=view[full]['vonMises']
         movement=np.linalg.norm(displacements,axis=1)
-        checks,reactions,total_load,balance=static_checks(frame,context['fixed'],context['loading'])
+        checks,reactions,total_load,balance=static_checks(frame,context['held'],context['loading'])
         follower=large and any(l['kind'] in ('pressure','rotation') for l in study['loads'])
         if follower:
             # Pressure and rotation follow the deformed shape, so their
@@ -234,9 +262,12 @@ class Static(Analysis):
         warnings=['Peak stress at sharp corners or support edges may increase with refinement. Check a finer mesh before relying on a result.']
         if plastic:
             peeq=max(float(v['peeq'].max()) for v in view)
-            warnings.append('Elastic–plastic material: stress beyond yield follows a straight hardening line up to the ultimate strength at the elongation at break, and stays flat beyond it. Unloading is elastic. Repeated loading and fatigue are not modeled.')
+            curve=any(m.get('hardening') for m in [study['material'],*(study.get('bodyMaterials') or {}).values()])
+            warnings.append(('Elastic–plastic material: stress beyond yield follows the stress–strain points, and stays flat beyond the last.' if curve else
+                             'Elastic–plastic material: stress beyond yield follows a straight hardening line up to the ultimate strength at the elongation at break, and stays flat beyond it.')+
+                            ' Unloading is elastic. Repeated loading and fatigue are not modeled.')
             if peeq==0: warnings.append('The part does not yield under these loads: the elastic result applies.')
-            breaking=[m for m in [study['material'],*(study.get('bodyMaterials') or {}).values()] if peeq>m['elongation']/100]
+            breaking=[m for m in [study['material'],*(study.get('bodyMaterials') or {}).values()] if peeq>breaking_strain(m)]
             if breaking: warnings.append('Plastic strain exceeds the elongation at break somewhere: the material would tear there.')
         elif yield_strength and max_stress>yield_strength:
             warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation: turn on Plasticity in the Analysis settings.')
@@ -303,46 +334,73 @@ def normalized(displacement, stress=None):
     return displacement/peak, None if stress is None else stress/peak
 
 
+def preloaded(study):
+    """Whether a vibration study includes its loads: the stress they cause
+    stiffens the part (tension) or softens it (compression)."""
+    value=study.get('preload',False)
+    if not isinstance(value,bool): raise ValueError('Including loads must be on or off.')
+    return value and bool(study.get('loads'))
+
+
 class Frequency(Analysis):
     """Natural frequencies and mode shapes. Supports are optional: a part
     with none is analyzed free, and its first six modes are rigid motions
-    at zero frequency. Point masses add inertia through RBE3 couplings."""
+    at zero frequency. Point masses add inertia through RBE3 couplings.
+    With `preload`, a static step under the loads comes first, and the
+    modes include the stiffness of the stress it leaves (a perturbation
+    step)."""
     id='frequency'
     name='Natural frequencies'
 
-    def validate(self, study, mesh):
-        model,fixed,rigid=validate_vibration(study,mesh)
+    def setup(self, study, mesh):
+        """(model, blocked directions, free rigid motions)."""
+        model,held,rigid=validate_vibration(study,mesh)
         modes_of(study)
-        return model.nodes,fixed
+        if preloaded(study):
+            if rigid:
+                raise ValueError('Including the loads needs supports that hold the part still. Add supports, or solve without the loads.')
+            _,held=validate(study,mesh)
+        return model,held,rigid
+
+    def validate(self, study, mesh):
+        model,held,_=self.setup(study,mesh)
+        return model.nodes,held
 
     def deck(self, folder, study, mesh):
-        model,fixed,rigid=validate_vibration(study,mesh)
+        model,held,rigid=self.setup(study,mesh)
         count=modes_of(study)
         masses=study.get('masses') or []
-        lines=calculix.mesh_lines(model,'natural frequency study')
+        preload=preloaded(study)
+        lines=calculix.mesh_lines(model,'prestressed natural frequency study' if preload else 'natural frequency study')
         lines+=calculix.section_lines(model,study)
-        if fixed: lines+=calculix.boundary_lines(fixed)
-        lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],fixed)
-        # A free part needs a negative shift: its stiffness is singular.
-        lines+=['*STEP','*FREQUENCY, SOLVER=SPOOLES',f'{count+rigid}, -1' if rigid else str(count)]
+        if held: lines+=calculix.boundary_lines(held)
+        lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],held)
+        if preload:
+            # No output from the static step: every frame is a mode.
+            lines+=['*STEP','*STATIC, SOLVER=SPOOLES']+calculix.load_lines(build_loads(study,model))+['*END STEP',
+                    '*STEP, PERTURBATION','*FREQUENCY, SOLVER=SPOOLES',str(count)]
+        else:
+            # A free part needs a negative shift: its stiffness is singular.
+            lines+=['*STEP','*FREQUENCY, SOLVER=SPOOLES',f'{count+rigid}, -1' if rigid else str(count)]
         lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
-        return {'rigid':rigid}
+        return {'rigid':rigid,'preload':preload}
 
     def results(self, folder, study, model, frames, context):
         ids=model.ids
         dat=calculix.read_dat(folder/'analysis.dat')
         eig=calculix.eigenvalues(dat)
         effective,total=calculix.modal_mass(dat)
-        rigid=context['rigid']
+        rigid=context['rigid'];preload=context['preload']
         if len(eig)<len(frames):
             raise ValueError('CalculiX did not report every natural frequency. Inspect the solver log.')
-        view=[];info=[];frequencies=[];fractions=[]
+        view=[];info=[];frequencies=[];fractions=[];unstable=False
         for k,frame in enumerate(frames):
             shape,stress=normalized(nodal(frame,'DISP',ids,3,'mode shape'),
                                     np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'mode shape')]))
             value=eig[k][1]
             hz=max(0.,value[2]) if value[0]>0 else 0.
+            unstable|=preload and value[0]<0
             is_rigid=k<rigid
             frequencies.append(hz)
             mass=[e/t if t else 0 for e,t in zip(effective[k],total)] if k<len(effective) and total else [0,0,0]
@@ -351,11 +409,20 @@ class Frequency(Analysis):
             view.append({'displacement':shape,'vonMises':stress})
         elastic=[f for k,f in enumerate(frequencies) if k>=rigid]
         captured=np.sum(fractions[rigid:],axis=0) if elastic else np.zeros(3)
-        warnings=['Frequencies assume small vibrations about the unloaded shape. Loads, and stress stiffening from them, are not included.']
+        if preload:
+            warnings=['The loads are included: the stress they cause stiffens the part where it is in tension and softens it where it is in compression. The loads themselves are steady; only small vibrations about the loaded shape are found.']
+            if any(l['kind']=='rotation' for l in study['loads']):
+                warnings.append('Rotation stiffens the part through centrifugal stress. Spin softening and gyroscopic effects are not modeled, so frequencies of fast-spinning parts are approximate.')
+            if unstable:
+                warnings.append('A mode has negative stiffness: the loads exceed what the part can carry before buckling. Its frequency is shown as 0 Hz.')
+        elif study.get('loads'):
+            warnings=['Frequencies of the unloaded part: the loads were not included.']
+        else:
+            warnings=['Frequencies assume small vibrations about the unloaded shape.']
         if rigid:
             warnings.append(f'The part is free to move in {rigid} way{"s" if rigid>1 else ""}: the first {rigid} mode{"s are" if rigid>1 else " is a"} rigid motion{"s" if rigid>1 else ""} at about 0 Hz, listed separately.')
         summary={'frequencies':frequencies,'rigidModes':rigid,'effectiveMass':fractions,
-                 'totalMass':total[0]*1e3 if total else None}
+                 'totalMass':total[0]*1e3 if total else None,'preloaded':preload}
         result={'frames':info,'fields':['displacement','vonMises'],'summary':summary,'warnings':warnings,'charts':[],
                 'checks':[mass_check(study,model),
                           {'label':'Natural frequencies found','values':[len(elastic)],'unit':'','digits':0},

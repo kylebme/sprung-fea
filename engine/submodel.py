@@ -180,7 +180,7 @@ def submodel(folder, study, region):
     m=local['material']
     fixed=fixed_dofs(local['supports'],model)
     loading=build_loads(local,model,m['density']*1e-12)
-    held={n for n,_ in fixed}
+    held=fixed.nodes()
     driven=sorted({n for f in cut_faces for n in model.face_nodes(f)}-held)
     shutil.copy(folder/'analysis.frd',target/'global.frd')
     lines=calculix.mesh_lines(model,'region of a linear static study')

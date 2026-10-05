@@ -356,7 +356,8 @@ test("recovery on disk, error statuses, and document pruning", async () => {
     // Thermal conditions need a known kind, faces, and a positive film
     // coefficient for convection.
     for (const condition of [
-      { kind: "radiation", faces: [2], value: 1 },
+      { kind: "conduction", faces: [2], value: 1 },
+      { kind: "radiation", faces: [2], value: 1.5, ambient: 20 },
       { kind: "temperature", faces: [], value: 20 },
       { kind: "convection", faces: [2], value: -5, ambient: 20 },
     ]) {
@@ -366,6 +367,34 @@ test("recovery on disk, error statuses, and document pruning", async () => {
         thermal: [{ id: "t", name: "Heat", ...condition }],
       });
       assert.equal(response.status, 400, condition.kind);
+    }
+    // Support types, time settings and material tables are checked too.
+    const aluminum = {
+      name: "Aluminum",
+      young: 68900,
+      poisson: 0.33,
+      density: 2700,
+      yield: 276,
+    };
+    const held = {
+      id: "s",
+      name: "Held",
+      faces: [1],
+      axes: [true, true, true],
+    };
+    const valid = { ...study, material: aluminum, supports: [held] };
+    for (const changes of [
+      { supports: [{ ...held, frame: "sideways" }] },
+      { transient: { on: true, duration: -5, start: 20 } },
+      { preload: "yes" },
+      { material: { ...aluminum, hardening: [[5]] } },
+      { material: { ...aluminum, byTemperature: [{ young: 1 }] } },
+    ]) {
+      const response = await post(`/api/documents/${imported.id}/solve`, {
+        ...valid,
+        ...changes,
+      });
+      assert.equal(response.status, 400, JSON.stringify(changes));
     }
     // Point masses need a positive mass, a center and faces.
     for (const mass of [

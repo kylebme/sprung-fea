@@ -13,7 +13,12 @@ import {
   type Theme,
   type ViewName,
 } from "./scene";
-import { geometryView, type Probe, type ViewData } from "./viewData";
+import {
+  geometryView,
+  type Probe,
+  type SectionCut,
+  type ViewData,
+} from "./viewData";
 import type { Filters, Geometry, Plot, Study } from "./types";
 export { palette, type Projection, type Theme } from "./scene";
 
@@ -34,7 +39,7 @@ type Props = {
   onHover: (id: number | null) => void;
   onProbe: (probe: Probe) => void;
   /** Cross-section area in mm², or null without an active section. */
-  onSectionArea: (area: number | null) => void;
+  onSection: (cut: SectionCut | null) => void;
   deformation: number;
   wireframe: boolean;
   probe: Probe | null;
@@ -111,7 +116,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
   }, []);
 
   const view = p.view || setupView;
-  const lastArea = useRef<number | null>(null);
+  const lastCut = useRef<string>("null");
   useEffect(() => {
     if (!scene) return;
     const state: SceneState = {
@@ -136,10 +141,11 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       animate: p.animate,
     };
     scene.update(state);
-    const area = scene.sectionArea();
-    if (area !== lastArea.current) {
-      lastArea.current = area;
-      p.onSectionArea(area);
+    const cut = scene.sectionCut();
+    const key = JSON.stringify(cut);
+    if (key !== lastCut.current) {
+      lastCut.current = key;
+      p.onSection(cut);
     }
   });
 

@@ -6,7 +6,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Plus, type LucideIcon } from "lucide-react";
+import { ChevronRight, Plus, type LucideIcon } from "lucide-react";
 import { fmt, moveFocus, sig } from "./logic";
 import {
   converts,
@@ -135,6 +135,61 @@ export function NumberField({
         {unit && <span>{unitLabel(unit, system)}</span>}
       </span>
     </label>
+  );
+}
+
+/** A bare number input for table cells, in the chosen units; empty is NaN. */
+export function NumberCell({
+  label,
+  value,
+  unit,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  unit?: string;
+  onChange: (n: number) => void;
+}) {
+  const text = useNumberText(value, unit);
+  return (
+    <span className="number-field">
+      <input
+        type="number"
+        aria-label={label}
+        value={text.value}
+        onChange={(e) => text.change(e.target.value, onChange)}
+        onBlur={text.blur}
+      />
+    </span>
+  );
+}
+
+/**
+ * Less common settings, collapsed until opened. `open` sets the starting
+ * state, for settings the current study needs.
+ */
+export function More({
+  title,
+  open = false,
+  children,
+}: {
+  title: string;
+  open?: boolean;
+  children: ReactNode;
+}) {
+  const [shown, setShown] = useState(open);
+  return (
+    <details
+      className="more"
+      open={shown}
+      onToggle={(e) => setShown(e.currentTarget.open)}
+    >
+      <summary>
+        <ChevronRight size={12} />
+        {title}
+      </summary>
+      {shown && <div className="more-body">{children}</div>}
+    </details>
   );
 }
 

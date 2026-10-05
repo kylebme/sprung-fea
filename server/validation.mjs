@@ -28,7 +28,15 @@ export const ANALYSES = [
   "harmonic",
 ];
 /** Thermal conditions; generation acts on the whole part. */
-export const THERMAL = ["temperature", "heat", "convection", "generation"];
+export const THERMAL = [
+  "temperature",
+  "heat",
+  "convection",
+  "radiation",
+  "generation",
+];
+/** What a support's blocked directions refer to (engine/model.py FRAMES). */
+export const FRAMES = ["global", "normal", "cylinder"];
 // Errors caused by the request itself; the service reports them as 400.
 export class RequestError extends Error {
   status = 400;
@@ -113,6 +121,34 @@ export function validateStudy(s) {
       number(m.ultimate, "Ultimate strength", { positive: true });
     if (m.elongation != null)
       number(m.elongation, "Elongation at break", { positive: true });
+    if (m.specificHeat != null)
+      number(m.specificHeat, "Specific heat", { positive: true });
+    // Plasticity: stress–strain points beyond yield, [strain %, stress MPa].
+    if (m.hardening != null) {
+      if (!Array.isArray(m.hardening) || m.hardening.length > 50)
+        throw new RequestError("The stress–strain points are invalid.");
+      for (const p of m.hardening) {
+        if (!Array.isArray(p) || p.length !== 2)
+          throw new RequestError("The stress–strain points are invalid.");
+        number(p[0], "Strain", { positive: true });
+        number(p[1], "Stress", { positive: true });
+      }
+    }
+    // Properties at temperatures, for thermal studies.
+    if (m.byTemperature != null) {
+      if (!Array.isArray(m.byTemperature) || m.byTemperature.length > 50)
+        throw new RequestError("The temperature table is invalid.");
+      for (const r of m.byTemperature) {
+        if (!r || typeof r !== "object")
+          throw new RequestError("The temperature table is invalid.");
+        number(r.temperature, "Table temperature");
+        if (r.young != null)
+          number(r.young, "Elastic modulus", { positive: true });
+        if (r.conductivity != null)
+          number(r.conductivity, "Thermal conductivity", { positive: true });
+        if (r.expansion != null) number(r.expansion, "Thermal expansion");
+      }
+    }
   };
   if (s.material) material(s.material);
   // Assemblies: bodies with their own material, by body id.
@@ -144,10 +180,24 @@ export function validateStudy(s) {
       throw new RequestError(
         "A thermal condition must select at least one face.",
       );
-    number(c.value, "Thermal value", { positive: c.kind === "convection" });
-    if (c.kind === "convection") number(c.ambient, "Ambient temperature");
+    number(c.value, "Thermal value", {
+      positive: c.kind === "convection" || c.kind === "radiation",
+    });
+    if (c.kind === "radiation" && c.value > 1)
+      throw new RequestError("Emissivity must lie between 0 and 1.");
+    if (c.kind === "convection" || c.kind === "radiation")
+      number(c.ambient, "Ambient temperature");
   }
-  for (const key of ["largeDeformation", "plasticity", "unload"])
+  // Heat transfer over time: a duration (s) from a uniform start (°C).
+  if (s.transient !== undefined) {
+    const t = s.transient;
+    if (!t || typeof t !== "object" || typeof t.on !== "boolean")
+      throw new RequestError("The time settings are invalid.");
+    number(t.duration, "Duration", { positive: true });
+    number(t.start, "Starting temperature");
+  }
+  // Vibration studies: whether the loads stiffen the part (asked on solve).
+  for (const key of ["largeDeformation", "plasticity", "unload", "preload"])
     if (s[key] !== undefined && typeof s[key] !== "boolean")
       throw new RequestError("A study setting must be on or off.");
   // Harmonic response: frequency range (Hz), damping ratio, excitation.
@@ -187,6 +237,8 @@ export function validateStudy(s) {
     vector(m.point, "center of mass");
   }
   for (const c of s.supports) {
+    if (c.frame !== undefined && !FRAMES.includes(c.frame))
+      throw new RequestError("Unsupported support type.");
     if (
       !Array.isArray(c.axes) ||
       c.axes.length !== 3 ||

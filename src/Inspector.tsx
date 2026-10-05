@@ -21,10 +21,13 @@ import {
   CONDITIONS,
   DEFAULT_HARMONIC,
   DEFAULT_MODES,
+  DEFAULT_TRANSIENT,
   LOAD_KINDS,
   THERMAL_KINDS,
   plotInfo,
   conditionValue,
+  supportType,
+  SUPPORT_TYPES,
   isBodyLoad,
   PLOTS,
   SOLVERS,
@@ -32,8 +35,24 @@ import {
   loadValue,
   stripExt,
 } from "./labels";
-import { Head, NumberField, Qty, Row, VectorInput, useUnits } from "./ui";
-import { lowIsCritical, probeValue, type Probe } from "./viewData";
+import {
+  Head,
+  More,
+  NumberCell,
+  NumberField,
+  Qty,
+  Row,
+  VectorInput,
+  useUnits,
+} from "./ui";
+import {
+  atFrame,
+  lowIsCritical,
+  probeValue,
+  sectionLoads,
+  type Probe,
+  type SectionCut,
+} from "./viewData";
 import { ConvergenceControls, ConvergenceReport } from "./Convergence";
 import { LineChart } from "./Chart";
 import {
@@ -52,6 +71,7 @@ import {
   type Region,
   type RegionResult,
   type Material,
+  type TemperatureRow,
   type Mesh,
   type Part,
   type Plot,
@@ -60,6 +80,7 @@ import {
   type Support,
   type Threads,
   type Cpus,
+  type Transient,
 } from "./types";
 
 export function PartPanel({
@@ -167,12 +188,10 @@ export function AnalysisPanel({
         </div>
       )}
       {current.thermal && (
-        <div className="sec">
-          <p className="note" style={{ marginTop: 0 }}>
-            Add thermal conditions in the study tree. At least one fixed
-            temperature or convection is needed, so heat can leave the part.
-          </p>
-        </div>
+        <TimeSettings
+          transient={study.transient}
+          onChange={(transient) => onChange({ ...study, transient })}
+        />
       )}
       {study.analysis === "harmonic" && (
         <HarmonicSettings
@@ -256,12 +275,18 @@ export function AnalysisPanel({
             }
           />
           {study.analysis === "frequency" ? (
-            <p className="note">
-              Loads are not used: natural frequencies depend on stiffness, mass
-              and supports. Supports are optional. Without any, the part
-              vibrates freely, as if hung on soft springs. Point masses add
-              their inertia.
-            </p>
+            <>
+              <p className="note">
+                Natural frequencies depend on stiffness, mass and supports.
+                Supports are optional. Without any, the part vibrates freely, as
+                if hung on soft springs. Point masses add their inertia.
+              </p>
+              <p className="note">
+                Loads are optional. If there are any, Solve asks whether to
+                include them: tension and spin stiffen a part and raise its
+                frequencies, compression lowers them.
+              </p>
+            </>
           ) : (
             <p className="note">
               The loads are the reference: each buckling factor multiplies all
@@ -271,6 +296,70 @@ export function AnalysisPanel({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Heat transfer and thermal stress: the settled state, or temperatures
+ * followed over time from a uniform start.
+ */
+function TimeSettings({
+  transient,
+  onChange,
+}: {
+  transient: Transient | undefined;
+  onChange: (t: Transient) => void;
+}) {
+  const t = transient ?? { ...DEFAULT_TRANSIENT, on: false };
+  return (
+    <div className="sec">
+      <div className="field">
+        <span>Temperatures</span>
+        <div className="seg" role="group" aria-label="Temperatures">
+          {(
+            [
+              [false, "Settled"],
+              [true, "Over time"],
+            ] as const
+          ).map(([on, label]) => (
+            <button
+              key={label}
+              className={t.on === on ? "on" : ""}
+              aria-pressed={t.on === on}
+              onClick={() => t.on !== on && onChange({ ...t, on })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {t.on ? (
+        <>
+          <NumberField
+            label="Duration"
+            value={t.duration}
+            unit="s"
+            onChange={(duration) => onChange({ ...t, duration })}
+          />
+          <NumberField
+            label="Starting temperature"
+            value={t.start}
+            unit="°C"
+            onChange={(start) => onChange({ ...t, start })}
+          />
+          <p className="note">
+            The part starts at one temperature everywhere, and every thermal
+            condition switches on at time zero. Needs the material's specific
+            heat.
+          </p>
+        </>
+      ) : (
+        <p className="note">
+          The temperatures the part settles at. At least one fixed temperature,
+          convection or radiation is needed, so heat can leave the part.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -409,30 +498,62 @@ export function MaterialPanel({
           unit="MPa"
           onChange={(v) => edit({ yield: v || null })}
         />
-        <NumberField
-          label="Thermal conductivity"
-          value={material.conductivity ?? NaN}
-          unit="W/(m·K)"
-          onChange={(v) => edit({ conductivity: v || null })}
-        />
-        <NumberField
-          label="Thermal expansion"
-          value={material.expansion ?? NaN}
-          unit="µm/(m·°C)"
-          onChange={(v) => edit({ expansion: v || null })}
-        />
-        <NumberField
-          label="Ultimate strength"
-          value={material.ultimate ?? NaN}
-          unit="MPa"
-          onChange={(v) => edit({ ultimate: v || null })}
-        />
-        <NumberField
-          label="Elongation at break"
-          value={material.elongation ?? NaN}
-          unit="%"
-          onChange={(v) => edit({ elongation: v || null })}
-        />
+        <More
+          title="Thermal properties"
+          open={ANALYSES[study.analysis].thermal}
+        >
+          <NumberField
+            label="Thermal conductivity"
+            value={material.conductivity ?? NaN}
+            unit="W/(m·K)"
+            onChange={(v) => edit({ conductivity: v || null })}
+          />
+          <NumberField
+            label="Thermal expansion"
+            value={material.expansion ?? NaN}
+            unit="µm/(m·°C)"
+            onChange={(v) => edit({ expansion: v || null })}
+          />
+          <NumberField
+            label="Specific heat"
+            value={material.specificHeat ?? NaN}
+            unit="J/(kg·K)"
+            onChange={(v) => edit({ specificHeat: v || null })}
+          />
+          <p className="note">
+            Specific heat sets how quickly temperatures change over time.
+          </p>
+        </More>
+        <More
+          title="Plasticity"
+          open={study.analysis === "static" && !!study.plasticity}
+        >
+          <NumberField
+            label="Ultimate strength"
+            value={material.ultimate ?? NaN}
+            unit="MPa"
+            onChange={(v) => edit({ ultimate: v || null })}
+          />
+          <NumberField
+            label="Elongation at break"
+            value={material.elongation ?? NaN}
+            unit="%"
+            onChange={(v) => edit({ elongation: v || null })}
+          />
+          <HardeningPoints
+            material={material}
+            onChange={(hardening) => edit({ hardening })}
+          />
+        </More>
+        <More
+          title="Values at temperatures"
+          open={!!material.byTemperature?.length}
+        >
+          <TemperatureTable
+            material={material}
+            onChange={(byTemperature) => edit({ byTemperature })}
+          />
+        </More>
         <p className="note">
           Preset values are typical. Use your material's specification.
         </p>
@@ -447,6 +568,203 @@ export function MaterialPanel({
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * Stress–strain points beyond yield from a tensile test. Without any,
+ * hardening is a straight line from yield to the ultimate strength.
+ */
+function HardeningPoints({
+  material,
+  onChange,
+}: {
+  material: Material;
+  onChange: (points: number[][] | null) => void;
+}) {
+  const u = useUnits();
+  const points = material.hardening ?? [];
+  const set = (k: number, i: number, v: number) =>
+    onChange(
+      points.map((p, j) => (j === k ? p.map((x, m) => (m === i ? v : x)) : p)),
+    );
+  const last = points.at(-1);
+  return (
+    <div className="field">
+      <span>Stress–strain points</span>
+      {points.length > 0 && (
+        <table className="point-table" aria-label="Stress–strain points">
+          <thead>
+            <tr>
+              <th>Strain, %</th>
+              <th>Stress, {u.label("MPa")}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {points.map((p, k) => (
+              <tr key={k}>
+                <td>
+                  <NumberCell
+                    label={`Strain ${k + 1}`}
+                    value={p[0]}
+                    onChange={(v) => set(k, 0, v)}
+                  />
+                </td>
+                <td>
+                  <NumberCell
+                    label={`Stress ${k + 1}`}
+                    value={p[1]}
+                    unit="MPa"
+                    onChange={(v) => set(k, 1, v)}
+                  />
+                </td>
+                <td>
+                  <button
+                    className="icon-button delete"
+                    aria-label={`Remove point ${k + 1}`}
+                    onClick={() => {
+                      const next = points.filter((_, j) => j !== k);
+                      onChange(next.length ? next : null);
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <button
+        className="btn full"
+        onClick={() =>
+          onChange([
+            ...points,
+            last
+              ? [last[0] * 2, last[1]]
+              : [
+                  material.elongation ?? 10,
+                  material.ultimate ?? material.yield ?? 0,
+                ],
+          ])
+        }
+      >
+        <Plus size={13} />
+        Add point
+      </button>
+      <p className="note">
+        {points.length
+          ? "Total strain and stress beyond yield, from a tensile test, as true values (below about 5% strain, engineering values are close). They replace the straight line to the ultimate strength; stress stays flat beyond the last point."
+          : "Optional: add points from a tensile test to follow its curve instead of a straight line from yield to the ultimate strength."}
+      </p>
+    </div>
+  );
+}
+
+/** Columns of the temperature table: property, label and SI unit. */
+const TABLE_COLUMNS = [
+  ["young", "E", "Elastic modulus", "MPa"],
+  ["conductivity", "k", "Conductivity", "W/(m·K)"],
+  ["expansion", "α", "Expansion", "µm/(m·°C)"],
+] as const;
+
+/**
+ * Properties at temperatures, for heat transfer and thermal stress. A
+ * property with values at two or more temperatures follows them.
+ */
+function TemperatureTable({
+  material,
+  onChange,
+}: {
+  material: Material;
+  onChange: (rows: TemperatureRow[] | null) => void;
+}) {
+  const u = useUnits();
+  const rows = material.byTemperature ?? [];
+  const set = (k: number, changes: Partial<TemperatureRow>) =>
+    onChange(rows.map((r, j) => (j === k ? { ...r, ...changes } : r)));
+  return (
+    <div className="field">
+      {rows.length > 0 && (
+        <table className="point-table" aria-label="Values at temperatures">
+          <thead>
+            <tr>
+              <th>{u.label("°C")}</th>
+              {TABLE_COLUMNS.map(([key, symbol, name, unit]) => (
+                <th key={key} title={`${name}, ${u.label(unit)}`}>
+                  {symbol}
+                </th>
+              ))}
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, k) => (
+              <tr key={k}>
+                <td>
+                  <NumberCell
+                    label={`Temperature ${k + 1}`}
+                    value={r.temperature}
+                    unit="°C"
+                    onChange={(temperature) => set(k, { temperature })}
+                  />
+                </td>
+                {TABLE_COLUMNS.map(([key, , name, unit]) => (
+                  <td key={key}>
+                    <NumberCell
+                      label={`${name} ${k + 1}`}
+                      value={r[key] ?? NaN}
+                      unit={unit}
+                      onChange={(v) =>
+                        set(k, { [key]: Number.isFinite(v) ? v : null })
+                      }
+                    />
+                  </td>
+                ))}
+                <td>
+                  <button
+                    className="icon-button delete"
+                    aria-label={`Remove row ${k + 1}`}
+                    onClick={() => {
+                      const next = rows.filter((_, j) => j !== k);
+                      onChange(next.length ? next : null);
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <button
+        className="btn full"
+        onClick={() => {
+          const last = rows.at(-1);
+          onChange([
+            ...rows,
+            {
+              temperature: last ? last.temperature + 100 : 20,
+              young: last?.young ?? material.young,
+              conductivity: last?.conductivity ?? material.conductivity ?? null,
+              expansion: last?.expansion ?? material.expansion ?? null,
+            },
+          ]);
+        }}
+      >
+        <Plus size={13} />
+        Add temperature
+      </button>
+      <p className="note">
+        For heat transfer and thermal stress: a property with values at two or
+        more temperatures follows them. Blank cells, and other analyses, use the
+        constant values above. E: elastic modulus, {u.label("MPa")}; k:
+        conductivity, {u.label("W/(m·K)")}; α: expansion, {u.label("µm/(m·°C)")}
+        .
+      </p>
+    </div>
   );
 }
 
@@ -568,6 +886,9 @@ export function ConditionEditor({
       (!(draft.value.mass > 0) ||
         draft.value.point.some((x) => !isFinite(x)))) ||
     (draft.kind === "support" && !draft.value.axes.some(Boolean)) ||
+    (draft.kind === "thermal" &&
+      draft.value.kind === "radiation" &&
+      !(draft.value.value > 0 && draft.value.value <= 1)) ||
     (draft.kind === "load" &&
       (draft.value.kind === "pressure"
         ? draft.value.magnitude === 0
@@ -675,8 +996,8 @@ function ThermalFields({
                   value:
                     k.id === "temperature"
                       ? 100
-                      : k.id === "convection"
-                        ? 10
+                      : k.id === "radiation"
+                        ? 0.9
                         : 10,
                   ambient: condition.ambient ?? 20,
                 })
@@ -690,12 +1011,17 @@ function ThermalFields({
       <NumberField
         label={kind.label}
         value={condition.value}
-        unit={kind.unit}
+        unit={kind.unit || undefined}
+        step={condition.kind === "radiation" ? "0.05" : undefined}
         onChange={(value) => onChange({ value })}
       />
-      {condition.kind === "convection" && (
+      {(condition.kind === "convection" || condition.kind === "radiation") && (
         <NumberField
-          label="Air or fluid temperature"
+          label={
+            condition.kind === "convection"
+              ? "Air or fluid temperature"
+              : "Surroundings temperature"
+          }
           value={condition.ambient ?? 20}
           unit="°C"
           onChange={(ambient) => onChange({ ambient })}
@@ -754,43 +1080,56 @@ function SupportFields({
   support: Support;
   onChange: (changes: Record<string, unknown>) => void;
 }) {
-  const fixed = support.axes.every(Boolean);
+  const type = supportType(support);
+  const info = SUPPORT_TYPES.find((t) => t.id === type)!;
+  const names = SUPPORT_TYPES.map((t) => t.name);
+  const directions =
+    type === "directional"
+      ? [
+          ["X", "axis-x"],
+          ["Y", "axis-y"],
+          ["Z", "axis-z"],
+        ]
+      : type === "cylindrical"
+        ? [
+            ["Radial", ""],
+            ["Around", ""],
+            ["Along", ""],
+          ]
+        : null;
   return (
     <>
       <div className="field">
         <span>Type</span>
-        <div className="seg">
-          {(["Fixed", "Directional"] as const).map((t) => {
-            const on = (t === "Fixed") === fixed;
-            return (
-              <button
-                key={t}
-                className={on ? "on" : ""}
-                onClick={() =>
-                  !on &&
-                  onChange({
-                    axes:
-                      t === "Fixed" ? [true, true, true] : [false, false, true],
-                    name: ["Fixed", "Directional"].includes(support.name)
-                      ? t
-                      : support.name,
-                  })
-                }
-              >
-                {t}
-              </button>
-            );
-          })}
+        <div className="seg wrap" role="group" aria-label="Support type">
+          {SUPPORT_TYPES.map((t) => (
+            <button
+              key={t.id}
+              className={type === t.id ? "on" : ""}
+              aria-pressed={type === t.id}
+              onClick={() =>
+                type !== t.id &&
+                onChange({
+                  frame: t.frame,
+                  axes: t.axes,
+                  name: names.includes(support.name) ? t.name : support.name,
+                })
+              }
+            >
+              {t.name}
+            </button>
+          ))}
         </div>
       </div>
-      {!fixed && (
+      {directions && (
         <div className="field">
           <span>Blocked directions</span>
           <div className="axes">
-            {["X", "Y", "Z"].map((a, i) => (
+            {directions.map(([a, cls], i) => (
               <button
                 key={a}
                 aria-pressed={support.axes[i]}
+                aria-label={`${a}: ${support.axes[i] ? "blocked" : "free"}`}
                 className={support.axes[i] ? "on" : ""}
                 onClick={() =>
                   onChange({
@@ -798,18 +1137,14 @@ function SupportFields({
                   })
                 }
               >
-                <b className={"axis-" + a.toLowerCase()}>{a}</b>
+                <b className={cls}>{a}</b>
                 {support.axes[i] ? "Blocked" : "Free"}
               </button>
             ))}
           </div>
         </div>
       )}
-      <p className="note">
-        {fixed
-          ? "Blocks movement in X, Y and Z."
-          : "Global directions. The solver rejects supports that leave the part free to move."}
-      </p>
+      <p className="note">{info.note}</p>
     </>
   );
 }
@@ -1237,7 +1572,7 @@ export function ResultsPanel({
   filters,
   bounds,
   scale,
-  sectionArea,
+  section,
   onFilters,
   comparison,
   fromProject,
@@ -1270,7 +1605,7 @@ export function ResultsPanel({
   filters: Filters;
   bounds: number[];
   scale: { min: number; max: number };
-  sectionArea: number | null;
+  section: SectionCut | null;
   onFilters: (f: Filters) => void;
   comparison: Comparison | null;
   fromProject: boolean;
@@ -1468,14 +1803,14 @@ export function ResultsPanel({
             yLabel={u.label(c.series[0].unit)}
             logY={RESPONSE.includes(c.id)}
             selected={
-              c.id === "loadPath"
+              FRAME_CHARTS.includes(c.id)
                 ? frame
                 : RESPONSE.includes(c.id)
                   ? nearest(c.x.values, result.frames[frame]?.value ?? 0)
                   : undefined
             }
             onSelect={
-              c.id === "loadPath"
+              FRAME_CHARTS.includes(c.id)
                 ? onFrame
                 : RESPONSE.includes(c.id)
                   ? (i) =>
@@ -1503,7 +1838,16 @@ export function ResultsPanel({
         unitOf={info.unit}
         bounds={bounds}
         scale={scale}
-        sectionArea={sectionArea}
+        cut={section}
+        loads={
+          section?.center && filters.section.on
+            ? sectionLoads(
+                atFrame(result.view, frame),
+                filters.section,
+                section.center,
+              )
+            : null
+        }
         onChange={onFilters}
       />
       {!region.showing && (
@@ -1614,7 +1958,8 @@ function FilterControls({
   unitOf,
   bounds,
   scale,
-  sectionArea,
+  cut,
+  loads,
   onChange,
 }: {
   filters: Filters;
@@ -1622,7 +1967,8 @@ function FilterControls({
   unitOf: string;
   bounds: number[];
   scale: { min: number; max: number };
-  sectionArea: number | null;
+  cut: SectionCut | null;
+  loads: ReturnType<typeof sectionLoads>;
   onChange: (f: Filters) => void;
 }) {
   const { section, iso, threshold } = filters;
@@ -1725,10 +2071,32 @@ function FilterControls({
               }
             />
           </label>
-          {sectionArea !== null && (
+          {cut && (
             <Row label="Section area">
-              <Qty value={sectionArea} unit="mm²" digits={1} />
+              <Qty value={cut.area} unit="mm²" digits={1} />
             </Row>
+          )}
+          {loads && (
+            <>
+              {(
+                [
+                  ["Normal force", loads.normal, "N"],
+                  ["Shear force", loads.shear, "N"],
+                  ["Bending moment", loads.bending, "N·mm"],
+                  ["Torque", loads.torque, "N·mm"],
+                ] as const
+              ).map(([label, value, unit]) => (
+                <Row key={label} label={label}>
+                  {sig(u.value(value, unit), 4)}
+                  <em>{u.label(unit)}</em>
+                </Row>
+              ))}
+              <p className="note">
+                Carried through the section, about its center: the loads and
+                reactions on the cut-away side. Tension is positive. Use them to
+                size bolts, welds or a cross-section.
+              </p>
+            </>
           )}
         </>
       )}
@@ -1980,6 +2348,8 @@ function ModeTable({
   );
 }
 
+/** Charts with one point per frame, whose points pick the frame shown. */
+const FRAME_CHARTS = ["loadPath", "history", "stressHistory"];
 /** Response charts, whose points pick the frequency shown. */
 const RESPONSE = ["response", "stressResponse"];
 const nearest = (values: number[], x: number) =>
@@ -2088,13 +2458,20 @@ function assumptions(study: Study, result: Result) {
       );
     case "thermalStress":
       return (
-        "Linear elastic, isotropic, small deformation, steady temperatures." +
+        `Linear elastic, isotropic, small deformation, ${study.transient?.on ? "temperatures over time" : "steady temperatures"}.` +
         peak
       );
     case "thermal":
-      return "Steady heat conduction with constant conductivity; no radiation.";
+      return study.transient?.on
+        ? "Heat conduction over time from a uniform start; conditions switch on at time zero."
+        : "Steady heat conduction" +
+            (study.thermal.some((c) => c.kind === "radiation")
+              ? ", with radiation to the surroundings."
+              : "; no radiation unless added to faces.");
     case "frequency":
-      return "Linear elastic, small vibrations about the unloaded shape; no damping.";
+      return result.summary.preloaded
+        ? "Linear elastic, small vibrations about the loaded shape, with stress stiffening from the loads; no damping."
+        : "Linear elastic, small vibrations about the unloaded shape; no damping.";
     case "buckling":
       return "Linear buckling of a perfect shape: real parts buckle at lower loads.";
     case "harmonic":

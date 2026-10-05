@@ -177,6 +177,26 @@ def check_material(material):
     finite(material['density'], 'Density', True)
     if material.get('yield') is not None:
         finite(material['yield'], 'Yield strength', True)
+    check_table(material)
+
+
+# Properties a material's temperature table can give, and whether they must
+# be positive.
+TABLE={'young':('Elastic modulus',True),'conductivity':('Thermal conductivity',True),'expansion':('Thermal expansion',False)}
+
+
+def check_table(material):
+    """Rows of {temperature, and any of young, conductivity, expansion}, at
+    distinct temperatures."""
+    rows=material.get('byTemperature') or []
+    if not isinstance(rows,list) or len(rows)>50:
+        raise ValueError('The temperature table of a material is invalid.')
+    temperatures=[finite(r.get('temperature'),'Table temperature') for r in rows]
+    if len(set(temperatures))!=len(temperatures):
+        raise ValueError('Each row of a material’s temperature table needs its own temperature.')
+    for r in rows:
+        for key,(name,positive) in TABLE.items():
+            if r.get(key) is not None: finite(r[key],name,positive)
 
 
 def check_materials(study, mesh):
@@ -190,7 +210,7 @@ def check_materials(study, mesh):
 def validate(study, mesh):
     """Checks the material, face references and support directions, and that
     the supports remove all six rigid motions. Returns node coordinates and
-    the fixed (node, direction) pairs."""
+    the blocked directions (Held)."""
     check_materials(study, mesh)
     supports = study.get('supports', [])
     loads = study.get('loads', [])
@@ -219,17 +239,141 @@ def check_faces(conditions, mesh):
             raise ValueError('A condition references missing or repeated faces. Select faces from this part.')
 
 
+class Held:
+    """Directions the supports block at each node. `dofs` holds (node, axis)
+    pairs for directions along the global axes; `directions` maps a node to
+    the orthonormal blocked directions (one or two rows) that are not, which
+    the solver adapter writes as linear constraints."""
+    def __init__(self):
+        self.dofs=set();self.directions={}
+
+    def __bool__(self):
+        return bool(self.dofs or self.directions)
+
+    def nodes(self):
+        return {n for n,_ in self.dofs}|set(self.directions)
+
+
+# Two blocked directions at a node count as distinct when they differ by more
+# than about 10°: tan(θ/2) is the ratio of the singular values of the pair.
+# Faces meeting at a smoother edge share one averaged direction.
+DISTINCT=math.tan(math.radians(5))
+# A blocked subspace within this of the global axes is written as such.
+ALIGNED=1e-6
+# Frames a support's `axes` refer to: global X, Y, Z; the face normal
+# (frictionless); radial, tangential and axial for a cylinder.
+FRAMES=('global','normal','cylinder')
+
+
+def face_normals(model, face):
+    """Unit outward normal of a CAD face at each of its nodes, averaged over
+    the face's triangles. A CAD face is smooth, so the average is the
+    surface normal; triangles of other faces never mix in."""
+    lookup=model.element_faces();sums={}
+    # Parametric positions of the six triangle nodes.
+    at=[(0,0),(1,0),(0,1),(.5,0),(.5,.5),(0,.5)]
+    for tri in model.face_triangles(face):
+        points=np.array([model.nodes[n] for n in tri])
+        _,_,center=lookup[tuple(sorted(tri[:3]))]
+        outward=points[:3].mean(axis=0)-center
+        for n,(r,s) in zip(tri,at):
+            _,dr,ds=triangle_shape(r,s)
+            normal=np.cross(dr@points,ds@points)
+            if np.dot(normal,outward)<0: normal=-normal
+            sums[n]=sums.get(n,0)+normal
+    return {n:v/np.linalg.norm(v) for n,v in sums.items()}
+
+
+def cylinder_axis(points):
+    """Axis direction of cylindrical faces from their quadrature points, or
+    None if the faces are not cylindrical: the direction no surface normal
+    has (to the mesh's faceting, about 2°), with the others well spread."""
+    normals=np.array([q[3] for q in points]);weights=np.array([q[4] for q in points])
+    values,vectors=np.linalg.eigh((normals*weights[:,None]).T@normals)
+    if values[0]>1e-3*values[2] or values[1]<1e-3*values[2]: return None
+    return vectors[:,0]
+
+
+def cylinder(model, faces):
+    """Axis point, unit direction and radius of faces on one cylinder. The
+    axis passes closest to every normal line."""
+    points=model.face_quadrature(faces)
+    axis=cylinder_axis(points)
+    if axis is None:
+        raise ValueError('A cylindrical support needs cylindrical faces, such as a hole or a shaft.')
+    A=np.zeros((3,3));b=np.zeros(3);center=np.zeros(3);area=0
+    for _,_,x,n,w in points:
+        # Distance from the normal line through x, across the axis.
+        P=np.eye(3)-np.outer(n,n)-np.outer(axis,axis)
+        A+=w*P;b+=w*P@x;center+=w*x;area+=w
+    # Along the axis, place the point at the faces' centroid.
+    A+=area*np.outer(axis,axis);b+=np.outer(axis,axis)@center
+    point=np.linalg.solve(A,b)
+    radius=sum(w*np.linalg.norm((x-point)-np.dot(x-point,axis)*axis) for _,_,x,_,w in points)/area
+    return point,axis,radius
+
+
+def cylinders(model, faces):
+    """[(faces, axis point, direction)]: the selected faces grouped by the
+    cylinder they lie on, so each hole or shaft keeps its own axis. Faces of
+    one cylinder (a hole split into halves) share an axis line."""
+    groups=[]
+    for f in faces:
+        point,axis,radius=cylinder(model,[f])
+        for g in groups:
+            d=point-g[1];offset=np.linalg.norm(d-np.dot(d,g[2])*g[2])
+            if abs(np.dot(axis,g[2]))>.999 and offset<.05*radius:
+                g[0].append(f);break
+        else:
+            groups.append(([f],point,axis))
+    return [(fs,*cylinder(model,fs)[:2]) for fs,_,_ in groups]
+
+
+def blocked_directions(support, model):
+    """{node: [unit vectors]} that one support blocks."""
+    axes=support.get('axes',[True,True,True])
+    frame=support.get('frame','global')
+    if frame not in FRAMES: raise ValueError('Unsupported support type.')
+    if len(axes)!=3 or not any(axes) or any(type(a) is not bool for a in axes):
+        raise ValueError('A support must block at least one direction.')
+    out={}
+    if frame=='global':
+        for f in support['faces']:
+            for n in model.face_nodes(f): out.setdefault(n,[]).extend(np.eye(3)[[a for a in range(3) if axes[a]]])
+    elif frame=='normal':
+        # One normal per face at each node: at an edge between two selected
+        # faces both normals are blocked.
+        for f in support['faces']:
+            for n,v in face_normals(model,f).items(): out.setdefault(n,[]).append(v)
+    else:
+        for faces,point,axis in cylinders(model,support['faces']):
+            for n in {n for f in faces for n in model.face_nodes(f)}:
+                r=model.nodes[n]-point;r-=np.dot(r,axis)*axis
+                radial=r/np.linalg.norm(r)
+                frame_vectors=[radial,np.cross(axis,radial),axis]
+                out.setdefault(n,[]).extend(v for v,on in zip(frame_vectors,axes) if on)
+    return out
+
+
 def fixed_dofs(supports, model):
-    fixed = set()
+    """The directions all supports block, combined at nodes they share."""
+    gathered={}
     for s in supports:
-        axes = s.get('axes', [True,True,True])
-        if len(axes) != 3 or not any(axes) or any(type(a) is not bool for a in axes):
-            raise ValueError('A support must block at least one X, Y, or Z direction.')
-        for f in s['faces']:
-            for node in model.face_nodes(f):
-                for a in range(3):
-                    if axes[a]: fixed.add((node,a))
-    return fixed
+        for n,vectors in blocked_directions(s,model).items(): gathered.setdefault(n,[]).extend(vectors)
+    held=Held()
+    for n,vectors in gathered.items():
+        _,values,rows=np.linalg.svd(np.asarray(vectors))
+        rank=int(np.sum(values>DISTINCT*values[0]))
+        if rank==3:
+            held.dofs.update((n,a) for a in range(3));continue
+        basis=rows[:rank]
+        # Share of each global axis inside the blocked subspace.
+        share=np.linalg.norm(basis,axis=0)
+        if np.all((share<ALIGNED)|(share>1-ALIGNED)):
+            held.dofs.update((n,a) for a in range(3) if share[a]>.5)
+        else:
+            held.directions[n]=basis
+    return held
 
 
 def component_nodes(model):
@@ -245,15 +389,18 @@ def component_nodes(model):
     return out
 
 
-def free_motions(fixed, model, nodes):
-    """Rigid motions (0 to 6) that the blocked directions on `nodes` leave."""
+def free_motions(held, model, nodes):
+    """Rigid motions (0 to 6) that the blocked directions on `nodes` leave.
+    Blocking direction d at offset r removes the motions with
+    d·(t + ω × r) = d·t + ω·(r × d) = 0."""
     coords=np.array([model.nodes[n] for n in nodes])
     center=coords.mean(axis=0);scale=max(np.ptp(coords,axis=0))
     rows=[]
-    for node,a in fixed:
+    blocked=[(n,np.eye(3)[a]) for n,a in held.dofs]+[(n,d) for n,ds in held.directions.items() for d in ds]
+    for node,d in blocked:
         if node not in nodes: continue
-        x,y,z=(model.nodes[node]-center)/scale
-        rows.append([[1,0,0,0,z,-y],[0,1,0,-z,0,x],[0,0,1,y,-x,0]][a])
+        r=(model.nodes[node]-center)/scale
+        rows.append([*d,*np.cross(r,d)])
     return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-8) if rows else 0))
 
 
@@ -362,13 +509,8 @@ def bearing(model, faces, force):
     facing the load, varying with the cosine of the angle from the load
     direction, scaled so its resultant along the load is the given force."""
     points=model.face_quadrature(faces)
-    normals=np.array([q[3] for q in points]);weights=np.array([q[4] for q in points])
-    # The cylinder axis is the direction that no surface normal has.
-    values,vectors=np.linalg.eigh((normals*weights[:,None]).T@normals)
-    if values[0]>1e-6*values[2]:
-        raise ValueError('A bearing load needs cylindrical faces, such as a hole or a shaft.')
-    axis=vectors[:,0]
-    if values[1]<1e-3*values[2]:
+    axis=cylinder_axis(points)
+    if axis is None:
         raise ValueError('A bearing load needs cylindrical faces, such as a hole or a shaft.')
     size=np.linalg.norm(force);direction=np.asarray(force,float)/size
     if abs(np.dot(direction,axis))>.02:

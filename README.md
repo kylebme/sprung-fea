@@ -15,9 +15,9 @@ It is free software (GPL-3.0) for macOS, Windows and Linux.
 | Analysis | What you learn |
 |---|---|
 | **Linear static** | Stress, strain and deflection under steady loads, and how much margin you have to yield. Optional large deformation for thin, flexible parts and plasticity for loads past yield. |
-| **Natural frequencies** | The frequencies the part vibrates at on its own, with an animated shape for each mode and how much mass moves in each direction. |
+| **Natural frequencies** | The frequencies the part vibrates at on its own, with an animated shape for each mode and how much mass moves in each direction. Loads can be included, so tension or spin stiffens the part. |
 | **Buckling** | How many times the loads can grow before a slender or thin-walled part buckles, and the shape it buckles into. |
-| **Heat transfer** | The temperatures the part settles at, with fixed temperatures, heat input, heat generated inside the part, and convection to air or liquid. |
+| **Heat transfer** | The temperatures the part settles at, or how they change over time, with fixed temperatures, heat input, heat generated inside the part, convection to air or liquid, and radiation. |
 | **Thermal stress** | The stress and deflection caused by thermal expansion pushing against the supports, together with any mechanical loads. |
 | **Harmonic response** | How much the part vibrates when loads or its mounting shake it across a range of frequencies: where the resonances are and the stress they cause. |
 
@@ -27,7 +27,7 @@ Parts can be a single solid or an assembly. If a STEP file has several bodies, t
 
 ![Static results: orbit the view, show magnified deflection, probe a point, switch to principal stress, and sweep a section plane through the bolt holes](docs/media/static-results.gif)
 
-Click anywhere on the part to read the values at that point. Switch between von Mises stress, principal stresses, maximum shear, strain, displacement and yield margin from the study tree. Deflection can be shown true-scale or magnified, and the magnification is always labeled. Filters let you cut the part with a section plane, draw an iso-surface, or show only the region above a stress limit.
+Click anywhere on the part to read the values at that point. Switch between von Mises stress, principal stresses, maximum shear, strain, displacement and yield margin from the study tree. Deflection can be shown true-scale or magnified, and the magnification is always labeled. Filters let you cut the part with a section plane, draw an iso-surface, or show only the region above a stress limit. The section plane also reports the force, bending moment and torque carried through the cut, for sizing bolts, welds or a cross-section.
 
 ![Natural frequencies: switch the analysis type, solve, and watch the bracket's first, second and highest modes animate](docs/media/natural-frequencies.gif)
 
@@ -56,7 +56,7 @@ The **Examples** on the start screen (a cantilever beam, the mounting bracket fr
 1. **Import a part.** Use **Import STEP…** or drop a `.step` / `.stp` file onto the window. Check the size shown in the inspector against your CAD model: STEP units are converted to millimetres on import.
 2. **Choose the analysis.** Linear static is the default. Pick another under **Analysis** in the study tree.
 3. **Set the material.** Choose a preset (aluminum 6061-T6, structural steel, stainless 304, titanium Ti-6Al-4V) or type in the values from your material's datasheet. The presets are typical values, not a specification.
-4. **Add supports.** Click faces in the 3D view or the face list. **Fixed** holds a face completely; **Directional** blocks only the X, Y or Z directions you choose. The study needs enough support to stop the part from sliding or spinning freely, and Sprung FEA tells you if it doesn't.
+4. **Add supports.** Click faces in the 3D view or the face list. **Fixed** holds a face completely; **Directional** blocks only the X, Y or Z directions you choose; **Frictionless** lets a face slide along itself, at any angle; **Cylindrical** holds a hole or shaft radially, around or along its axis, like a pin. The study needs enough support to stop the part from sliding or spinning freely, and Sprung FEA tells you if it doesn't.
 5. **Add loads.**
    - **Force** is one total force shared across all the selected faces.
    - **Pressure** acts normal to the faces; positive pushes inward.
@@ -96,12 +96,12 @@ On Windows and Linux, use Ctrl in place of ⌘.
 
 Sprung FEA 0.1 uses ten-node tetrahedral solid elements and assumes:
 
-- Isotropic materials. Plasticity, when turned on, is bilinear from yield to ultimate strength.
+- Isotropic materials. Plasticity, when turned on, follows a straight line from yield to ultimate strength, or the stress–strain points you enter. Heat transfer and thermal stress can use properties that change with temperature.
 - Slowly applied loads.
 - Small deflections unless **Large deformation** is on.
 - Bodies in an assembly are bonded. There is no sliding or separating contact.
 
-It does not do shells or beams, transient heat, fatigue, or transient dynamics. Stresses right at sharp internal corners and at the edges of supports are often higher than the real part would see. Use the convergence study, and judge those spots with care.
+It does not do shells or beams, fatigue, or transient dynamics. Stresses right at sharp internal corners and at the edges of supports are often higher than the real part would see. Use the convergence study, and judge those spots with care.
 
 ## Building from source
 

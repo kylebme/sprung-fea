@@ -5,8 +5,9 @@ import { toShown, unitLabel, type UnitSystem } from "./units.ts";
 
 /**
  * Nodal results of one frame (a load step, mode, increment or frequency):
- * `displacement` (three components per node) and scalar fields such as
- * `vonMises` or `temperature`, one value per node.
+ * vectors with three components per node (`displacement`, and `force`, the
+ * nodal forces of static results) and scalar fields such as `vonMises` or
+ * `temperature`, one value per node.
  */
 export type Frame = Record<string, Float64Array>;
 
@@ -145,6 +146,8 @@ export function decodeView(buffer: ArrayBuffer): ViewData {
 }
 
 const MESH = ["nodeIds", "points", "tets", "triangles", "triangleFaces"];
+/** Frame arrays with three components per node; the rest are scalars. */
+const VECTORS = ["displacement", "force"];
 
 function validate(v: ViewData) {
   const n = v.nodeIds?.length;
@@ -161,7 +164,7 @@ function validate(v: ViewData) {
       (f) =>
         !Object.keys(f).length ||
         Object.entries(f).some(
-          ([name, a]) => a.length !== (name === "displacement" ? n * 3 : n),
+          ([name, a]) => a.length !== (VECTORS.includes(name) ? n * 3 : n),
         ),
     )
   )
@@ -172,7 +175,7 @@ function validate(v: ViewData) {
 export function atFrame(view: ViewData, k: number): ViewData {
   const frame = view.frames[k];
   if (!frame) return { ...view, frame: 0, displacement: null, fields: {} };
-  const { displacement, ...fields } = frame;
+  const { displacement, force: _force, ...fields } = frame;
   return { ...view, frame: k, displacement: displacement || null, fields };
 }
 
@@ -388,4 +391,60 @@ export function probeValue(
   if (plot === "safety")
     return yieldStrength && stress > 0 ? yieldStrength / stress : null;
   return probe.values[PLOT_SOURCES[plot].field] ?? null;
+}
+
+/** Area (mm²) and center of a section cut through the part. */
+export type SectionCut = { area: number; center: number[] | null };
+
+/**
+ * Force (N) and moment (N·mm, about the section center) carried through a
+ * section plane, from the displayed frame's nodal forces: what the cut-away
+ * side exerts on the kept side. At equilibrium the nodal forces are the
+ * external loads and support reactions, so this is their resultant on the
+ * cut-away side. Normal force is positive in tension, torque positive
+ * about the outward normal of the kept side. Null without nodal forces.
+ */
+export function sectionLoads(
+  view: ViewData,
+  section: { axis: number; position: number; flip: boolean },
+  center: number[],
+) {
+  const f = view.frames[view.frame]?.force;
+  if (!f) return null;
+  const force = [0, 0, 0],
+    moment = [0, 0, 0];
+  const p = view.points;
+  // Sizes of what was summed, so round-off shows as zero. The .frd file
+  // keeps about six significant digits of each nodal force.
+  let size = 0,
+    reach = 0;
+  for (let i = 0; i < view.nodeIds.length; i++) {
+    const x = p[i * 3 + section.axis];
+    if (section.flip ? x >= section.position : x <= section.position) continue;
+    const r = [0, 1, 2].map((k) => p[i * 3 + k] - center[k]);
+    const [fx, fy, fz] = [f[i * 3], f[i * 3 + 1], f[i * 3 + 2]];
+    size += Math.hypot(fx, fy, fz);
+    reach = Math.max(reach, Math.hypot(...r));
+    force[0] += fx;
+    force[1] += fy;
+    force[2] += fz;
+    moment[0] += r[1] * fz - r[2] * fy;
+    moment[1] += r[2] * fx - r[0] * fz;
+    moment[2] += r[0] * fy - r[1] * fx;
+  }
+  const clean = (v: number[], scale: number) =>
+    v.map((x) => (Math.abs(x) <= 1e-4 * scale ? 0 : x));
+  force.splice(0, 3, ...clean(force, size));
+  moment.splice(0, 3, ...clean(moment, size * reach));
+  const a = section.axis,
+    out = section.flip ? -1 : 1;
+  const across = (v: number[]) => Math.hypot(...v.filter((_, k) => k !== a));
+  return {
+    force,
+    moment,
+    normal: out * force[a] || 0,
+    shear: across(force),
+    torque: out * moment[a] || 0,
+    bending: across(moment),
+  };
 }

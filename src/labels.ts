@@ -12,8 +12,10 @@ import type {
   Solver,
   Study,
   Support,
+  SupportFrame,
   ThermalCondition,
   ThermalKind,
+  Transient,
 } from "./types";
 
 export const DETAILS = [
@@ -92,6 +94,13 @@ export const THERMAL_KINDS: {
     note: "Heat exchanged with surrounding air or liquid. Typical: still air 5–10, moving air 20–100, water 500–10,000 W/(m²·K).",
   },
   {
+    id: "radiation",
+    name: "Radiation",
+    unit: "",
+    label: "Emissivity",
+    note: "Heat radiated to the surroundings, strongest at high temperature. Typical emissivity: polished aluminum 0.05, oxidized steel 0.8, anodized or painted 0.85–0.95.",
+  },
+  {
     id: "generation",
     name: "Generation",
     unit: "W",
@@ -104,7 +113,9 @@ export const thermalValue = (c: ThermalCondition, system: UnitSystem = "si") =>
     ? quantity(c.value, "°C", system)
     : c.kind === "convection"
       ? quantity(c.value, "W/(m²·K)", system)
-      : quantity(c.value, "W", system);
+      : c.kind === "radiation"
+        ? "ε " + fmt(c.value, 2)
+        : quantity(c.value, "W", system);
 export const blankThermal = (): ThermalCondition => ({
   id: crypto.randomUUID(),
   name: "Temperature",
@@ -114,8 +125,10 @@ export const blankThermal = (): ThermalCondition => ({
   ambient: 20,
 });
 /**
- * Analysis types and what each uses. `loads`: loads apply and are shown.
- * `supports`: at least one support is required. `mechanical`: supports and
+ * Analysis types and what each uses. `loads`: loads apply and are shown;
+ * "optional" when the study can solve without them (thermal stress from
+ * temperatures alone; vibration, which asks on solve whether to include
+ * them). `supports`: at least one support is required. `mechanical`: supports and
  * point masses take part and are shown. `thermal`: thermal conditions take
  * part, and a temperature or convection is required. `eigen`: results are
  * shapes scaled to a 1 mm peak, solved with the direct solver.
@@ -125,7 +138,7 @@ export const ANALYSES: Record<
   {
     name: string;
     note: string;
-    loads: boolean;
+    loads: boolean | "optional";
     supports: boolean;
     mechanical: boolean;
     thermal: boolean;
@@ -153,7 +166,7 @@ export const ANALYSES: Record<
   frequency: {
     name: "Natural frequencies",
     note: "The frequencies a part vibrates at on its own, and the shape of each vibration. Keep them away from the frequencies of motors, rotors or road input.",
-    loads: false,
+    loads: "optional",
     supports: false,
     mechanical: true,
     thermal: false,
@@ -180,7 +193,7 @@ export const ANALYSES: Record<
   thermalStress: {
     name: "Thermal stress",
     note: "Temperatures, and the stress and deflection from thermal expansion that the supports resist, together with any loads.",
-    loads: true,
+    loads: "optional",
     supports: true,
     mechanical: true,
     thermal: true,
@@ -197,12 +210,19 @@ export const analysisName = (study: Study) =>
       ]
         .filter(Boolean)
         .join(", ")
-    : ANALYSES[study.analysis].name;
+    : ANALYSES[study.analysis].thermal && study.transient?.on
+      ? ANALYSES[study.analysis].name + ", over time"
+      : ANALYSES[study.analysis].name;
 /** Modes requested by default in each eigenvalue analysis. */
 export const DEFAULT_MODES: Partial<Record<Analysis, number>> = {
   frequency: 6,
   buckling: 3,
   harmonic: 20,
+};
+export const DEFAULT_TRANSIENT: Transient = {
+  on: true,
+  duration: 600,
+  start: 20,
 };
 export const DEFAULT_HARMONIC: Harmonic = {
   min: 10,
@@ -347,6 +367,51 @@ export const blankMass = (point: number[]): PointMass => ({
   mass: 1,
   point,
 });
+/** Support types in the editor's order: the frame and directions each starts with. */
+export const SUPPORT_TYPES: {
+  id: "fixed" | "directional" | "frictionless" | "cylindrical";
+  name: string;
+  frame: SupportFrame;
+  axes: boolean[];
+  note: string;
+}[] = [
+  {
+    id: "fixed",
+    name: "Fixed",
+    frame: "global",
+    axes: [true, true, true],
+    note: "Blocks movement in X, Y and Z.",
+  },
+  {
+    id: "directional",
+    name: "Directional",
+    frame: "global",
+    axes: [false, false, true],
+    note: "Blocks only the chosen global directions. The solver rejects supports that leave the part free to move.",
+  },
+  {
+    id: "frictionless",
+    name: "Frictionless",
+    frame: "normal",
+    axes: [true, false, false],
+    note: "The faces can slide along themselves but not move off them, at any angle and on curved faces: a part resting on a smooth surface, or a plane of symmetry.",
+  },
+  {
+    id: "cylindrical",
+    name: "Cylindrical",
+    frame: "cylinder",
+    axes: [true, false, true],
+    note: "For holes and shafts: blocks movement toward or away from the axis (radial), around it, or along it. A pin in a hole blocks radial and along, and lets the part turn.",
+  },
+];
+export const supportType = (s: Support) =>
+  s.frame === "normal"
+    ? "frictionless"
+    : s.frame === "cylinder"
+      ? "cylindrical"
+      : s.axes.every(Boolean)
+        ? "fixed"
+        : "directional";
 export const blankSupport = (): Support => ({
   id: crypto.randomUUID(),
   name: "Fixed",

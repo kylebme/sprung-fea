@@ -41,12 +41,40 @@ export type Material = {
   ultimate?: number | null;
   /** Elongation at break, %; plasticity needs it. */
   elongation?: number | null;
+  /** Specific heat, J/(kg·K); temperatures over time need it. */
+  specificHeat?: number | null;
+  /**
+   * Plasticity: points of the stress–strain curve beyond yield, as
+   * [total strain %, stress MPa]. They replace the straight line from yield
+   * to the ultimate strength.
+   */
+  hardening?: number[][] | null;
+  /**
+   * Values at temperatures, used by heat transfer and thermal stress. A
+   * property with values at two or more temperatures follows them; others
+   * keep the constant above.
+   */
+  byTemperature?: TemperatureRow[] | null;
 };
+export type TemperatureRow = {
+  temperature: number;
+  young?: number | null;
+  conductivity?: number | null;
+  expansion?: number | null;
+};
+/**
+ * What a support's `axes` block: global X, Y, Z; the face normal only
+ * (frictionless, axes [true, false, false]); or radial, tangential and
+ * axial directions of cylindrical faces.
+ */
+export type SupportFrame = "global" | "normal" | "cylinder";
 export type Support = {
   id: string;
   name: string;
   faces: number[];
   axes: boolean[];
+  /** Projects saved before support types are global. */
+  frame?: SupportFrame;
 };
 /**
  * Loads. `vector` is a force (N), acceleration (m/s²) or moment (N·mm);
@@ -86,10 +114,12 @@ export type PointMass = {
 };
 /**
  * A thermal condition. `value` is a temperature (°C), a heat flow into the
- * faces (W), a film coefficient (W/(m²·K)) with `ambient` (°C), or heat
- * generated in the whole part (W, no faces).
+ * faces (W), a film coefficient (W/(m²·K)) with `ambient` (°C), an
+ * emissivity (0–1) with `ambient` the surroundings (°C), or heat generated
+ * in the whole part (W, no faces).
  */
-export type ThermalKind = "temperature" | "heat" | "convection" | "generation";
+export type ThermalKind =
+  "temperature" | "heat" | "convection" | "radiation" | "generation";
 export type ThermalCondition = {
   id: string;
   name: string;
@@ -117,6 +147,7 @@ export type Harmonic = {
   excitation: "loads" | "base";
   base: number[];
 };
+export type Transient = { on: boolean; duration: number; start: number };
 export type Analysis =
   | "static"
   | "frequency"
@@ -135,6 +166,11 @@ export type Study = {
   bodyMaterials?: Record<string, Material>;
   /** Temperature at which the part is free of thermal stress, °C. */
   referenceTemperature?: number;
+  /**
+   * Thermal studies: follow temperatures for `duration` (s) from a uniform
+   * `start` (°C) instead of the settled state, when `on`.
+   */
+  transient?: Transient;
   /**
    * Harmonic response: frequencies (Hz), damping (fraction of critical),
    * and excitation by the loads or by base acceleration (g, X/Y/Z).
@@ -290,6 +326,7 @@ export const MATERIALS: Material[] = [
     expansion: 23.6,
     ultimate: 310,
     elongation: 12,
+    specificHeat: 896,
   },
   {
     name: "Structural steel",
@@ -301,6 +338,7 @@ export const MATERIALS: Material[] = [
     expansion: 12,
     ultimate: 400,
     elongation: 20,
+    specificHeat: 486,
   },
   {
     name: "Stainless steel 304",
@@ -312,6 +350,7 @@ export const MATERIALS: Material[] = [
     expansion: 17.3,
     ultimate: 505,
     elongation: 40,
+    specificHeat: 500,
   },
   {
     name: "Titanium Ti-6Al-4V",
@@ -323,6 +362,7 @@ export const MATERIALS: Material[] = [
     expansion: 8.6,
     ultimate: 950,
     elongation: 14,
+    specificHeat: 526,
   },
 ];
 export const emptyStudy = (): Study => ({

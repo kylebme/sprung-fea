@@ -102,6 +102,7 @@ import {
   surfaceCsv,
   toBase64,
   type Probe,
+  type SectionCut,
 } from "./viewData";
 
 type Failure = { title: string; message: string };
@@ -173,7 +174,7 @@ export default function App() {
     [wire, setWire] = useState(false),
     [probe, setProbe] = useState<Probe | null>(null),
     [filters, setFilters] = useState<Filters | null>(null),
-    [sectionArea, setSectionArea] = useState<number | null>(null),
+    [sectionCut, setSectionCut] = useState<SectionCut | null>(null),
     [query, setQuery] = useState(""),
     [comparison, setComparison] = useState<Comparison | null>(null),
     [recovery, setRecovery] = useState<Recovery | null>(null),
@@ -398,6 +399,8 @@ export default function App() {
       const loads = r.charts.find((c) => c.id === "loadPath")!.x.values;
       setFrame(loads.lastIndexOf(Math.max(...loads)));
     }
+    // Temperatures over time: open at the end.
+    if (r.charts.some((c) => c.id === "history")) setFrame(r.frames.length - 1);
     setDeform(eigen || harmonic ? "auto" : steps ? "true" : "off");
   };
   const importPart = async (
@@ -553,9 +556,12 @@ export default function App() {
     study.plasticity &&
     study.material &&
     (!study.material.yield ||
-      !study.material.ultimate ||
-      !study.material.elongation)
+      (!study.material.hardening?.length &&
+        (!study.material.ultimate || !study.material.elongation)))
       ? "Yield, ultimate strength and elongation"
+      : null,
+    needs.thermal && study.transient?.on && study.material?.specificHeat == null
+      ? "Specific heat"
       : null,
     study.analysis === "thermalStress" &&
     study.material &&
@@ -563,22 +569,39 @@ export default function App() {
       ? "Thermal expansion"
       : null,
     needs.supports && !study.supports.length ? "Support" : null,
-    // Thermal stress can come from temperatures alone.
-    needs.loads &&
-    !needs.thermal &&
+    needs.loads === true &&
     !(study.analysis === "harmonic" && study.harmonic?.excitation === "base") &&
     !study.loads.length
       ? "Load"
       : null,
+    // Over time heat can stay in the part; to settle it must leave.
     needs.thermal &&
-    !study.thermal.some(
-      (c) => c.kind === "temperature" || c.kind === "convection",
+    !study.transient?.on &&
+    !study.thermal.some((c) =>
+      ["temperature", "convection", "radiation"].includes(c.kind),
     )
-      ? "Temperature or convection"
+      ? "Temperature, convection or radiation"
+      : null,
+    needs.thermal && study.transient?.on && !study.thermal.length
+      ? "Thermal condition"
       : null,
   ].filter(Boolean) as string[];
   const ready = !!part && !missing.length && !draft;
-  const run = async (action: "mesh" | "solve" | "converge", refine = false) => {
+  // Vibration studies with loads ask on each solve whether to include them.
+  const [preloadAsk, setPreloadAsk] = useState<{
+    action: "solve" | "converge";
+    refine: boolean;
+  } | null>(null);
+  const solveStudy = (action: "solve" | "converge", refine = false) => {
+    if (study.analysis === "frequency" && study.loads.length) {
+      if (part && !job && ready) setPreloadAsk({ action, refine });
+    } else run(action, refine);
+  };
+  const run = async (
+    action: "mesh" | "solve" | "converge",
+    refine = false,
+    preload?: boolean,
+  ) => {
     if (!part || job || (action !== "mesh" && !ready)) return;
     const operation = ++sequence.current;
     setError(null);
@@ -604,7 +627,7 @@ export default function App() {
       }
       const j = await post(
         `/documents/${part.id}/${action}${query.size ? "?" + query : ""}`,
-        next,
+        preload === undefined ? next : { ...next, preload },
       );
       const data = await poll(j.job, action === "mesh" ? "meshing" : "solve");
       if (!data) return;
@@ -698,7 +721,7 @@ export default function App() {
         fileInput.current?.click();
       } else if (mod && key === "enter") {
         e.preventDefault();
-        run("solve");
+        solveStudy("solve");
       } else if (mod && key === "z") {
         // Text fields keep their own undo.
         if (isTyping(e.target)) return;
@@ -1088,7 +1111,7 @@ export default function App() {
             cpus={cpus}
             onThreads={chooseThreads}
             onPreview={() => run("mesh")}
-            onSolve={() => run("solve")}
+            onSolve={() => solveStudy("solve")}
           />
         );
       case "results":
@@ -1137,7 +1160,7 @@ export default function App() {
               filters={filters!}
               bounds={viewGeometry!.bounds}
               scale={stats.scale}
-              sectionArea={sectionArea}
+              section={sectionCut}
               onFilters={setFilters}
               comparison={comparison}
               fromProject={fromProject}
@@ -1147,10 +1170,10 @@ export default function App() {
               onProbe={(node) =>
                 setProbe(node === null ? null : nodeProbe(shown, node))
               }
-              onRefine={() => run("solve", true)}
+              onRefine={() => solveStudy("solve", true)}
               convergeOptions={convergeOptions}
               onConvergeOptions={setConvergeOptions}
-              onConverge={() => run("converge")}
+              onConverge={() => solveStudy("converge")}
               onCsv={csv}
               onImage={screenshot}
               onSolverFile={exportSolver}
@@ -1286,7 +1309,7 @@ export default function App() {
           {part && (
             <button
               className="solve"
-              onClick={() => run("solve")}
+              onClick={() => solveStudy("solve")}
               disabled={!ready || !!job}
               title={
                 draft
@@ -1371,7 +1394,7 @@ export default function App() {
                   onSelect={selectFace}
                   onHover={setHover}
                   onProbe={setProbe}
-                  onSectionArea={setSectionArea}
+                  onSection={setSectionCut}
                   filters={filters!}
                   deformation={deformation}
                   wireframe={wire && !draft}
@@ -1575,6 +1598,17 @@ export default function App() {
           </button>
         </footer>
 
+        {preloadAsk && (
+          <PreloadDialog
+            count={study.loads.length}
+            onChoose={(include) => {
+              const { action, refine } = preloadAsk;
+              setPreloadAsk(null);
+              if (include !== null) run(action, refine, include);
+            }}
+          />
+        )}
+
         {error && (
           <div
             className={"error-panel" + (part ? "" : " start-error")}
@@ -1602,5 +1636,55 @@ export default function App() {
         )}
       </div>
     </UnitsContext.Provider>
+  );
+}
+
+/**
+ * Asks whether a vibration study includes its loads. Escape or a click
+ * outside cancels the solve.
+ */
+function PreloadDialog({
+  count,
+  onChoose,
+}: {
+  count: number;
+  onChoose: (include: boolean | null) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const choice = useRef<boolean | null>(null);
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+  const close = (include: boolean | null) => {
+    choice.current = include;
+    dialog.current?.close();
+  };
+  return (
+    <dialog
+      ref={dialog}
+      className="chart-dialog confirm-dialog"
+      aria-labelledby="preload-title"
+      onClose={() => onChoose(choice.current)}
+      onKeyDown={(e) => e.key === "Escape" && e.stopPropagation()}
+      onClick={(e) => e.target === e.currentTarget && close(null)}
+    >
+      <div className="chart-dialog-body">
+        <h3 id="preload-title">Include the loads?</h3>
+        <p className="note">
+          The study has {count === 1 ? "a load" : `${count} loads`}. Including{" "}
+          {count === 1 ? "it" : "them"} adds the stiffness of the stress{" "}
+          {count === 1 ? "it causes" : "they cause"}: tension and spin raise
+          natural frequencies, compression lowers them.
+        </p>
+        <footer>
+          <button className="btn" onClick={() => close(false)}>
+            Ignore loads
+          </button>
+          <button className="btn primary" autoFocus onClick={() => close(true)}>
+            Include loads
+          </button>
+        </footer>
+      </div>
+    </dialog>
   );
 }

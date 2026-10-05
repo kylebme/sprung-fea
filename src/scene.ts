@@ -2,7 +2,7 @@
 // turns each state snapshot into VTK pipeline changes, renders on demand, and
 // converts pointer input into camera moves and picks.
 import { loadAsync, type StandaloneSession } from "@kitware/vtk-wasm";
-import type { ViewData, Probe } from "./viewData";
+import type { ViewData, Probe, SectionCut } from "./viewData";
 import {
   hasResults,
   lowIsCritical,
@@ -768,10 +768,17 @@ export class Scene {
           const f = faces.get(id);
           if (!f) continue;
           markers.push([...f.anchor, 0, 0, 1]);
-          c.axes.forEach((on, a) => {
-            if (on)
-              supports.push([...f.anchor, ...[0, 1, 2].map((i) => +(i === a))]);
-          });
+          // Frictionless and radial supports block the face normal.
+          if (c.frame === "normal" || (c.frame === "cylinder" && c.axes[0]))
+            supports.push([...f.anchor, ...f.normal]);
+          else if (c.frame !== "cylinder")
+            c.axes.forEach((on, a) => {
+              if (on)
+                supports.push([
+                  ...f.anchor,
+                  ...[0, 1, 2].map((i) => +(i === a)),
+                ]);
+            });
         }
       for (const l of s.study.loads) {
         if (l.kind === "gravity") {
@@ -971,12 +978,13 @@ export class Scene {
   }
 
   /** Cross-section area (mm²) of the active section, for display. */
-  sectionArea() {
+  /** Area and area-weighted center of the section cut, when shown. */
+  sectionCut(): SectionCut | null {
     const s = this.state;
     if (!s?.filters.section.on || !s.plot || !s.view.tets) return null;
     this.cutter.update(0);
     const out = this.cutter.getOutput();
-    if (!out.getNumberOfCells()) return 0;
+    if (!out.getNumberOfCells()) return { area: 0, center: null };
     const p = this.ta.toJSTypedArray(
       out.getPoints().getData(),
     ) as ArrayLike<number>;
@@ -990,15 +998,18 @@ export class Scene {
     ids.$delete();
     const at = (i: number) => [p[i * 3], p[i * 3 + 1], p[i * 3 + 2]];
     let area = 0;
+    const moment = [0, 0, 0];
     for (let c = 0; c < cells.length; c += cells[c] + 1) {
       const a = at(cells[c + 1]);
       for (let k = 2; k < cells[c]; k++) {
-        const u = add(at(cells[c + k]), a, -1),
-          w = add(at(cells[c + k + 1]), a, -1);
-        area += Math.hypot(...cross(u, w)) / 2;
+        const b = at(cells[c + k]),
+          d = at(cells[c + k + 1]);
+        const t = Math.hypot(...cross(add(b, a, -1), add(d, a, -1))) / 2;
+        area += t;
+        for (let i = 0; i < 3; i++) moment[i] += (t * (a[i] + b[i] + d[i])) / 3;
       }
     }
-    return area;
+    return { area, center: area ? moment.map((m) => m / area) : null };
   }
 
   private placeMarker() {

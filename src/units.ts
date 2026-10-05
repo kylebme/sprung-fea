@@ -29,6 +29,7 @@ const US: Record<string, Conversion> = {
   "W/(m·K)": { unit: "Btu/(hr·ft·°F)", scale: 1 / 1.730735 },
   "µm/(m·°C)": { unit: "µin/(in·°F)", scale: 1 / 1.8 },
   "W/(m²·K)": { unit: "Btu/(hr·ft²·°F)", scale: 1 / 5.678263 },
+  "J/(kg·K)": { unit: "Btu/(lb·°F)", scale: 1 / 4186.8 },
   "W/m²": { unit: "Btu/(hr·ft²)", scale: 1 / 3.154591 },
   "µm/m": { unit: "µin/in", scale: 1 },
   "mm/mm": { unit: "in/in", scale: 1 },

@@ -150,31 +150,75 @@ def mesh_lines(model, title):
     return lines
 
 
-def material_lines(m, name='MAT', elset='PART'):
-    """Material in deck units: density from kg/m³ to tonne/mm³."""
-    return [f'*MATERIAL, NAME={name}','*ELASTIC',f"{number(m['young'])}, {number(m['poisson'])}",
+def temperature_table(m, key, scale=1.):
+    """[(value × scale, temperature)] of a property that varies with
+    temperature: its values at two or more temperatures in the material's
+    table. None when the constant value applies."""
+    rows=sorted((r['temperature'],r[key]) for r in m.get('byTemperature') or [] if r.get(key) is not None)
+    return [(v*scale,t) for t,v in rows] if len(rows)>=2 else None
+
+
+def material_lines(m, name='MAT', elset='PART', temperatures=False):
+    """Material in deck units: density from kg/m³ to tonne/mm³. With
+    `temperatures`, the elastic modulus follows the material's temperature
+    table if it has one."""
+    young=temperature_table(m,'young') if temperatures else None
+    elastic=([f"{number(E)}, {number(m['poisson'])}, {number(t)}" for E,t in young] if young
+             else [f"{number(m['young'])}, {number(m['poisson'])}"])
+    return [f'*MATERIAL, NAME={name}','*ELASTIC',*elastic,
             '*DENSITY',number(m['density']*1e-12),f'*SOLID SECTION, ELSET={elset}, MATERIAL={name}']
 
 
-def section_lines(model, study, extra=lambda m: []):
+def section_lines(model, study, extra=lambda m: [], temperatures=False):
     """Materials and solid sections: one for the part, or one per group of
     bodies with the same material. `extra(material)` adds keyword lines
     (thermal properties) to each material."""
     groups=model.materials(study)
     if len(groups)==1:
-        lines=material_lines(groups[0][1])
+        lines=material_lines(groups[0][1],temperatures=temperatures)
         return lines[:-1]+extra(groups[0][1])+lines[-1:]
     out=[]
     for k,(_,m,elements) in enumerate(groups,1):
         out+=[f'*ELSET, ELSET=BODIES{k}']+rows(sorted(elements))
-        lines=material_lines(m,f'MAT{k}',f'BODIES{k}')
+        lines=material_lines(m,f'MAT{k}',f'BODIES{k}',temperatures)
         out+=lines[:-1]+extra(m)+lines[-1:]
     return out
 
 
-def boundary_lines(fixed):
-    lines=['*BOUNDARY']+[f'{n}, {a+1}, {a+1}, 0' for n,a in sorted(fixed)]
-    lines+=['*NSET, NSET=HELD']+rows(sorted(set(n for n,_ in fixed)))
+def support_equations(held):
+    """Linear constraints d·u = 0 for blocked directions off the global axes,
+    as [(node, dof, coefficient)] with the dependent term first. A node's
+    blocked rows are reduced to echelon form, so each equation's dependent
+    DOF appears in no other equation of that node."""
+    out=[]
+    for n,basis in sorted(held.directions.items()):
+        B=np.array(basis,float);pivots=[]
+        for i in range(len(B)):
+            free=[j for j in range(3) if j not in pivots]
+            p=max(free,key=lambda j:abs(B[i,j]))
+            B[i]/=B[i,p]
+            for k in range(len(B)):
+                if k!=i: B[k]-=B[k,p]*B[i]
+            pivots.append(p)
+        for row,p in zip(B,pivots):
+            out.append([(n,p+1,1.0)]+[(n,j+1,float(row[j])) for j in range(3) if j!=p and abs(row[j])>1e-12])
+    return out
+
+
+def equation_lines(equations):
+    lines=['*EQUATION']
+    for terms in equations:
+        lines.append(str(len(terms)))
+        for i in range(0,len(terms),4):
+            lines.append(', '.join(f'{n}, {d}, {number(c)}' for n,d,c in terms[i:i+4]))
+    return lines if equations else []
+
+
+def boundary_lines(held):
+    """Blocked directions: *BOUNDARY along global axes, *EQUATION otherwise."""
+    lines=['*BOUNDARY']+[f'{n}, {a+1}, {a+1}, 0' for n,a in sorted(held.dofs)] if held.dofs else []
+    lines+=equation_lines(support_equations(held))
+    lines+=['*NSET, NSET=HELD']+rows(sorted(held.nodes()))
     return lines
 
 
@@ -194,7 +238,7 @@ def load_lines(loading):
     return lines
 
 
-def mass_lines(model, masses, couplings, fixed=()):
+def mass_lines(model, masses, couplings, held=None):
     """Point masses as MASS elements on extra nodes, tied to their faces by
     *EQUATION constraints, one per direction. `couplings` holds model.rbe3
     output per mass. Masses in kg.
@@ -204,7 +248,10 @@ def mass_lines(model, masses, couplings, fixed=()):
     eliminates the face-node direction with the largest coefficient that is
     neither supported nor already eliminated."""
     lines=[];node=max(model.ids);element=max(model.mesh['elementIds'])
-    equations=['*EQUATION'];used={(n,a+1) for n,a in fixed}
+    equations=[];used=set()
+    if held:
+        # Nodes in support equations keep all their DOFs out of these.
+        used={(n,a+1) for n,a in held.dofs}|{(n,a+1) for n in held.directions for a in range(3)}
     for m,terms in zip(masses,couplings):
         node+=1;element+=1
         lines+=['*NODE',f'{node}, '+', '.join(number(v) for v in m['point'])]
@@ -217,11 +264,8 @@ def mass_lines(model, masses, couplings, fixed=()):
                 raise ValueError(f"The point mass “{m.get('name','')}” sits on faces that are fully supported. Attach it to faces that can move.")
             first=max(free,key=lambda e:abs(e[2]))
             used.add((first[0],first[1]))
-            entries=[first]+[e for e in entries if e is not first]+[(node,k+1,1.0)]
-            equations.append(str(len(entries)))
-            for i in range(0,len(entries),4):
-                equations.append(', '.join(f'{n}, {d}, {number(c)}' for n,d,c in entries[i:i+4]))
-    return lines+(equations if len(equations)>1 else [])
+            equations.append([first]+[e for e in entries if e is not first]+[(node,k+1,1.0)])
+    return lines+equation_lines(equations)
 
 
 def eigenvalues(dat):

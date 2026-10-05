@@ -51,6 +51,26 @@ class Frequency(unittest.TestCase):
         result=worker.solve(self.folder,s)
         self.assertGreater(result['summary']['frequencies'][0],800)
 
+    def test_axial_load_shifts_frequencies_toward_buckling(self):
+        # Compression P lowers the first bending frequency toward zero at
+        # the buckling load: f² ≈ f₀²(1 − P/Pcr), close for a cantilever,
+        # whose buckled and vibrating shapes nearly match. Tension raises it,
+        # with the rule looser as the shapes drift apart.
+        buckling=worker.solve(self.folder,{**study(),'analysis':'buckling','modes':1,
+                                           'loads':[{'kind':'force','faces':[2],'vector':[-1000,0,0]}]})
+        critical=buckling['summary']['firstFactor']*1000
+        f0=worker.solve(self.folder,study(modes=1))['summary']['frequencies'][0]
+        for share,delta in [(.5,.03),(-.5,.06)]:
+            with self.subTest(share=share):
+                result=worker.solve(self.folder,study(modes=1,preload=True,
+                                                      loads=[{'kind':'force','faces':[2],'vector':[-share*critical,0,0]}]))
+                f=result['summary']['frequencies'][0]
+                self.assertAlmostEqual((f/f0)**2,1-share,delta=delta)
+                self.assertTrue(result['summary']['preloaded'])
+        # Including loads needs supports to carry them.
+        with self.assertRaisesRegex(ValueError,'supports that hold the part'):
+            worker.solve(self.folder,study(supports=[],preload=True,loads=[{'kind':'force','faces':[2],'vector':[0,0,-1]}]))
+
     def test_tip_mass_lowers_the_frequency(self):
         # 100 g at the free end: k = 3EI/L³ with 0.2235 of the beam's mass.
         s=study(masses=[{'id':'m','name':'Tip mass','faces':[2],'mass':.1,'point':[100,10,5]}])

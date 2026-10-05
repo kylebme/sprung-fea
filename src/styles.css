@@ -710,6 +710,65 @@ svg {
   font-weight: 500;
   color: var(--muted);
 }
+.more {
+  margin-top: 10px;
+}
+.more summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.more summary::-webkit-details-marker {
+  display: none;
+}
+.more summary:hover {
+  color: var(--text);
+}
+.more summary svg {
+  transition: transform 0.12s;
+}
+.more[open] summary svg {
+  transform: rotate(90deg);
+}
+.more-body {
+  margin-top: 8px;
+}
+.point-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.point-table th:last-child {
+  width: 22px;
+}
+.point-table th {
+  padding: 0 4px 4px 0;
+  font-weight: 500;
+  text-align: left;
+  color: var(--muted);
+}
+.point-table td {
+  padding: 0 4px 4px 0;
+}
+.point-table td:last-child {
+  padding-right: 0;
+}
+.point-table th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.point-table .number-field input {
+  width: 100%;
+  padding: 0 4px;
+  font-size: 10.5px;
+}
 .sec h4 .mono {
   color: var(--faint);
   font-weight: 400;
@@ -1655,6 +1714,12 @@ b.axis-z,
 }
 .chart-dialog footer .note {
   margin: 0 auto 0 0;
+}
+.confirm-dialog {
+  width: min(380px, calc(100vw - 48px));
+}
+.confirm-dialog .note {
+  margin: 8px 0 0;
 }
 .chart-dialog .chart figcaption {
   font-size: 11.5px;
