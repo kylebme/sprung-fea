@@ -37,17 +37,15 @@ Changing the analysis type keeps your material, supports and mesh. Here the same
 
 ## Install
 
-There are no tagged releases yet. Every commit is built for all three platforms by GitHub Actions, and the installers are attached to the run.
+Find the latest release here: [Releases](https://github.com/kylebme/sprung-fea/releases)
 
-1. Open the [Build workflow](https://github.com/kylebme/sprung-fea/actions/workflows/build.yml) and click the most recent run with a green check.
-2. Under **Artifacts**, download `sprung-fea-macOS`, `sprung-fea-Windows` or `sprung-fea-Linux`. You need to be signed in to GitHub to download.
-3. Unzip it and install as below.
+| Platform | Download | Installation |
+| --- | --- | --- |
+| macOS, Apple Silicon | `Sprung-FEA-x.x.x-arm64.dmg` | Open the DMG and drag Sprung FEA to Applications. |
+| Windows, x64 | `Sprung-FEA-Setup-x.x.x.exe` | Run the installer; it installs for your user without administrator rights. |
+| Linux, x64 | `Sprung-FEA-x.x.x-x86_64.AppImage` | Make it executable with `chmod +x Sprung-FEA-0.1.0-x86_64.AppImage`, then run it. |
 
-The builds are not yet signed with a paid certificate, so your operating system will warn you the first time.
-
-- **macOS** (Apple Silicon): open the DMG and drag Sprung FEA to Applications. The first time you open it, macOS will refuse. Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
-- **Windows** (64-bit): run `Sprung-FEA-Setup-<version>.exe`. If SmartScreen appears, click **More info → Run anyway**. It installs for your user account and does not need administrator rights.
-- **Linux** (x86-64): the AppImage runs without installing. Make it executable with `chmod +x Sprung-FEA-*.AppImage`, then run it.
+These builds are unsigned (macOS is ad-hoc signed, without notarization). On macOS, use **System Settings → Privacy & Security → Open Anyway** after the first launch is blocked. On Windows, use **More info → Run anyway** if SmartScreen appears.
 
 Everything the app needs, including the solver, is bundled. Nothing is uploaded anywhere: meshing and solving happen on your machine.
 
