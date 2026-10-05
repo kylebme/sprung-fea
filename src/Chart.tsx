@@ -1,6 +1,9 @@
 // A small SVG line chart for x–y result series: convergence histories,
-// response curves and load paths. Colors come from the theme tokens.
-import { useState } from "react";
+// response curves and load paths. Colors come from the theme tokens. Every
+// chart can open larger in a dialog that saves it as a PNG or CSV.
+import { useEffect, useRef, useState, type Ref } from "react";
+import { FileDown, ImageDown, Maximize2, X } from "lucide-react";
+import { saveFile } from "./api";
 import { fmt, sig } from "./logic";
 
 export type Series = { label: string; values: number[] };
@@ -25,19 +28,7 @@ const tickText = (v: number, step: number) =>
     ? v.toExponential(2)
     : fmt(v, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
 
-export function LineChart({
-  x,
-  series,
-  xLabel,
-  yLabel,
-  logX = false,
-  logY = false,
-  selected,
-  onSelect,
-  height = 150,
-  minSpan = 0,
-  label,
-}: {
+type ChartProps = {
   x: number[];
   series: Series[];
   xLabel: string;
@@ -52,10 +43,200 @@ export function LineChart({
   /** Smallest y range shown, centered on the data, so tiny changes look flat. */
   minSpan?: number;
   label: string;
+};
+
+/** A chart with a button that opens it larger, with PNG and CSV export. */
+export function LineChart(props: ChartProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="chart-frame">
+      <Plot {...props} />
+      <button
+        className="icon-button chart-expand"
+        title="Open larger"
+        aria-label={`Open ${props.label} larger`}
+        onClick={() => setOpen(true)}
+      >
+        <Maximize2 size={12} />
+      </button>
+      {open && <ChartDialog {...props} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+const slug = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "chart";
+
+const csvCell = (text: string) =>
+  /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+
+/** The plotted values as CSV: one row per x value, one column per series. */
+export function chartCsv({ x, series, xLabel, yLabel }: ChartProps) {
+  const head = [
+    xLabel,
+    ...series.map((s) => (yLabel ? `${s.label}, ${yLabel}` : s.label)),
+  ];
+  const rows = x.map((v, i) =>
+    [v, ...series.map((s) => s.values[i])]
+      .map((n) => (Number.isFinite(n) ? String(n) : ""))
+      .join(","),
+  );
+  return [head.map(csvCell).join(","), ...rows].join("\n") + "\n";
+}
+
+/**
+ * Renders the chart's SVG to a PNG, as base64, with the title above it. The
+ * theme's colors are copied inline, since the stylesheet doesn't come along.
+ */
+async function chartPng(svg: SVGSVGElement, title: string) {
+  const scale = 2;
+  const margin = 16;
+  const titleHeight = 28;
+  const { width, height } = svg.viewBox.baseVal;
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  const targets = clone.querySelectorAll<SVGElement>("*");
+  svg.querySelectorAll("*").forEach((el, i) => {
+    const style = getComputedStyle(el);
+    for (const p of [
+      "fill",
+      "stroke",
+      "stroke-width",
+      "stroke-dasharray",
+      "font-family",
+      "font-size",
+      "font-weight",
+    ])
+      targets[i].style.setProperty(p, style.getPropertyValue(p));
+  });
+  // The hover and frame cursor are for reading values, not for the export.
+  clone.querySelectorAll(".cursor").forEach((el) => el.remove());
+  // Tick labels can hang past the plot's edges, so the margin is drawn too.
+  const [w, h] = [width + 2 * margin, height + margin];
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("viewBox", `${-margin} 0 ${w} ${h}`);
+  clone.setAttribute("width", String(w));
+  clone.setAttribute("height", String(h));
+  const image = new Image();
+  image.src =
+    "data:image/svg+xml;charset=utf-8," +
+    encodeURIComponent(new XMLSerializer().serializeToString(clone));
+  await image.decode();
+  const canvas = document.createElement("canvas");
+  canvas.width = w * scale;
+  canvas.height = (h + titleHeight + margin) * scale;
+  const ctx = canvas.getContext("2d")!;
+  ctx.scale(scale, scale);
+  const root = getComputedStyle(document.documentElement);
+  ctx.fillStyle = root.getPropertyValue("--panel");
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = root.getPropertyValue("--text");
+  ctx.font = `600 13px ${root.fontFamily}`;
+  ctx.textBaseline = "top";
+  ctx.fillText(title, margin, margin);
+  ctx.drawImage(image, 0, margin + titleHeight, w, h);
+  return canvas.toDataURL("image/png").split(",")[1];
+}
+
+function ChartDialog({
+  onClose,
+  ...props
+}: ChartProps & { onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+  const name = `sprung-fea-${slug(props.label)}`;
+  const save = async (kind: "png" | "csv") => {
+    setError("");
+    try {
+      if (kind === "csv") await saveFile(name + ".csv", chartCsv(props));
+      else
+        await saveFile(
+          name + ".png",
+          await chartPng(svg.current!, props.label),
+          "base64",
+        );
+    } catch (e) {
+      setError(
+        `Couldn't save the ${kind.toUpperCase()}: ${(e as Error).message}`,
+      );
+    }
+  };
+  return (
+    <dialog
+      ref={dialog}
+      className="chart-dialog"
+      aria-label={props.label}
+      onClose={onClose}
+      // Escape closes the dialog only, not whatever edit is open behind it.
+      onKeyDown={(e) => e.key === "Escape" && e.stopPropagation()}
+      onClick={(e) => e.target === e.currentTarget && dialog.current?.close()}
+    >
+      <div className="chart-dialog-body">
+        <header>
+          <h3>{props.label}</h3>
+          <button
+            className="icon-button"
+            aria-label="Close"
+            onClick={() => dialog.current?.close()}
+          >
+            <X size={14} />
+          </button>
+        </header>
+        <Plot
+          {...props}
+          width={640}
+          height={360}
+          tickCount={6}
+          legend
+          svgRef={svg}
+        />
+        <footer>
+          {error && <span className="note warn">{error}</span>}
+          <button className="btn" onClick={() => save("png")}>
+            <ImageDown size={13} /> Save PNG
+          </button>
+          <button className="btn" onClick={() => save("csv")}>
+            <FileDown size={13} /> Save CSV
+          </button>
+        </footer>
+      </div>
+    </dialog>
+  );
+}
+
+function Plot({
+  x,
+  series,
+  xLabel,
+  yLabel,
+  logX = false,
+  logY = false,
+  selected,
+  onSelect,
+  height = 150,
+  minSpan = 0,
+  label,
+  width = 280,
+  tickCount = 3,
+  legend: showLegend = false,
+  svgRef,
+}: ChartProps & {
+  width?: number;
+  /** About how many ticks each axis gets. */
+  tickCount?: number;
+  /** Name the series inside the plot, so a saved image carries its key. */
+  legend?: boolean;
+  svgRef?: Ref<SVGSVGElement>;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const width = 280;
-  const pad = { left: 46, right: 8, top: 8, bottom: 30 };
+  const legend = showLegend && series.length > 1;
+  const pad = { left: 46, right: 8, top: legend ? 20 : 8, bottom: 30 };
   const fx = (v: number) => (logX ? Math.log10(v) : v);
   const fy = (v: number) => (logY ? Math.log10(Math.max(v, 1e-30)) : v);
   const xs = x.map(fx);
@@ -84,7 +265,9 @@ export function LineChart({
         out.push({ at: p, text: tickText(10 ** p, 10 ** p) });
       return out;
     }
-    const t = log ? ticks(10 ** lo, 10 ** hi, 3) : ticks(lo, hi, 3);
+    const t = log
+      ? ticks(10 ** lo, 10 ** hi, tickCount)
+      : ticks(lo, hi, tickCount);
     return t.values
       .filter((v) => !log || v > 0)
       .map((v) => ({ at: log ? Math.log10(v) : v, text: tickText(v, t.step) }));
@@ -107,6 +290,7 @@ export function LineChart({
   return (
     <figure className="chart">
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={label}
@@ -184,6 +368,23 @@ export function LineChart({
               ))}
           </g>
         ))}
+        {legend &&
+          series.map((s, k) => {
+            // Mono text, so each key's width follows from its label.
+            const at =
+              pad.left +
+              series
+                .slice(0, k)
+                .reduce((sum, p) => sum + p.label.length * 5.5 + 26, 0);
+            return (
+              <g key={s.label} className={"series s" + k}>
+                <polyline fill="none" points={`${at},7 ${at + 12},7`} />
+                <text className="tick" x={at + 16} y={10}>
+                  {s.label}
+                </text>
+              </g>
+            );
+          })}
         {marked !== null && (
           <line
             className="cursor"
