@@ -141,15 +141,6 @@ export const ANALYSES: Record<
     thermal: false,
     eigen: false,
   },
-  frequency: {
-    name: "Natural frequencies",
-    note: "The frequencies a part vibrates at on its own, and the shape of each vibration. Keep them away from the frequencies of motors, rotors or road input.",
-    loads: false,
-    supports: false,
-    mechanical: true,
-    thermal: false,
-    eigen: true,
-  },
   buckling: {
     name: "Buckling",
     note: "How many times the loads can grow before a slender or thin-walled part suddenly buckles sideways, and the shape it buckles into.",
@@ -159,14 +150,14 @@ export const ANALYSES: Record<
     thermal: false,
     eigen: true,
   },
-  thermal: {
-    name: "Heat transfer",
-    note: "The temperatures a part settles at with heat flowing in and out: heaters, cooled faces, air.",
+  frequency: {
+    name: "Natural frequencies",
+    note: "The frequencies a part vibrates at on its own, and the shape of each vibration. Keep them away from the frequencies of motors, rotors or road input.",
     loads: false,
     supports: false,
-    mechanical: false,
-    thermal: true,
-    eigen: false,
+    mechanical: true,
+    thermal: false,
+    eigen: true,
   },
   harmonic: {
     name: "Harmonic response",
@@ -175,6 +166,15 @@ export const ANALYSES: Record<
     supports: true,
     mechanical: true,
     thermal: false,
+    eigen: false,
+  },
+  thermal: {
+    name: "Heat transfer",
+    note: "The temperatures a part settles at with heat flowing in and out: heaters, cooled faces, air.",
+    loads: false,
+    supports: false,
+    mechanical: false,
+    thermal: true,
     eigen: false,
   },
   thermalStress: {

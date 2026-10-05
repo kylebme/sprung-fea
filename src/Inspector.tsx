@@ -437,7 +437,7 @@ export function MaterialPanel({
           Preset values are typical. Use your material's specification.
         </p>
       </div>
-      <div className="sec">
+      <div className="sec actions">
         <button
           className="btn primary full"
           disabled={!valid}
@@ -627,7 +627,7 @@ export function ConditionEditor({
           <p className="note">Click faces in the view or the face list.</p>
         </div>
       )}
-      <div className="sec">
+      <div className="sec actions">
         <div className="row2">
           <button className="btn" onClick={onCancel}>
             Cancel

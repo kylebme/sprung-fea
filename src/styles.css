@@ -690,6 +690,16 @@ svg {
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
+/* Form buttons stay in view at the bottom of the scrolling inspector. */
+.sec.actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: -1px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
 .sec h4 {
   display: flex;
   align-items: center;
@@ -964,7 +974,8 @@ svg {
 .btn.full {
   width: 100%;
 }
-.btn + .btn.full {
+.btn + .btn.full,
+.row2 + .btn.full {
   margin-top: 6px;
 }
 .list-item {
