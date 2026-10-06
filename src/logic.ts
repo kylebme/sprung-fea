@@ -30,7 +30,12 @@ export function normalizeStudy(study: Study): Study {
   return {
     ...study,
     analysis: study.analysis ?? "static",
-    solver: study.solver ?? "spooles",
+    // The direct solver was named after SPOOLES before it had a choice of
+    // backends.
+    solver:
+      !study.solver || (study.solver as string) === "spooles"
+        ? "direct"
+        : study.solver,
     masses: study.masses ?? [],
     thermal: study.thermal ?? [],
   };

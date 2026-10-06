@@ -86,7 +86,7 @@ try {
     thermal: [],
     meshSize: 4,
     detail: "medium",
-    solver: "spooles",
+    solver: "direct",
   };
   const solve = async (s) =>
     (

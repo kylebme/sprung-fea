@@ -53,11 +53,14 @@ jobs:
         with:
           python-version: "3.10"
 
-      # CalculiX 2.23 on every platform: the Homebrew tap on macOS (as for
-      # local builds), conda-forge on Windows and Linux.
-      - name: Install CalculiX (macOS)
+      # CalculiX 2.23 on every platform: built from source on macOS, with
+      # thread-safe SPOOLES and Apple Accelerate as its direct solver;
+      # conda-forge on Windows and Linux.
+      - name: Build CalculiX (macOS)
         if: runner.os == 'macOS'
-        run: brew install costerwi/calculix/calculix-ccx
+        run: |
+          brew install gcc arpack
+          python scripts/build-solver.py
 
       - name: Install CalculiX (Windows, Linux)
         if: runner.os != 'macOS'
@@ -66,7 +69,9 @@ jobs:
           environment-name: calculix
           # OpenBLAS: MKL, the Windows default, loads its kernels at run
           # time, so they cannot be found and bundled from the imports.
-          create-args: calculix=2.23 libblas=*=*openblas
+          # Build 8 and later link the SPOOLES with fixed threading, so the
+          # direct solver can use every core, and carry upstream fixes.
+          create-args: calculix[version='2.23',build_number='>=8'] libblas=*=*openblas
           init-shell: none
           cache-environment: true
 

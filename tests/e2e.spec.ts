@@ -304,7 +304,7 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
   await page.getByRole("button", { name: "Use example setup" }).click();
   const solvers = page.getByRole("group", { name: "Solver" });
   await expect(
-    solvers.getByRole("button", { name: /^Direct \(SPOOLES\)/ }),
+    solvers.getByRole("button", { name: /^Direct\b/ }),
   ).toHaveAttribute("aria-pressed", "true");
   await solvers
     .getByRole("button", { name: /^Iterative, incomplete Cholesky/ })

@@ -1769,8 +1769,8 @@ export function MeshPanel({
         </div>
         <p className="note">
           Auto uses the performance cores. Threads speed up meshing, assembly,
-          the direct solver and stress recovery without changing results;
-          iterative solvers iterate on one thread. Saved on this computer, not
+          the direct solver and stress recovery; results agree to round-off.
+          Iterative solvers iterate on one thread. Saved on this computer, not
           in the study.
         </p>
       </div>

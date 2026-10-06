@@ -1,4 +1,4 @@
-export const SOLVERS = ["spooles", "iterative-scaling", "iterative-cholesky"];
+export const SOLVERS = ["direct", "iterative-scaling", "iterative-cholesky"];
 /** Load kinds; body loads act on the whole part rather than faces. */
 export const LOADS = [
   "force",
@@ -92,9 +92,10 @@ export function validateStudy(s) {
   if (!["coarse", "medium", "fine", "custom"].includes(s.detail))
     throw new RequestError("The mesh detail setting is invalid.");
   number(s.meshSize, "Mesh size", { positive: true });
-  // Studies saved before solver choice used the direct solver, and studies
-  // saved before analysis types were linear static.
-  s.solver ??= "spooles";
+  // Studies saved before solver choice used the direct solver, then named
+  // after SPOOLES; studies saved before analysis types were linear static.
+  s.solver ??= "direct";
+  if (s.solver === "spooles") s.solver = "direct";
   s.analysis ??= "static";
   if (!ANALYSES.includes(s.analysis))
     throw new RequestError("This analysis type is not available.");

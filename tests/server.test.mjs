@@ -101,7 +101,13 @@ test("STEP → portable project → reopen → real solve → export", async () 
     assert.equal(legacy.study.detail, "medium");
     // Studies from before solver choice used the direct solver, and studies
     // from before analysis types were linear static.
-    assert.equal(legacy.study.solver, "spooles");
+    assert.equal(legacy.study.solver, "direct");
+    // The direct solver was named after SPOOLES before it had backends.
+    const named = await request(base, "/api/open", {
+      ...project,
+      study: { ...study, solver: "spooles" },
+    });
+    assert.equal(named.study.solver, "direct");
     assert.equal(legacy.study.analysis, "static");
     assert.deepEqual(legacy.study.masses, []);
     assert.deepEqual(legacy.study.thermal, []);
@@ -334,7 +340,7 @@ test("recovery on disk, error statuses, and document pruning", async () => {
     assert.equal(restored.sample, "beam");
     assert.deepEqual(restored.study, {
       ...study,
-      solver: "spooles",
+      solver: "direct",
       analysis: "static",
       masses: [],
       thermal: [],

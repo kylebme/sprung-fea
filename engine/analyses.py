@@ -26,8 +26,11 @@ SCHEMA=2
 
 
 def von_mises(s):
-    xx,yy,zz,xy,yz,zx=s[:6]
-    return math.sqrt(max(0,((xx-yy)**2+(yy-zz)**2+(zz-xx)**2)/2+3*(xy*xy+yz*yz+zx*zx)))
+    """Von Mises stress of one stress tensor (SXX, SYY, SZZ, SXY, SYZ, SZX),
+    or of each row of an array of them."""
+    s=np.asarray(s,float)
+    xx,yy,zz,xy,yz,zx=(s[...,i] for i in range(6))
+    return np.sqrt(np.maximum(0,((xx-yy)**2+(yy-zz)**2+(zz-xx)**2)/2+3*(xy*xy+yz*yz+zx*zx)))
 
 
 def stress_fields(tensors):
@@ -38,7 +41,7 @@ def stress_fields(tensors):
     xx,yy,zz,xy,yz,zx=t.T
     matrix=np.stack([np.stack([xx,xy,zx],-1),np.stack([xy,yy,yz],-1),np.stack([zx,yz,zz],-1)],-2)
     principal=np.linalg.eigvalsh(matrix)
-    return {'vonMises':np.array([von_mises(s) for s in t]),'principalMax':principal[:,2],
+    return {'vonMises':von_mises(t),'principalMax':principal[:,2],
             'principalMin':principal[:,0],'shear':(principal[:,2]-principal[:,0])/2}
 
 
@@ -69,9 +72,10 @@ STRESS_FIELDS=['vonMises','principalMax','principalMin','shear','strain','strain
 def nodal(frame, label, ids, count, what):
     """Values of one FRD field at the mesh's nodes, first `count` components."""
     data=frame['fields'].get(label)
-    if not data or any(n not in data for n in ids):
+    rows=data.at(ids) if data else None
+    if rows is None or rows.shape[1]<count:
         raise ValueError(f'CalculiX did not produce complete {what} results. Inspect the solver log.')
-    return np.array([data[n][:count] for n in ids])
+    return rows[:,:count]
 
 
 def mass_check(study, model):
@@ -114,6 +118,13 @@ def static_checks(frame, held, loading, extra=np.zeros(3), floor=0.):
 class Analysis:
     id=''
     name=''
+    # Whether the study's equation-solver choice applies; other analyses
+    # use the direct solver.
+    study_solver=False
+
+    def solver(self, study):
+        """(deck keyword, description) of the equation solver this analysis uses."""
+        return calculix.solver(study) if self.study_solver else calculix.direct_solver()
 
     def validate(self, study, mesh):
         calculix.solver_of(study)
@@ -211,6 +222,7 @@ def phase_of(time, phases):
 
 class Static(Analysis):
     id='static'
+    study_solver=True
     name='Linear static'
 
     def validate(self, study, mesh):
@@ -241,7 +253,7 @@ class Static(Analysis):
         lines+=calculix.section_lines(model,study,plastic_lines if plastic else (lambda m:[]))
         lines+=calculix.boundary_lines(fixed)
         lines+=setup.model_lines(model,study,fixed,calculix.number)
-        solver='*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]
+        solver='*STATIC, SOLVER='+self.solver(study)[0]
         output=['*NODE FILE','U, RF','*EL FILE','S, E'+(', PEEQ' if plastic else ''),'*NODE PRINT, NSET=HELD, TOTALS=YES','RF']
         if setup.contacts:
             output+=['*CONTACT FILE','CDIS, CSTR']
@@ -317,7 +329,7 @@ class Static(Analysis):
             if breaking: warnings.append('Plastic strain exceeds the elongation at break somewhere: the material would tear there.')
         elif yield_strength and max_stress>yield_strength:
             warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation: turn on Plasticity in the Analysis settings.')
-        if calculix.solver_of(study)!='spooles' and balance>.005 and not follower:
+        if calculix.solver_of(study)!='direct' and balance>.005 and not follower:
             # CalculiX's incomplete-Cholesky solver occasionally stops early.
             warnings.append(f'The iterative solver stopped with a {balance*100:.2g}% force balance error. Use the direct solver for a tighter answer.')
         if large:
@@ -482,13 +494,14 @@ class Frequency(Analysis):
         lines+=calculix.section_lines(model,study)
         if held: lines+=calculix.boundary_lines(held)
         lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],held)
+        direct=calculix.direct_solver()[0]
         if preload:
             # No output from the static step: every frame is a mode.
-            lines+=['*STEP','*STATIC, SOLVER=SPOOLES']+calculix.load_lines(build_loads(study,model))+['*END STEP',
-                    '*STEP, PERTURBATION','*FREQUENCY, SOLVER=SPOOLES',str(count)]
+            lines+=['*STEP','*STATIC, SOLVER='+direct]+calculix.load_lines(build_loads(study,model))+['*END STEP',
+                    '*STEP, PERTURBATION','*FREQUENCY, SOLVER='+direct,str(count)]
         else:
             # A free part needs a negative shift: its stiffness is singular.
-            lines+=['*STEP','*FREQUENCY, SOLVER=SPOOLES',f'{count+rigid}, -1' if rigid else str(count)]
+            lines+=['*STEP','*FREQUENCY, SOLVER='+direct,f'{count+rigid}, -1' if rigid else str(count)]
         lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
         return {'rigid':rigid,'preload':preload}
@@ -504,7 +517,7 @@ class Frequency(Analysis):
         view=[];info=[];frequencies=[];fractions=[];unstable=False
         for k,frame in enumerate(frames):
             shape,stress=normalized(nodal(frame,'DISP',ids,3,'mode shape'),
-                                    np.array([von_mises(s) for s in nodal(frame,'STRESS',ids,6,'mode shape')]))
+                                    von_mises(nodal(frame,'STRESS',ids,6,'mode shape')))
             value=eig[k][1]
             hz=max(0.,value[2]) if value[0]>0 else 0.
             unstable|=preload and value[0]<0
@@ -560,7 +573,7 @@ class Buckling(Analysis):
         loading=build_loads(study,model,m['density']*1e-12)
         lines=calculix.mesh_lines(model,'linear buckling study')
         lines+=calculix.section_lines(model,study)+calculix.boundary_lines(fixed)
-        lines+=['*STEP','*BUCKLE, SOLVER=SPOOLES',str(count)]
+        lines+=['*STEP','*BUCKLE, SOLVER='+calculix.direct_solver()[0],str(count)]
         lines+=calculix.load_lines(loading)
         lines+=['*NODE FILE','U','*EL FILE','S','*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
@@ -573,7 +586,7 @@ class Buckling(Analysis):
         base,modes=frames[0],frames[1:]
         if not factors or len(modes)<len(factors):
             raise ValueError('CalculiX did not report the buckling factors. Inspect the solver log.')
-        stress=np.array([von_mises(s) for s in nodal(base,'STRESS',ids,6,'reference stress')])
+        stress=von_mises(nodal(base,'STRESS',ids,6,'reference stress'))
         view=[];info=[]
         for k,(frame,factor) in enumerate(zip(modes,factors)):
             shape,_=normalized(nodal(frame,'DISP',ids,3,'buckled shape'))
@@ -646,7 +659,7 @@ def solve(folder, study):
     result['keys']=analysis.key_results(result)
     eigen=result.pop('solverNote',None)=='eigen'
     result.update({'version':SCHEMA,'analysis':analysis.id,
-                   'solver':'CalculiX, SPOOLES direct with ARPACK eigenvalues' if eigen else 'CalculiX, '+calculix.SOLVERS[calculix.solver_of(study)][1],
+                   'solver':'CalculiX, '+analysis.solver(study)[1]+(' with ARPACK eigenvalues' if eigen else ''),
                    'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
                    'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']})
     (folder/'result.json').write_text(json.dumps(result))

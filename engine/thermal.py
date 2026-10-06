@@ -10,7 +10,7 @@ Stefan–Boltzmann constant is 5.670374e-11 N·mm/(s·mm²·K⁴)."""
 import numpy as np
 import calculix
 from model import (Model, finite, check_faces, check_table, fixed_dofs, rigid_motions, check_loads,
-                   check_masses, build_loads, triangle_weights, triangle_shape, tetra_points,
+                   check_masses, build_loads, triangle_weights, triangle_shape,
                    QUAD, BODY_LOADS)
 from analyses import (Analysis, nodal, von_mises, mass_check, static_checks, measures, STRESS_FIELDS)
 
@@ -171,12 +171,13 @@ def initial_lines(model, temperature):
 def step_lines(procedure, loads, outputs, timing):
     """The solution steps: one steady step, or the stages of a transient
     over the duration with the loads applied from time zero."""
+    solver=calculix.direct_solver()[0]
     if timing is None:
-        return ['*STEP',procedure+', STEADY STATE','1., 1.']+loads+[l for o in outputs for l in o]+['*END STEP']
+        return ['*STEP',procedure+', STEADY STATE, SOLVER='+solver,'1., 1.']+loads+[l for o in outputs for l in o]+['*END STEP']
     duration=timing[0];lines=[];start=0.
     for k,(fraction,count,every) in enumerate(STAGES):
         end=fraction*duration;period=end-start
-        lines+=['*STEP, INC=1000',procedure+', DIRECT',f'{calculix.number(period/count)}, {calculix.number(period)}']
+        lines+=['*STEP, INC=1000',procedure+', DIRECT, SOLVER='+solver,f'{calculix.number(period/count)}, {calculix.number(period)}']
         if k==0: lines+=loads
         for keyword,names in outputs: lines+=[f'{keyword}, FREQUENCY={every}',names]
         lines+=['*END STEP'];start=end
@@ -197,9 +198,8 @@ def heat_balance(heat, frame, model, temperature):
         applied[n]=applied.get(n,0.)+q
     gains=[heat.heat_in] if heat.heat_in>0 else [];losses=[-heat.heat_in] if heat.heat_in<0 else []
     if heat.generation:
-        for c in model.mesh['elements']:
-            for N,_,w in tetra_points(np.array([model.nodes[n] for n in c])):
-                for n,Ni in zip(c,N): add(n,Ni*w*heat.generation)
+        q=model.integrate_elements(lambda x:np.ones(len(x)),np.full(len(model.mesh['elements']),heat.generation))[:,0]
+        for n in np.flatnonzero(q): add(model.ids[n],q[n])
     # Heat into the part per unit area at a surface temperature T.
     exchanges=[(tri,lambda T,a=ambient,h=h:h*(a-T)) for tri,ambient,h in heat.film_faces]
     exchanges+=[(tri,lambda T,a=ambient,e=e:e*STEFAN_BOLTZMANN*((a-ABSOLUTE_ZERO)**4-(T-ABSOLUTE_ZERO)**4))

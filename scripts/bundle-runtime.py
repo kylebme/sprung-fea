@@ -1,8 +1,10 @@
 """Build a standalone native analysis engine and bundle the CalculiX solver
 with the shared libraries it needs, beside it in runtime/solver.
 
-macOS relocates the Homebrew solver's dylibs; Windows and Linux bundle the
-solver found by find_ccx (CI uses conda-forge calculix, via SPRUNG_FEA_CCX)."""
+macOS bundles the solver scripts/build-solver.py builds, relocating its
+Homebrew dylibs; Windows and Linux bundle the solver found by find_ccx (CI
+uses conda-forge calculix, via SPRUNG_FEA_CCX). What the solver can do
+(calculix.capabilities) is written beside it as ccx.json."""
 import os, sys, subprocess, shutil
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
@@ -17,6 +19,8 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--one
                 '--add-binary',str(lib)+os.pathsep+'.','--exclude-module','tkinter','--exclude-module','matplotlib',str(root/'engine/worker.py')],check=True,
                 env={**os.environ,'PYINSTALLER_CONFIG_DIR':str(root/'.sprung-fea/pyinstaller-cache')})
 sys.path.insert(0,str(root/'engine'));from worker import find_ccx
+from calculix import capabilities
+import json
 solver=runtime/'solver'
 shutil.rmtree(solver,ignore_errors=True);solver.mkdir()
 source=Path(find_ccx())
@@ -95,4 +99,7 @@ check=subprocess.run([str(solver/('ccx.exe' if sys.platform=='win32' else 'ccx')
                      env={k:v for k,v in os.environ.items() if k not in ('PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH')})
 if 'This is Version' not in check.stdout:
     sys.exit(f'The bundled solver does not start (exit {check.returncode}): {check.stdout}{check.stderr}')
+(solver/'ccx.json').write_text(json.dumps(capabilities(source),indent=1)+'\n')
+if sys.platform=='darwin' and not capabilities(source).get('pardiso'):
+    print('Warning: this solver has neither the Accelerate direct solver nor thread-safe SPOOLES. Build it with scripts/build-solver.py.')
 print('Standalone engine:',runtime/'sprung-fea-engine','with solver',sorted(p.name for p in solver.iterdir()))

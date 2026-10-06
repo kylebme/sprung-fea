@@ -232,15 +232,40 @@ def import_part(folder):
     return geometry
 
 
+# Part of every mesh's key: change it when meshing settings change, so
+# meshes made with the old settings are not reused.
+MESHER = 'gmsh 4.15, size_settings 1'
+
+
 def mesh_part(folder, study):
-    emit('meshing', 'Meshing')
-    initialize(folder/'part.step')
+    """Meshes the part for a study, or reuses the mesh in folder when it was
+    made from the same STEP, element size and bolt cuts."""
     geo = json.loads((folder/'geometry.json').read_text())
     size = float(study.get('meshSize') or geo['recommendedSize'])
     if not math.isfinite(size) or size <= 0:
         raise ValueError('Mesh size must be a positive number in mm.')
     bolts = (study.get('bolts') or []) if contact_on(study) else []
-    return mesh_model(folder, size, relabel=cut_bolts(bolts) if bolts else None)
+    key = {'mesher': MESHER, 'part': geo['hash'], 'size': size,
+           'bolts': [[str(b['id']), sorted(int(f) for f in b['faces'])] for b in bolts]}
+    saved = saved_mesh(folder, key)
+    if saved:
+        emit('meshing', f"Reusing the mesh: {saved['elementCount']:,} elements, unchanged since it was made")
+        return saved
+    emit('meshing', 'Meshing')
+    initialize(folder/'part.step')
+    return mesh_model(folder, size, relabel=cut_bolts(bolts) if bolts else None, saved_as=key)
+
+
+def saved_mesh(folder, key):
+    """The mesh in folder if it was made with this key, with its view file
+    restored (a solve adds results to it)."""
+    try:
+        if json.loads((folder/'mesh.key.json').read_text()) != key: return None
+        mesh = json.loads((folder/'mesh.json').read_text())
+    except (OSError, ValueError):
+        return None
+    write_view(folder, mesh_view(mesh))
+    return mesh
 
 
 def contact_on(study):
@@ -340,11 +365,13 @@ def cut_bolts(bolts):
     return {'faces': faces, 'volumes': volumes, 'cuts': cuts}
 
 
-def mesh_model(folder, size, finalize=True, relabel=None):
+def mesh_model(folder, size, finalize=True, relabel=None, saved_as=None):
     """Meshes the solids loaded in the current Gmsh model with quadratic
     tetrahedra and writes mesh.json, view.bin and part.msh to folder.
     `relabel` (from cut_bolts) names cut faces and volumes as before the
-    cut."""
+    cut. `saved_as` (mesh_part's key) is saved with the mesh so it can be
+    reused."""
+    (folder/'mesh.key.json').unlink(missing_ok=True)
     size_settings(size)
     emit('meshing', 'Generating tetrahedra with Gmsh')
     gmsh.model.mesh.generate(3)
@@ -404,5 +431,6 @@ def mesh_model(folder, size, finalize=True, relabel=None):
     (folder/'mesh.json').write_text(json.dumps(mesh))
     write_view(folder,mesh_view(mesh))
     gmsh.write(str(folder/'part.msh'))
+    if saved_as is not None: (folder/'mesh.key.json').write_text(json.dumps(saved_as))
     if finalize: gmsh.finalize()
     return mesh
