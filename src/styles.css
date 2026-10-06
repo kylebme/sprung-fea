@@ -344,11 +344,41 @@ svg {
 
 /* Face list */
 .faces {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
   min-height: 180px;
   border-top: 1px solid var(--line);
+}
+/* A height set with the splitter: the tree takes the rest. */
+.faces.sized {
+  flex: 0 0 auto;
+  min-height: 96px;
+}
+.pane.left:has(.faces.sized) .tree {
+  flex: 1 1 auto;
+}
+.splitter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  z-index: 2;
+  height: 7px;
+  cursor: row-resize;
+  touch-action: none;
+}
+.splitter:hover,
+.splitter:focus-visible,
+.splitter:active {
+  outline: none;
+  background: linear-gradient(
+    transparent 2px,
+    var(--accent) 2px,
+    var(--accent) 5px,
+    transparent 5px
+  );
 }
 .face-search {
   display: flex;

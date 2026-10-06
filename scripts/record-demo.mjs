@@ -28,7 +28,7 @@ const browser = await chromium.launch({
 });
 const ctx = await browser.newContext({
   viewport: null,
-  colorScheme: "dark",
+  colorScheme: "light",
   bypassCSP: true,
 });
 
@@ -115,13 +115,22 @@ const nextFrame = (page) =>
  * Finds a screen point well inside each requested face of the mounting
  * bracket in its opening view. The status bar names the face under the
  * cursor, so a coarse sweep finds each face and a fine one finds its middle.
+ * The inspector card covers the view's left edge throughout the demo (the
+ * view centres the part in the rest), so only the uncovered part is swept.
  */
 async function locateFaces(ids) {
   const page = await ctx.newPage();
   await page.goto(APP);
   await page.getByRole("button", { name: /^Mounting bracket.*Open$/ }).click();
   const status = page.locator("footer.status");
-  const box = await page.locator("canvas").boundingBox();
+  const canvas = await page.locator("canvas").boundingBox();
+  const card = await page.locator(".inspector").boundingBox();
+  const covered = card.x + card.width + 12 - canvas.x;
+  const box = {
+    ...canvas,
+    x: canvas.x + covered,
+    width: canvas.width - covered,
+  };
   const faceAt = async (x, y) => {
     await page.mouse.move(x, y);
     await nextFrame(page);
@@ -305,8 +314,10 @@ async function slide(loc, stops) {
   await page.mouse.up();
 }
 const btn = (name, o = {}) => page.getByRole("button", { name, ...o });
-async function solve(heading) {
-  await click(page.locator("header button.solve"), 100);
+/** Solves; `choice` answers the dialog a solve may ask first. */
+async function solve(heading, choice) {
+  await click(page.locator("header button.solve"), choice ? 700 : 100);
+  if (choice) await click(btn(choice, { exact: true }), 100);
   await page
     .getByRole("heading", { name: heading })
     .waitFor({ timeout: 90000 });
@@ -315,7 +326,7 @@ async function solve(heading) {
 await page.goto(APP);
 await page.evaluate(() => {
   localStorage.clear();
-  localStorage.setItem("sprung-fea-theme", "dark");
+  localStorage.setItem("sprung-fea-theme", "light");
 });
 await page.reload();
 await page.getByRole("button", { name: /^Mounting bracket.*Open$/ }).waitFor();
@@ -360,10 +371,11 @@ await wait(600);
 await drag(face[9][0] - 60, face[9][1] + 60, 90, -6, 60);
 await wait(1300);
 await click(btn("Iso", { exact: true }), 900);
-await click(btn("Displacement", { exact: true }), 600);
+const plotted = (name) => page.getByRole("radio", { name, exact: true });
+await click(plotted("Displacement"), 600);
 await click(btn("Magnified"), 1600);
 await clickAt(...face[9], 1600);
-await click(btn("Max principal stress", { exact: true }), 1200);
+await click(plotted("Max principal stress"), 1200);
 await click(page.getByRole("switch", { name: "Section" }), 500);
 const normal = page.getByRole("group", { name: "Section normal" });
 await click(normal.getByRole("button", { name: "Y", exact: true }), 400);
@@ -381,7 +393,8 @@ mark("natural-frequencies:start");
 await wait(600);
 await click(btn(/^Analysis/), 600);
 await click(insp.getByRole("button", { name: /^Natural frequencies/ }), 700);
-await solve("Mode shape");
+// The 500 N load is still in the study: vibration about the unloaded shape.
+await solve("Mode shape", "Ignore loads");
 await glide(1130, 300);
 await wait(3600);
 const modes = page.getByRole("table", { name: "Modes" }).locator("tbody tr");

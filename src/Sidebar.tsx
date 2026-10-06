@@ -1,4 +1,11 @@
-import { Fragment, type CSSProperties } from "react";
+import {
+  Fragment,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import {
   Activity,
   Anchor,
@@ -304,6 +311,61 @@ function contactSummary(part: Part, study: Study) {
   );
 }
 
+const FACES_HEIGHT = "sprung-fea-faces-height";
+
+/**
+ * The face list's height, set by dragging the splitter above it (or with
+ * the arrow keys) and kept on this computer. Null leaves the list the room
+ * the study tree doesn't need.
+ */
+function useFacesHeight() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | null>(() => {
+    try {
+      const saved = Number(localStorage.getItem(FACES_HEIGHT));
+      return saved > 0 ? saved : null;
+    } catch {
+      return null;
+    }
+  });
+  const resize = (next: number | null) => {
+    const pane = ref.current?.parentElement;
+    // Room for the Study header and a few tree rows above.
+    const max = pane ? pane.clientHeight - 150 : Infinity;
+    const value =
+      next === null ? null : Math.round(Math.max(96, Math.min(next, max)));
+    setHeight(value);
+    try {
+      if (value === null) localStorage.removeItem(FACES_HEIGHT);
+      else localStorage.setItem(FACES_HEIGHT, String(value));
+    } catch {}
+  };
+  const startResize = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !ref.current) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const start = { y: e.clientY, height: ref.current.offsetHeight };
+    handle.setPointerCapture(e.pointerId);
+    const move = (m: globalThis.PointerEvent) =>
+      resize(start.height - (m.clientY - start.y));
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
+  const resizeKeys = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === "ArrowUp" ? 24 : e.key === "ArrowDown" ? -24 : 0;
+    if (!step || !ref.current) return;
+    e.preventDefault();
+    resize(ref.current.offsetHeight + step);
+  };
+  return { ref, height, resize, startResize, resizeKeys };
+}
+
 export function FaceList({
   part,
   study,
@@ -340,6 +402,7 @@ export function FaceList({
   onHover: (id: number | null) => void;
 }) {
   const units = useUnits();
+  const { ref, height, resize, startResize, resizeKeys } = useFacesHeight();
   const use = new Map<number, { kind: ConditionKind; name: string }>();
   for (const kind of conditionKinds(study))
     for (const c of conditionsOf(study, kind))
@@ -384,7 +447,23 @@ export function FaceList({
     (f.id + " " + f.type).toLowerCase().includes(q),
   );
   return (
-    <div className="faces">
+    <div
+      className={"faces" + (height === null ? "" : " sized")}
+      ref={ref}
+      style={height === null ? undefined : { height }}
+    >
+      <div
+        className="splitter"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize face list"
+        aria-valuenow={height ?? undefined}
+        tabIndex={0}
+        title="Drag to resize. Double-click to reset."
+        onPointerDown={startResize}
+        onKeyDown={resizeKeys}
+        onDoubleClick={() => resize(null)}
+      />
       <div className="phead">
         Faces
         {grouped && hidden.length > 0 ? (
