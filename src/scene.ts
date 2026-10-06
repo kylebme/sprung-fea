@@ -599,9 +599,16 @@ export class Scene {
     const v = s.view;
     const hidden = new Set(s.hidden);
     const bodyOf = new Map(s.faces.map((f) => [f.id, f.body]));
+    const pairs = v.triangleBodies;
     const keep: number[] = [];
-    for (let i = 0; i < v.triangleFaces.length; i++)
-      if (!hidden.has(bodyOf.get(v.triangleFaces[i]) ?? -1)) keep.push(i);
+    for (let i = 0; i < v.triangleFaces.length; i++) {
+      // A shared face shows from its body's side once the other is hidden.
+      const visible = pairs
+        ? !hidden.has(pairs[i * 2]) &&
+          (pairs[i * 2 + 1] === 0 || hidden.has(pairs[i * 2 + 1]))
+        : !hidden.has(bodyOf.get(v.triangleFaces[i]) ?? -1);
+      if (visible) keep.push(i);
+    }
     this.shown = Int32Array.from(keep);
     const triangles = new Int32Array(keep.length * 3);
     keep.forEach((t, k) =>
@@ -820,8 +827,21 @@ export class Scene {
     const out = this.ta.toJSTypedArray(this.colors as any) as Uint8Array;
     const faces = s.view.triangleFaces;
     const fallback = rgb(colors.base).map((x) => Math.round(x * 255));
+    const pairs = s.view.triangleBodies;
+    const tints = new Map(
+      bodies.map((b, k) => [
+        b,
+        (bodies.length > 1
+          ? mix(rgb(colors.base), rgb(BODY_TINTS[k % BODY_TINTS.length]), 0.22)
+          : rgb(colors.base)
+        ).map((x) => Math.round(x * 255)),
+      ]),
+    );
     for (let i = 0; i < this.shown.length; i++) {
-      const c = byFace.get(faces[this.shown[i]]) || fallback;
+      const t = this.shown[i];
+      // Shared faces, shown where a body is hidden, take their body's tint.
+      const c =
+        byFace.get(faces[t]) || (pairs && tints.get(pairs[t * 2])) || fallback;
       out[i * 3] = c[0];
       out[i * 3 + 1] = c[1];
       out[i * 3 + 2] = c[2];
@@ -1477,9 +1497,10 @@ export class Scene {
     if (!this.picker.pick(this.display(e), this.renderer)) return null;
     if (this.picker.getActor()?.$id !== this.surfaceActor.$id) return null;
     const cell = this.picker.getCellId();
-    return cell >= 0 && cell < this.shown.length
-      ? (this.state!.view.triangleFaces[this.shown[cell]] ?? null)
-      : null;
+    if (cell < 0 || cell >= this.shown.length) return null;
+    // Only outer faces take conditions; shared faces are not picked.
+    const face = this.state!.view.triangleFaces[this.shown[cell]];
+    return this.state!.faces.some((f) => f.id === face) ? face : null;
   }
 
   /** Interpolated values at the picked point of the displayed result. */

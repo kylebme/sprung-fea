@@ -1,6 +1,6 @@
 // Arrays the viewer draws: the engine's binary view (mesh and nodal results)
 // or the setup triangulation. Only type imports, so Node can test it directly.
-import type { Surface } from "./types";
+import type { Interface, Surface } from "./types";
 import { toShown, unitLabel, type UnitSystem } from "./units.ts";
 
 /**
@@ -24,6 +24,12 @@ export type ViewData = {
   points: Float64Array;
   triangles: Int32Array;
   triangleFaces: Int32Array;
+  /**
+   * Per triangle, its body and the body behind it (0 for the outside).
+   * Faces two bodies share appear once per side, drawn only while the
+   * other body is hidden. Absent in results saved before it.
+   */
+  triangleBodies: Int32Array | null;
   tets: Int32Array | null;
   /** Each tetrahedron's body; absent in results saved before it. */
   tetBodies: Int32Array | null;
@@ -137,6 +143,7 @@ export function decodeView(buffer: ArrayBuffer): ViewData {
       points: arrays.points as Float64Array,
       triangles: arrays.triangles as Int32Array,
       triangleFaces: arrays.triangleFaces as Int32Array,
+      triangleBodies: (arrays.triangleBodies as Int32Array) || null,
       tets: (arrays.tets as Int32Array) || null,
       tetBodies: (arrays.tetBodies as Int32Array) || null,
       frames: Array.from(frames, (f) => f || {}),
@@ -157,6 +164,7 @@ const MESH = [
   "tetBodies",
   "triangles",
   "triangleFaces",
+  "triangleBodies",
 ];
 /** Frame arrays with three components per node; the rest are scalars. */
 const VECTORS = ["displacement", "force"];
@@ -170,6 +178,8 @@ function validate(v: ViewData) {
     !v.triangles ||
     v.triangles.length % 3 ||
     v.triangleFaces?.length !== v.triangles.length / 3 ||
+    (v.triangleBodies &&
+      v.triangleBodies.length !== (v.triangles.length / 3) * 2) ||
     !inRange(v.triangles) ||
     (v.tets && (v.tets.length % 10 || !inRange(v.tets))) ||
     (v.tetBodies && v.tetBodies.length * 10 !== v.tets?.length) ||
@@ -249,14 +259,36 @@ export function peak(view: ViewData, plot: Plot, yieldStrength: number | null) {
 }
 
 /** The setup triangulation, before any analysis mesh exists. */
-export function geometryView(surface: Surface): ViewData {
+export function geometryView(
+  surface: Surface & { interfaces?: Interface[] },
+): ViewData {
+  // Outer faces, then each shared face once per side.
+  const sides = [
+    ...surface.faces.map((f) => ({
+      id: f.id,
+      indices: f.indices,
+      bodies: [f.body ?? 0, 0],
+    })),
+    ...(surface.interfaces ?? []).flatMap((i) =>
+      [i.bodies, [i.bodies[1], i.bodies[0]]].map((bodies) => ({
+        id: i.id,
+        indices: i.indices ?? [],
+        bodies,
+      })),
+    ),
+  ];
   return {
     buffer: null,
     nodeIds: Int32Array.from(surface.nodeIds),
     points: Float64Array.from(surface.positions),
-    triangles: Int32Array.from(surface.faces.flatMap((f) => f.indices)),
+    triangles: Int32Array.from(sides.flatMap((f) => f.indices)),
     triangleFaces: Int32Array.from(
-      surface.faces.flatMap((f) => Array(f.indices.length / 3).fill(f.id)),
+      sides.flatMap((f) => Array(f.indices.length / 3).fill(f.id)),
+    ),
+    triangleBodies: Int32Array.from(
+      sides.flatMap((f) =>
+        Array.from({ length: f.indices.length / 3 }, () => f.bodies).flat(),
+      ),
     ),
     tets: null,
     tetBodies: null,
@@ -359,8 +391,11 @@ export function surfaceCsv(view: ViewData, system: UnitSystem = "si") {
       ),
     ].join(","),
   ];
+  // Nodes of the outer faces; shared faces are inside the part.
   const used = new Uint8Array(view.nodeIds.length);
-  for (const i of view.triangles) used[i] = 1;
+  view.triangles.forEach((i, k) => {
+    if (!view.triangleBodies?.[Math.floor(k / 3) * 2 + 1]) used[i] = 1;
+  });
   used.forEach((on, i) => {
     if (!on) return;
     const u = d ? Array.from(d.subarray(i * 3, i * 3 + 3)) : [];

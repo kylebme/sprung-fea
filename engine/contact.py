@@ -228,6 +228,8 @@ class Setup:
         faces=[f for _,_,fs,_,_ in self.contacts for f in fs]
         split=separate(mesh,faces) if faces else Split(mesh,{},{})
         mesh=split.mesh;self.sides=split.sides;self.copies=split.copies
+        # Each side of a contact shows when the other body is hidden.
+        mesh['contactSides']=split.sides
         self.sections=[]
         for b in self.bolts:
             cut=(mesh.get('cuts') or {}).get(str(b['id']))

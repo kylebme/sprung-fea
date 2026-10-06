@@ -41,6 +41,23 @@ class Assembly(unittest.TestCase):
             mass=next(c for c in result['checks'] if c['label']=='Mass')['values'][0]
             self.assertAlmostEqual(mass,.054,places=6)
 
+    def test_shared_faces_show_from_each_side(self):
+        # The view draws the face two bodies share once per side, so hiding
+        # either body leaves the other closed; outer faces face the outside.
+        temp,folder,geo=part('split-beam')
+        with temp:
+            shared=geo['interfaces'][0]
+            self.assertEqual(shared['bodies'],[1,2])
+            self.assertTrue(shared['indices'])
+            from cad import mesh_view
+            view=mesh_view(worker.mesh_part(folder,{'meshSize':5}))
+            faces=view['triangleFaces'][1];pairs=view['triangleBodies'][1]
+            inside=faces==shared['id']
+            self.assertTrue(np.all(pairs[~inside,1]==0))
+            sides=[tuple(p) for p in pairs[inside]]
+            self.assertEqual(sides.count((1,2)),sides.count((2,1)))
+            self.assertEqual(sides.count((1,2))*2,len(sides))
+
     def test_two_materials_stretch_like_springs_in_series(self):
         temp,folder,geo=part('split-beam')
         with temp:

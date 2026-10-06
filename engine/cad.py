@@ -103,15 +103,17 @@ def preview_settings(dims):
 
 
 def surface_data(quadratic=False):
-    """Nodes and the outer faces, each with its body. Bonded contact faces
-    are inside the assembly and are left out."""
+    """Nodes and the outer faces, each with its body, and the triangles of
+    faces two bodies share (`interfaces`: {id, indices}), which are inside
+    the assembly and show only when one of the bodies is hidden."""
     tags, coords, _ = gmsh.model.mesh.getNodes()
     coords = np.asarray(coords).reshape(-1, 3)
     node_index = {int(t): i for i, t in enumerate(tags)}
     faces = []
+    shared = []
     adjacency = topology()
     for _, tag in gmsh.model.getEntities(2):
-        if len(adjacency[tag]) != 1: continue
+        if len(adjacency[tag]) not in (1, 2): continue
         et, _, en = gmsh.model.mesh.getElements(2, tag)
         tris = []
         for typ, nodes in zip(et, en):
@@ -124,6 +126,9 @@ def surface_data(quadratic=False):
                         tris.extend(node_index[int(n[i])] for i in sub)
                 else:
                     raise ValueError('Unsupported surface element. Expected triangular faces.')
+        if len(adjacency[tag]) == 2:
+            shared.append({'id': tag, 'indices': tris})
+            continue
         # Anchor annotations on an actual surface point, including curved faces.
         center=np.asarray(gmsh.model.occ.getCenterOfMass(2,tag))
         triangles=np.asarray(tris).reshape(-1,3)
@@ -142,7 +147,7 @@ def surface_data(quadratic=False):
                 face.update(radius=radius, axis=[*point.tolist(), *axis.tolist()], extent=[lo, hi])
             except ValueError: pass
         faces.append(face)
-    return {'positions': coords.flatten().tolist(), 'nodeIds': [int(t) for t in tags], 'faces': faces}
+    return {'positions': coords.flatten().tolist(), 'nodeIds': [int(t) for t in tags], 'faces': faces, 'interfaces': shared}
 
 
 # Gmsh and VTK/Abaqus/CalculiX use opposite order for the last two midside
@@ -169,18 +174,32 @@ def write_view(folder, arrays):
 
 def mesh_view(mesh):
     """Points, VTK-ordered quadratic tetrahedra with their body, and
-    boundary triangles tagged with their CAD face. Indices refer to the
-    surface node order."""
+    triangles tagged with their CAD face: the outer faces, and the faces
+    bodies share. Indices refer to the surface node order."""
     surface=mesh['surface']
     tags=np.asarray(surface['nodeIds'])
     index=np.full(tags.max()+1,-1,np.int32);index[tags]=np.arange(len(tags))
     tets=index[np.asarray(mesh['elements'])][:,TET10_ORDER]
-    triangles=np.concatenate([np.asarray(f['indices'],np.int32) for f in surface['faces']])
-    faces=np.concatenate([np.full(len(f['indices'])//3,f['id'],np.int32) for f in surface['faces']])
     owner={e:int(b) for b,es in (mesh.get('bodies') or {}).items() for e in es}
     bodies=np.array([owner.get(e,0) for e in mesh['elementIds']],np.int32)
+    # Each triangle's body and the body behind it (0 for the outside).
+    # Faces two bodies share appear once per side, each drawn only while
+    # its body shows and the other is hidden: bonded faces share nodes,
+    # contact faces (contactSides) have each side's own.
+    sides=[(f['id'],f['indices'],int(f['body']),0) for f in surface['faces']]
+    split=[(int(t),{int(b):tris for b,tris in d.items()}) for t,d in (mesh.get('contactSides') or {}).items()]
+    shared=[(int(t),{b:d['triangles'] for b in d['bodies']}) for t,d in (mesh.get('interfaces') or {}).items()]
+    for tag,by in split+shared:
+        a,b=sorted(by)
+        for front,back in ((a,b),(b,a)):
+            quads=[index[n] for t in by[front] for i in (0,3,5,3,1,4,5,4,2,3,4,5) for n in [t[i]]]
+            sides.append((tag,quads,front,back))
+    triangles=np.array([i for _,ids,_,_ in sides for i in ids],np.int32).reshape(-1,3)
+    faces=np.concatenate([np.full(len(ids)//3,tag,np.int32) for tag,ids,_,_ in sides])
+    pairs=np.concatenate([np.tile([front,back],(len(ids)//3,1)) for _,ids,front,back in sides]).astype(np.int32)
     return {'nodeIds':('i4',surface['nodeIds']),'points':('f8',np.asarray(surface['positions']).reshape(-1,3)),
-            'tets':('i4',tets),'tetBodies':('i4',bodies),'triangles':('i4',triangles.reshape(-1,3)),'triangleFaces':('i4',faces)}
+            'tets':('i4',tets),'tetBodies':('i4',bodies),'triangles':('i4',triangles),'triangleFaces':('i4',faces),
+            'triangleBodies':('i4',pairs)}
 
 
 def mesh_info(mesh):
@@ -203,7 +222,9 @@ def import_part(folder):
     geometry = surface_data()
     adjacency = topology()
     body_list, components = bodies(solids, adjacency)
-    geometry.update({'bodies': body_list, 'components': components, 'interfaces': interfaces(adjacency),
+    indices = {i['id']: i['indices'] for i in geometry.pop('interfaces')}
+    geometry.update({'bodies': body_list, 'components': components,
+                     'interfaces': [{**i, 'indices': indices.get(i['id'], [])} for i in interfaces(adjacency)],
                      'bounds': list(bbox), 'dimensions': dims, 'volume': sum(b['volume'] for b in body_list),
                      'recommendedSize': default, 'hash': hashlib.sha256((folder/'part.step').read_bytes()).hexdigest(), 'units': 'mm'})
     (folder/'geometry.json').write_text(json.dumps(geometry))
@@ -342,6 +363,8 @@ def mesh_model(folder, size, finalize=True, relabel=None):
     volume_of = lambda v: relabel['volumes'].get(v, v)
     section = {t: bolt for bolt, (t, _) in relabel['cuts'].items()}
     surface = surface_data(True)
+    # The view draws interfaces from their quadratic triangles (mesh_view).
+    surface.pop('interfaces')
     # Pieces of a cut face show as the face they came from.
     merged = {}
     for f in surface['faces']:

@@ -40,6 +40,8 @@ export type Interface = {
   bodies: number[];
   area: number;
   center: number[];
+  /** Display triangles, into the surface positions. */
+  indices?: number[];
 };
 export type Material = {
   name: string;
