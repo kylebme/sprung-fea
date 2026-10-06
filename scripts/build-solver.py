@@ -24,6 +24,15 @@ SOURCES={
     'ccx':('https://www.dhondt.de/ccx_2.23.src.tar.bz2','9c88385c10fb04f5dc6c4e98027a51bebdd8aee3920e05190d6c1dd08357d6e7'),
     'spooles':('https://www.netlib.org/linalg/spooles/spooles.2.2.tgz','a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd'),
 }
+SPOOLES_PATCHES=(
+    '0000-transform-ivinit.patch',
+    '0001-MT-add-acquire-release-primitives-and-order-the-work.patch',
+    '0002-MT-order-the-frontIsDone-p_mtx-publication-in-the-so.patch',
+    '0003-MT-make-the-solve-s-three-inter-phase-barriers-actua.patch',
+    '0004-MT-stop-losing-updates-on-the-factor-s-entry-counter.patch',
+    '0005-MT-give-each-solve-thread-its-own-cpus-vector.patch',
+    '0006-I2Ohash-fix-int-overflow-in-the-bucket-index.patch',
+)
 # Electron's minimum macOS. Accelerate's LU is used where the OS has it.
 DEPLOYMENT_TARGET='12.0'
 jobs=str(os.cpu_count() or 4)
@@ -57,10 +66,25 @@ def tool(name):
     return found
 
 
+def spooles_patches():
+    """The thread fixes, in order. A missing one would still build a solver
+    that starts, but whose threaded solves give wrong answers, so refuse."""
+    folder=native/'spooles-patches'
+    found=sorted(folder.glob('*.patch'))
+    missing=[name for name in SPOOLES_PATCHES if not (folder/name).is_file()]
+    extra=[path.name for path in found if path.name not in SPOOLES_PATCHES]
+    if missing or extra:
+        sys.exit(f'{folder} does not hold the expected SPOOLES patches.'
+                 +(f'\nMissing: {", ".join(missing)}' if missing else '')
+                 +(f'\nUnexpected: {", ".join(extra)} (add them to SPOOLES_PATCHES)' if extra else ''))
+    return [folder/name for name in SPOOLES_PATCHES]
+
+
 def build_spooles():
+    patches=spooles_patches()
     source=work/'spooles';source.mkdir(parents=True)
     with tarfile.open(fetch('spooles')) as archive: archive.extractall(source)
-    for patch in sorted((native/'spooles-patches').glob('*.patch')):
+    for patch in patches:
         run('patch','-p1','--batch','--forward','-i',patch,cwd=source)
     # The library's file list names a file the distribution does not have.
     replace(source/'Tree'/'src'/'makeGlobalLib','drawTree.c','tree.c')
