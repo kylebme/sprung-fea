@@ -1,0 +1,3 @@
+Code aesthetics on a single line are a low priority. Functionality, correctness, and clean architecture are more important.
+Unit tests are a low priority and should be actively avoided unless the unit test tests a meaningful invariant or edge case.
+End to end and subsystem module tests should be used wherever possible. They should be structured to capture functionality even if underlying code changes.
