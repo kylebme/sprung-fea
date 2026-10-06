@@ -61,6 +61,26 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
   await page.getByRole("button", { name: "Checks", exact: true }).click();
   await expect(page.getByText("Force balance error")).toBeVisible();
   await page.getByRole("button", { name: "Output", exact: true }).click();
+  await expect(
+    page
+      .locator(".log-line")
+      .filter({ hasText: "Gmsh" })
+      .filter({
+        hasText:
+          process.platform === "win32" ? "Generating tetrahedra" : "Meshing 3D",
+      })
+      .first(),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator(".log-line")
+      .filter({ hasText: "CalculiX" })
+      .filter({ hasText: "Factoring the system" })
+      .first(),
+  ).toBeVisible();
+  await expect(
+    page.locator(".log-line").filter({ hasText: "Reading results" }).first(),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Checks", exact: true }).click();
   await page.getByRole("button", { name: "Hide console" }).click();
   await expect(

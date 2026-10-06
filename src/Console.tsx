@@ -9,7 +9,7 @@ export type LogEntry = {
   time: number;
   kind: string;
   text: string;
-  level?: "error" | "done";
+  level?: "error" | "warning" | "done";
 };
 export type Job = {
   id: string;

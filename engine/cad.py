@@ -4,8 +4,16 @@ import numpy as np
 import gmsh
 
 
-def emit(stage, message):
-    print(json.dumps({'stage': stage, 'message': message}), file=sys.stderr, flush=True)
+def emit(stage, message, source=None):
+    level='error' if '*ERROR' in message else 'warning' if '*WARNING' in message else None
+    print(json.dumps({'stage': stage, 'message': message, 'source': source, 'level': level}), file=sys.stderr, flush=True)
+
+
+def terminal_output():
+    # The worker redirects native stdout to its progress stream. Library
+    # callers keep quiet so Gmsh cannot contaminate their own stdout.
+    gmsh.option.setNumber('General.Terminal', int(os.environ.get('SPRUNG_FEA_PROGRESS')=='1'))
+    gmsh.option.setNumber('General.Verbosity', 5)
 
 
 def threads():
@@ -18,7 +26,7 @@ def initialize(step):
     # Start from an empty model, even after an earlier failure left one.
     if gmsh.isInitialized(): gmsh.finalize()
     gmsh.initialize()
-    gmsh.option.setNumber('General.Terminal', 0)
+    terminal_output()
     gmsh.option.setNumber('General.NumThreads', threads())
     gmsh.option.setString('Geometry.OCCTargetUnit', 'MM')
     gmsh.model.occ.importShapes(str(step))
@@ -189,7 +197,9 @@ def import_part(folder):
     thinnest = min(min(b[i+3]-b[i] for i in range(3)) for b in (gmsh.model.getBoundingBox(*s) for s in solids))
     default = max(thinnest / 2.5, max(dims) / 60)
     preview_settings(dims)
+    emit('importing', 'Triangulating the geometry for display')
     gmsh.model.mesh.generate(2)
+    emit('importing', 'Reading faces and bodies')
     geometry = surface_data()
     adjacency = topology()
     body_list, components = bodies(solids, adjacency)
@@ -315,9 +325,13 @@ def mesh_model(folder, size, finalize=True, relabel=None):
     `relabel` (from cut_bolts) names cut faces and volumes as before the
     cut."""
     size_settings(size)
+    emit('meshing', 'Generating tetrahedra with Gmsh')
     gmsh.model.mesh.generate(3)
+    emit('meshing', 'Adding quadratic midside nodes')
     gmsh.model.mesh.setOrder(2)
+    emit('meshing', 'Optimizing the quadratic mesh')
     gmsh.model.mesh.optimize('HighOrder')
+    emit('meshing', 'Checking mesh quality and preparing the viewer')
     types = list(gmsh.model.mesh.getElementTypes(3))
     if types != [11]:
         raise ValueError('This part did not produce a quadratic tetrahedral mesh.')

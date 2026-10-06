@@ -20,9 +20,12 @@ const request = async (base, url, body) => {
   if (!response.ok) throw Error(data.error);
   return data;
 };
-const wait = async (base, id) => {
+const wait = async (base, id, onEvents = () => {}) => {
+  let cursor = 0;
   for (let i = 0; i < 200; i++) {
-    const j = await request(base, "/api/jobs/" + id);
+    const j = await request(base, `/api/jobs/${id}?since=${cursor}`);
+    onEvents(j.events);
+    cursor = j.sequence;
     if (j.status === "done") return j.data;
     if (j.status === "error") throw Error(j.error);
     await new Promise((r) => setTimeout(r, 100));
@@ -128,7 +131,47 @@ test("STEP → portable project → reopen → real solve → export", async () 
       "/api/documents/" + opened.id + "/solve?threads=" + cpus.logical,
       study,
     );
-    const data = await wait(base, solving.job);
+    const events = [];
+    const data = await wait(base, solving.job, (batch) =>
+      events.push(...batch),
+    );
+    // Native output and milestones survive polling, even when multiple
+    // phases finish between polls. Completed jobs must drain their last batch.
+    assert.ok(
+      events.some((e) => e.message === "Generating tetrahedra with Gmsh"),
+    );
+    if (process.platform !== "win32")
+      assert.ok(
+        events.some((e) => e.source === "Gmsh" && /Meshing 3D/.test(e.message)),
+      );
+    assert.ok(
+      events.some(
+        (e) => e.source === "CalculiX" && /Solving the system/.test(e.message),
+      ),
+    );
+    const iterations = events.filter(
+      (e) => e.source === "CalculiX" && e.message.startsWith("iteration="),
+    );
+    assert.ok(iterations.length > 0);
+    assert.match(
+      iterations.at(-1).message,
+      new RegExp(`iteration=\\s*${data.result.iterations},`),
+    );
+    assert.equal(events.at(-1).message, "Reading results");
+    assert.deepEqual(
+      events.map((e) => e.sequence),
+      events.map((_, i) => i + 1),
+    );
+    const drained = await request(
+      base,
+      `/api/jobs/${solving.job}?since=${events.at(-1).sequence}`,
+    );
+    assert.deepEqual(drained.events, []);
+    const replay = await request(
+      base,
+      `/api/jobs/${solving.job}?since=${events[2].sequence}`,
+    );
+    assert.deepEqual(replay.events, events.slice(3));
     assert.equal(data.result.threads, cpus.logical);
     assert.ok(
       data.result.summary.maxMovement > 0.28 &&

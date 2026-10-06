@@ -133,6 +133,8 @@ export async function createServer({
       message: "Starting",
       started: Date.now(),
       document: path.basename(dir),
+      events: [],
+      sequence: 0,
     };
     jobs.set(id, job);
     const child = spawn(
@@ -163,22 +165,55 @@ export async function createServer({
     let out = "";
     let errors = "";
     let pending = "";
+    const progress = (line) => {
+      if (job.status !== "running") return;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        // Gmsh's native terminal output shares stderr with protocol events.
+        const native = line.match(/^(Info|Warning|Error)\s*:\s*(.*)$/);
+        if (!native) return;
+        event = {
+          stage: job.stage,
+          message: native[2],
+          source: "Gmsh",
+          level: native[1] === "Info" ? undefined : native[1].toLowerCase(),
+        };
+      }
+      if (
+        !event ||
+        typeof event.stage !== "string" ||
+        typeof event.message !== "string"
+      )
+        return;
+      job.stage = event.stage;
+      job.message = event.message.slice(0, 2000);
+      job.events.push({
+        sequence: ++job.sequence,
+        time: Date.now(),
+        stage: job.stage,
+        message: job.message,
+        source: event.source,
+        level: event.level,
+      });
+      // Bound history for long jobs; sequence numbers still grow so clients
+      // can drain messages exactly once, including a job's final batch.
+      if (job.events.length > 1000)
+        job.events.splice(0, job.events.length - 1000);
+    };
     child.stdin.end(JSON.stringify(study));
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       out += chunk;
     });
     child.stderr.on("data", (chunk) => {
-      errors += chunk;
+      errors = (errors + chunk).slice(-3000);
       pending += chunk;
       const lines = pending.split("\n");
       pending = lines.pop();
-      for (const line of lines) {
-        try {
-          const p = JSON.parse(line);
-          job.stage = p.stage;
-          job.message = p.message;
-        } catch {}
-      }
+      for (const line of lines) progress(line.trim());
     });
     child.on("error", (error) => {
       job.status = "error";
@@ -188,6 +223,7 @@ export async function createServer({
     child.on("close", (code) => {
       children.delete(child);
       if (job.status === "cancelled") return;
+      if (pending.trim()) progress(pending.trim());
       try {
         const response = JSON.parse(out.trim());
         if (!response.ok) throw new Error(response.error);
@@ -324,6 +360,8 @@ export async function createServer({
     const job = jobs.get(req.params.id);
     if (!job) return res.sendStatus(404);
     const { child, ...publicJob } = job;
+    const since = Number(req.query.since || 0);
+    publicJob.events = job.events.filter((event) => event.sequence > since);
     res.json(publicJob);
   });
   app.delete("/api/jobs/:id", (req, res) => {

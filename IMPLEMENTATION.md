@@ -178,7 +178,7 @@ Results at each frequency are complex. The displacement amplitude is √(|uₓ|�
 
 ### Solve and result decoding
 
-CalculiX runs as a native subprocess with no time limit; long jobs can be cancelled. Its output streams to `solver.log` rather than memory, because iterative solves log every iteration.
+CalculiX runs as a native subprocess with no time limit; long jobs can be cancelled. Its complete output streams to `solver.log`, because iterative solves log every iteration. The Output console also receives native Gmsh messages and CalculiX solver stages, increments, and residuals while the job runs. Iterative residual updates are sampled at most twice per second, with the final residual always included. On macOS/Linux a pseudo-terminal keeps CalculiX's C output line buffered; Windows uses a pipe, with Fortran terminal output unbuffered (C messages may arrive in batches). On macOS/Linux Gmsh native stdout is redirected to the worker's stderr progress stream; Windows reports explicit meshing phase messages and leaves native Gmsh terminal output disabled to preserve the JSON protocol across C runtimes. Stdout remains reserved for the final JSON result. The service retains the latest 1,000 timestamped events per job with sequence numbers; the renderer requests events after its cursor and drains the final batch even when the job has already finished. The console keeps the latest 1,000 entries. Gmsh's percentages describe individual meshing phases, not overall job completion, and CalculiX has no universal completion percentage for these analysis types, so the job card keeps an indeterminate bar.
 
 The study chooses the linear equation solver, written to the deck as `*STATIC, SOLVER=…`:
 

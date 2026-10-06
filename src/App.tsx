@@ -291,7 +291,7 @@ export default function App() {
   }, [notice]);
 
   const write = (kind: string, text: string, level?: LogEntry["level"]) =>
-    setLog((l) => [...l.slice(-299), { time: Date.now(), kind, text, level }]);
+    setLog((l) => [...l.slice(-999), { time: Date.now(), kind, text, level }]);
   const fail = (title: string, e: unknown) => {
     const message = e instanceof Error ? e.message : String(e);
     setError({ title, message });
@@ -344,16 +344,31 @@ export default function App() {
 
   const poll = async (id: string, stage: string) => {
     active.current = id;
-    let last = "";
+    let cursor = 0;
     setJob({ id, stage, message: "Starting", started: Date.now() });
     for (;;) {
       await new Promise((r) => setTimeout(r, 350));
       if (active.current !== id) return null;
-      const j = await api("/jobs/" + id);
-      if (j.status === "running" && j.message !== last) {
-        last = j.message;
-        write(STAGES[j.stage] || j.stage, j.message);
+      const j = await api(`/jobs/${id}?since=${cursor}`);
+      if (active.current !== id) return null;
+      if (j.events?.length) {
+        const entries: LogEntry[] = j.events.map(
+          (event: {
+            time: number;
+            stage: string;
+            message: string;
+            source?: string;
+            level?: LogEntry["level"];
+          }) => ({
+            time: event.time,
+            kind: event.source || STAGES[event.stage] || event.stage,
+            text: event.message,
+            level: event.level,
+          }),
+        );
+        setLog((current) => [...current, ...entries].slice(-1000));
       }
+      cursor = j.sequence ?? cursor;
       setJob((current) =>
         current?.id === id
           ? { ...current, stage: j.stage, message: j.message }

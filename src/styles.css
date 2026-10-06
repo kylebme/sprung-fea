@@ -733,6 +733,10 @@ svg {
 .log-line.done .m {
   color: var(--support);
 }
+.log-line.warning .k,
+.log-line.warning .m {
+  color: var(--load);
+}
 .check-row {
   display: flex;
   justify-content: space-between;

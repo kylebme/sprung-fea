@@ -3,7 +3,7 @@
 Modules: cad (STEP import, meshing, view file), model (validation and loads,
 solver-independent), calculix (solver adapter), analyses (analysis types and
 the result schema)."""
-import sys, json
+import sys, json, os
 from pathlib import Path
 import gmsh
 from cad import (emit, threads, initialize, surface_data, write_view, mesh_view,
@@ -25,6 +25,16 @@ FIELDS=('displacements','stress','movement')
 
 
 def main():
+    # Gmsh writes through native stdio, so POSIX needs a file descriptor
+    # redirect, not just a Python stdout redirect. Keep result JSON separate.
+    # Windows DLLs can use different C runtimes: keep native Gmsh output
+    # disabled there and report our explicit meshing phases instead.
+    result_stream=sys.stdout
+    if os.name=='posix':
+        sys.stdout.flush()
+        result_stream=os.fdopen(os.dup(sys.stdout.fileno()),'w')
+        os.dup2(sys.stderr.fileno(),sys.stdout.fileno())
+    os.environ['SPRUNG_FEA_PROGRESS']='1' if os.name=='posix' else '0'
     command=sys.argv[1]; folder=Path(sys.argv[2]).resolve()
     payload=json.loads(sys.stdin.read() or '{}')
     try:
@@ -43,10 +53,10 @@ def main():
             mesh,solved,geometry=submodel(folder,payload['study'],payload['region'])
             result={'mesh':mesh_info(mesh),'result':{k:v for k,v in solved.items() if k not in FIELDS},'geometry':geometry}
         else: raise ValueError('Unknown worker command.')
-        print(json.dumps({'ok':True,'data':result}))
+        print(json.dumps({'ok':True,'data':result}),file=result_stream,flush=True)
     except Exception as error:
         if gmsh.isInitialized(): gmsh.finalize()
-        print(json.dumps({'ok':False,'error':str(error)}))
+        print(json.dumps({'ok':False,'error':str(error)}),file=result_stream,flush=True)
         sys.exit(1)
 
 if __name__=='__main__': main()

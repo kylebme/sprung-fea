@@ -10,7 +10,7 @@ import json, math, shutil, time
 import numpy as np
 import gmsh
 import calculix
-from cad import emit, threads, mesh_model, write_view, mesh_view
+from cad import emit, threads, terminal_output, mesh_model, write_view, mesh_view
 from model import Model, finite, vector, fixed_dofs, build_loads, check_masses
 from analyses import SCHEMA, von_mises, nodal, mass_check, write_result_view, measures, STRESS_FIELDS
 
@@ -35,7 +35,7 @@ def cut(step, lo, hi):
     """Loads the part and replaces it with its intersection with the box."""
     if gmsh.isInitialized(): gmsh.finalize()
     gmsh.initialize()
-    gmsh.option.setNumber('General.Terminal',0)
+    terminal_output()
     gmsh.option.setNumber('General.NumThreads',threads())
     gmsh.option.setString('Geometry.OCCTargetUnit','MM')
     gmsh.model.occ.importShapes(str(step))

@@ -1,9 +1,9 @@
 """CalculiX adapter: equation solvers, execution, and reading its output files."""
-import os, re, shutil, subprocess
+import os, re, shutil, subprocess, errno, time
 import numpy as np
 from collections import deque
 from pathlib import Path
-from cad import threads
+from cad import threads, emit
 
 # CalculiX linear equation solvers available in the bundled build. PARDISO
 # and PaStiX need libraries this build does not link.
@@ -59,16 +59,57 @@ def run(folder, name='analysis'):
     n=str(threads())
     env={k:v for k,v in os.environ.items() if not k.startswith('CCX_NPROC')}
     env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS='1',OPENBLAS_NUM_THREADS='1',
+               GFORTRAN_UNBUFFERED_PRECONNECTED='1',
                CCX_NPROC_RESULTS=n,CCX_NPROC_STIFFNESS=n,CCX_NPROC_EQUATION_SOLVER=n)
     # No time limit: large models can solve for a long time, and the user can
     # cancel the job.
     log_path=folder/'solver.log'
-    # Stream through a pipe: written straight to a file, CalculiX loses its
-    # last buffered lines (the error message) when it exits with an error.
+    # A terminal makes native C stdout line buffered on macOS/Linux: a pipe
+    # otherwise holds stage messages until a buffer fills or the solve ends.
+    # Windows uses a pipe; Fortran output is unbuffered through the env above.
+    master=slave=None
     with open(log_path,'w') as log:
-        process=subprocess.Popen([find_ccx(),'-i',name],cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,text=True)
-        for line in process.stdout: log.write(line)
-        process.wait()
+        if os.name=='posix': master,slave=os.openpty()
+        try:
+            process=subprocess.Popen([find_ccx(),'-i',name],cwd=folder,stdin=subprocess.DEVNULL,
+                                     stdout=slave if slave is not None else subprocess.PIPE,
+                                     stderr=subprocess.STDOUT,env=env,text=True,errors='replace')
+        except BaseException:
+            if master is not None: os.close(master)
+            raise
+        finally:
+            if slave is not None: os.close(slave)
+        stream=os.fdopen(master,'r',errors='replace') if master is not None else process.stdout
+        reporting=False;last_iteration=None;sent_iteration=None;last_update=-float('inf')
+        try:
+            with stream:
+                while True:
+                    try: line=stream.readline()
+                    except OSError as error:
+                        # Linux PTYs end with EIO instead of an empty read.
+                        if master is not None and error.errno==errno.EIO: break
+                        raise
+                    if not line: break
+                    log.write(line)
+                    message=line.strip()
+                    if not message or not message.strip('_*=- '): continue
+                    if message.startswith('STEP') or '*ERROR' in message or '*WARNING' in message:
+                        reporting=True
+                    if message.startswith('iteration='):
+                        last_iteration=message
+                        if time.monotonic()-last_update<.5: continue
+                        last_update=time.monotonic();sent_iteration=message
+                    elif last_iteration!=sent_iteration:
+                        emit('solving',last_iteration,'CalculiX')
+                        sent_iteration=last_iteration
+                    if reporting or message.startswith('CalculiX Version'):
+                        emit('solving',message,'CalculiX')
+                if last_iteration!=sent_iteration:
+                    emit('solving',last_iteration,'CalculiX')
+            process.wait()
+        finally:
+            if process.poll() is None:
+                process.terminate();process.wait()
     error,tail,iterative=read_log(log_path)
     if process.returncode != 0 or error or not (folder/f'{name}.frd').exists():
         raise ValueError(failure(tail)+'\n'+tail[-2500:])
