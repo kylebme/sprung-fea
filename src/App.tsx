@@ -49,6 +49,11 @@ import {
   blankMass,
   blankSupport,
   blankThermal,
+  blankBolt,
+  contactActive,
+  contactPairs,
+  boltCandidates,
+  DEFAULT_FRICTION,
   isBodyLoad,
   stripExt,
 } from "./labels";
@@ -59,6 +64,7 @@ import {
   AnalysisPanel,
   ConditionEditor,
   ConditionsPanel,
+  ContactsPanel,
   MaterialPanel,
   MeshPanel,
   PartPanel,
@@ -175,6 +181,13 @@ export default function App() {
     [probe, setProbe] = useState<Probe | null>(null),
     [filters, setFilters] = useState<Filters | null>(null),
     [sectionCut, setSectionCut] = useState<SectionCut | null>(null),
+    // Bodies hidden from the view, and a face's right-click menu.
+    [hidden, setHidden] = useState<number[]>([]),
+    [menu, setMenu] = useState<{
+      face: number;
+      x: number;
+      y: number;
+    } | null>(null),
     [query, setQuery] = useState(""),
     [comparison, setComparison] = useState<Comparison | null>(null),
     [recovery, setRecovery] = useState<Recovery | null>(null),
@@ -393,12 +406,16 @@ export default function App() {
       );
     }
     // Load steps of a large-deformation solve: show full load, true scale.
-    const steps = r.charts.some((c) => c.id === "loadPath");
-    if (steps) {
+    const path = r.charts.find((c) => c.id === "loadPath");
+    const steps = !!path || (r.analysis === "static" && r.frames.length > 1);
+    if (path) {
       // Full load: the last step at the highest load, before any unloading.
-      const loads = r.charts.find((c) => c.id === "loadPath")!.x.values;
-      setFrame(loads.lastIndexOf(Math.max(...loads)));
-    }
+      const loads = path.x.values;
+      const k = loads.lastIndexOf(Math.max(...loads));
+      setFrame(path.frames ? path.frames[k] : k);
+    } else if (r.analysis === "static" && r.frames.length > 1)
+      // Only tightening bolts: show them tightened.
+      setFrame(r.frames.length - 1);
     // Temperatures over time: open at the end.
     if (r.charts.some((c) => c.id === "history")) setFrame(r.frames.length - 1);
     setDeform(eigen || harmonic ? "auto" : steps ? "true" : "off");
@@ -421,6 +438,7 @@ export default function App() {
         meshSize: geometry.recommendedSize,
       };
       setPart({ id: info.id, name: info.name, geometry, sample: info.sample });
+      setHidden([]);
       setFilters(defaultFilters(geometry));
       setHist(history(hist, { type: "reset", study: nextStudy }));
       setMesh(null);
@@ -569,8 +587,10 @@ export default function App() {
       ? "Thermal expansion"
       : null,
     needs.supports && !study.supports.length ? "Support" : null,
+    // Bolts load a part on their own.
     needs.loads === true &&
     !(study.analysis === "harmonic" && study.harmonic?.excitation === "base") &&
+    !(contactActive(study) && study.bolts?.length) &&
     !study.loads.length
       ? "Load"
       : null,
@@ -741,6 +761,18 @@ export default function App() {
       s.includes(id) ? s.filter((f) => f !== id) : [...s, id],
     );
   };
+  /** Selects every face of a body, or clears them if all are selected. */
+  const selectBody = (body: number) => {
+    if (job || !draft || !part) return;
+    const own = part.geometry.faces
+      .filter((f) => f.body === body)
+      .map((f) => f.id);
+    setSelected((s) =>
+      own.every((id) => s.includes(id))
+        ? s.filter((id) => !own.includes(id))
+        : [...s, ...own.filter((id) => !s.includes(id))],
+    );
+  };
   const chooseSection = (s: Section) => {
     if (job) return;
     setSection(s);
@@ -762,7 +794,9 @@ export default function App() {
           ? { kind, value: blankLoad() }
           : kind === "thermal"
             ? { kind, value: blankThermal() }
-            : { kind, value: blankMass(center.selection || center.part) },
+            : kind === "bolt"
+              ? { kind, value: blankBolt() }
+              : { kind, value: blankMass(center.selection || center.part) },
     );
   };
   const remove = (kind: ConditionKind, id: string) => {
@@ -812,6 +846,35 @@ export default function App() {
     const loaded = faces.reduce((a, b) =>
       a.center[axis] > b.center[axis] ? a : b,
     );
+    if (part.sample === "bolted-joint") {
+      // A lap joint: hold one plate's end, pull the other's sideways. The
+      // bolt clamps the plates, and friction carries the pull.
+      const shank = faces
+        .filter((f) => f.radius)
+        .reduce((a, b) => (a.radius! < b.radius! ? a : b));
+      update({
+        ...study,
+        analysis: "static",
+        material: structuredClone(MATERIALS[1]),
+        supports: [{ ...blankSupport(), faces: [held.id] }],
+        loads: [{ ...blankLoad(), faces: [loaded.id], vector: [3000, 0, 0] }],
+        contact: true,
+        contacts: contactPairs(part.geometry).map((p) => ({
+          id: p.id,
+          kind: "frictional",
+          friction: DEFAULT_FRICTION,
+        })),
+        bolts: [
+          { ...blankBolt(), name: "Bolt", faces: [shank.id], preload: 20000 },
+        ],
+      });
+      setSection("mesh");
+      setSelected([]);
+      announce(
+        `Example setup: ${MATERIALS[1].name}, Face ${held.id} fixed, ${quantity(3000, "N", units)} sideways on Face ${loaded.id}, bolt tightened to ${quantity(20000, "N", units)}, frictional contact`,
+      );
+      return;
+    }
     update({
       ...study,
       material: structuredClone(MATERIALS[0]),
@@ -841,6 +904,7 @@ export default function App() {
       masses: a.mechanical ? s.masses : [],
       loads: a.loads ? s.loads : [],
       thermal: a.thermal ? s.thermal : [],
+      bolts: contactActive(s) ? s.bolts : [],
     };
   }, [study, draft, selected]);
   const selectedFaces =
@@ -1028,6 +1092,24 @@ export default function App() {
             (c) => c.id === draft.value.id,
           )}
           selected={selected}
+          selectedFaces={selectedFaces}
+          boltCandidates={boltCandidates(part.geometry)
+            .filter(
+              (c) =>
+                // Not already another bolt.
+                !(study.bolts ?? []).some(
+                  (b) =>
+                    b.id !== draft.value.id &&
+                    b.faces.some((f) => c.faces.includes(f)),
+                ),
+            )
+            .map((c) => ({
+              ...c,
+              name:
+                part.geometry.bodies?.find((b) => b.id === c.body)?.name ??
+                `Body ${c.body}`,
+            }))}
+          onPick={setSelected}
           selectedArea={selectedArea}
           center={center}
           onChange={(changes) =>
@@ -1054,6 +1136,7 @@ export default function App() {
         return (
           <AnalysisPanel
             study={study}
+            touching={!!part.geometry.interfaces?.length}
             onChange={(next) => {
               update(next);
               if (next.analysis !== study.analysis)
@@ -1074,9 +1157,25 @@ export default function App() {
             onBodies={(bodyMaterials) => update({ ...study, bodyMaterials })}
           />
         );
+      case "contacts":
+        return (
+          <ContactsPanel
+            part={part}
+            study={study}
+            onChange={update}
+            onShow={(bodies) =>
+              setSelected(
+                part.geometry.faces
+                  .filter((f) => bodies.includes(f.body ?? 0))
+                  .map((f) => f.id),
+              )
+            }
+          />
+        );
       case "supports":
       case "loads":
       case "masses":
+      case "bolts":
       case "thermal": {
         const kind = (
           {
@@ -1084,6 +1183,7 @@ export default function App() {
             loads: "load",
             masses: "mass",
             thermal: "thermal",
+            bolts: "bolt",
           } as const
         )[section];
         return (
@@ -1370,6 +1470,10 @@ export default function App() {
                 onQuery={setQuery}
                 onSelect={selectFace}
                 onHover={setHover}
+                busy={!!job}
+                hidden={hidden}
+                onHidden={setHidden}
+                onSelectBody={selectBody}
               />
             </aside>
 
@@ -1406,7 +1510,23 @@ export default function App() {
                   draftKind={draft?.kind || null}
                   marginMax={marginMax}
                   yieldStrength={yieldStrength}
+                  hidden={regionShown ? [] : hidden}
+                  onContext={(face, at) =>
+                    (part.geometry.bodies?.length ?? 1) > 1 &&
+                    setMenu({ face, ...at })
+                  }
                 />
+                {menu && (
+                  <BodyMenu
+                    {...menu}
+                    part={part}
+                    hidden={hidden}
+                    canSelect={!!draft && !job}
+                    onHidden={setHidden}
+                    onSelectBody={selectBody}
+                    onClose={() => setMenu(null)}
+                  />
+                )}
                 <div className="vlabel">
                   {showingResult ? (
                     <>
@@ -1686,5 +1806,88 @@ function PreloadDialog({
         </footer>
       </div>
     </dialog>
+  );
+}
+
+/**
+ * A face's right-click menu: hide its body, isolate it, show every body,
+ * or pick all its faces while a condition is edited.
+ */
+function BodyMenu({
+  face,
+  x,
+  y,
+  part,
+  hidden,
+  canSelect,
+  onHidden,
+  onSelectBody,
+  onClose,
+}: {
+  face: number;
+  x: number;
+  y: number;
+  part: Part;
+  hidden: number[];
+  canSelect: boolean;
+  onHidden: (bodies: number[]) => void;
+  onSelectBody: (body: number) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const bodies = part.geometry.bodies ?? [];
+  const body = part.geometry.faces.find((f) => f.id === face)?.body;
+  const name = bodies.find((b) => b.id === body)?.name ?? "this body";
+  useEffect(() => {
+    ref.current?.querySelector("button")?.focus();
+    const away = (e: PointerEvent) =>
+      !ref.current?.contains(e.target as Node) && onClose();
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [onClose]);
+  if (body === undefined) return null;
+  const act = (f: () => void) => () => {
+    f();
+    onClose();
+  };
+  return (
+    <div
+      className="body-menu"
+      role="menu"
+      aria-label={`Face ${face}, ${name}`}
+      ref={ref}
+      style={{ left: x, top: y }}
+    >
+      <button role="menuitem" onClick={act(() => onHidden([...hidden, body]))}>
+        Hide {name}
+      </button>
+      <button
+        role="menuitem"
+        onClick={act(() =>
+          onHidden(bodies.filter((b) => b.id !== body).map((b) => b.id)),
+        )}
+      >
+        Isolate {name}
+      </button>
+      {hidden.length > 0 && (
+        <button role="menuitem" onClick={act(() => onHidden([]))}>
+          Show all bodies
+        </button>
+      )}
+      {canSelect && (
+        <button role="menuitem" onClick={act(() => onSelectBody(body))}>
+          Select all faces of {name}
+        </button>
+      )}
+    </div>
   );
 }

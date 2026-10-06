@@ -11,8 +11,9 @@ test("bonded assembly: open the post on plate, give the post its own material, s
     page.getByRole("heading", { name: "Post on plate" }),
   ).toBeVisible();
   await expect(inspector(page)).toContainText("bonded where they touch");
-  // Faces say which body they belong to.
-  await expect(page.locator(".face-row").first()).toContainText("Body");
+  // Faces are listed under the body they belong to.
+  await expect(page.locator(".body-row")).toHaveCount(2);
+  await expect(page.locator(".body-row").first()).toContainText("Body 1");
   await page.getByRole("button", { name: "Use example setup" }).click();
   await page.getByRole("button", { name: /^Material/ }).click();
   await inspector(page)

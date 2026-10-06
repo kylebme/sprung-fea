@@ -11,6 +11,12 @@ export type Face = {
   indices: number[];
   /** The body this face belongs to. */
   body?: number;
+  /** Cylindrical faces: their radius, mm. */
+  radius?: number;
+  /** Cylindrical faces: a point on the axis and its unit direction. */
+  axis?: number[];
+  /** Cylindrical faces: lowest and highest position along the axis. */
+  extent?: number[];
 };
 export type Surface = { positions: number[]; nodeIds: number[]; faces: Face[] };
 /** A solid of the STEP file. Touching bodies are bonded. */
@@ -20,12 +26,20 @@ export type Geometry = Surface & {
   bodies?: Body[];
   /** Groups of bonded bodies, by body id. */
   components?: number[][];
+  /** Faces where two bodies touch: bonded, or given contact by a study. */
+  interfaces?: Interface[];
   bounds: number[];
   dimensions: number[];
   volume: number;
   recommendedSize: number;
   hash: string;
   units: string;
+};
+export type Interface = {
+  id: number;
+  bodies: number[];
+  area: number;
+  center: number[];
 };
 export type Material = {
   name: string;
@@ -128,9 +142,31 @@ export type ThermalCondition = {
   value: number;
   ambient?: number;
 };
+/**
+ * How a pair of touching bodies interacts where they touch. `id` names the
+ * pair ("1-2", lower body first). Frictional contact uses `friction`, the
+ * coefficient of friction.
+ */
+export type ContactKind = "bonded" | "frictional" | "frictionless";
+export type Contact = {
+  id: string;
+  kind: ContactKind;
+  friction?: number;
+};
+/**
+ * A bolt tightened to `preload` (N) before the loads act. `faces` are its
+ * shank: cylindrical faces of the bolt body, cut halfway along for the
+ * pretension section.
+ */
+export type Bolt = {
+  id: string;
+  name: string;
+  faces: number[];
+  preload: number;
+};
 /** Conditions applied to faces, edited through drafts. */
-export type ConditionKind = "support" | "load" | "mass" | "thermal";
-export type Condition = Support | Load | PointMass | ThermalCondition;
+export type ConditionKind = "support" | "load" | "mass" | "thermal" | "bolt";
+export type Condition = Support | Load | PointMass | ThermalCondition | Bolt;
 /** CalculiX equation solver: direct SPOOLES or preconditioned conjugate gradients. */
 export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
 /**
@@ -178,6 +214,16 @@ export type Study = {
   harmonic?: Harmonic;
   /** Static studies: follow the deformed shape (geometric nonlinearity). */
   largeDeformation?: boolean;
+  /**
+   * Static assemblies: let touching bodies separate and slide (`contacts`)
+   * and tighten bolts (`bolts`). Off, every touching body is bonded.
+   */
+  contact?: boolean;
+  /** How touching body pairs interact; pairs not listed stay bonded. */
+  contacts?: Contact[];
+  /** Multiplies the default contact stiffness (penalty). */
+  contactStiffness?: number;
+  bolts?: Bolt[];
   /** Static studies: let the material yield (bilinear hardening). */
   plasticity?: boolean;
   /** With plasticity: remove the loads afterwards, to show permanent set. */
@@ -223,6 +269,8 @@ export type Chart = {
   title: string;
   x: { label: string; unit: string; values: number[] };
   series: { label: string; unit: string; values: number[] }[];
+  /** The result frame of each point, when points pick frames. */
+  frames?: number[];
 };
 /** A mesh convergence study: one row per mesh, one verdict per quantity. */
 export type Convergence = {
@@ -299,7 +347,7 @@ export type Part = {
   id: string;
   name: string;
   geometry: Geometry;
-  sample?: "beam" | "bracket" | "post-plate";
+  sample?: "beam" | "bracket" | "post-plate" | "bolted-joint";
 };
 export type Axis = 0 | 1 | 2;
 /**

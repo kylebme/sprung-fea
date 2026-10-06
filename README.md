@@ -21,7 +21,7 @@ It is free software (GPL-3.0) for macOS, Windows and Linux.
 | **Thermal stress** | The stress and deflection caused by thermal expansion pushing against the supports, together with any mechanical loads. |
 | **Harmonic response** | How much the part vibrates when loads or its mounting shake it across a range of frequencies: where the resonances are and the stress they cause. |
 
-Parts can be a single solid or an assembly. If a STEP file has several bodies, they are bonded where their faces touch, and each body can have its own material.
+Parts can be a single solid or an assembly. If a STEP file has several bodies, they are bonded where their faces touch, and each body can have its own material. In a static study you can turn on **Contact and bolts**: touching bodies can then separate and slide (frictional or frictionless), and bolts are tightened to a preload before the loads act. Results show each bolt's force and the force, state and pressure of each contact. The **Bolted joint** example on the start screen is set up this way.
 
 ## Looking at results
 
@@ -56,7 +56,7 @@ The **Examples** on the start screen (a cantilever beam, the mounting bracket fr
 1. **Import a part.** Use **Import STEP…** or drop a `.step` / `.stp` file onto the window. Check the size shown in the inspector against your CAD model: STEP units are converted to millimetres on import.
 2. **Choose the analysis.** Linear static is the default. Pick another under **Analysis** in the study tree.
 3. **Set the material.** Choose a preset (aluminum 6061-T6, structural steel, stainless 304, titanium Ti-6Al-4V) or type in the values from your material's datasheet. The presets are typical values, not a specification.
-4. **Add supports.** Click faces in the 3D view or the face list. **Fixed** holds a face completely; **Directional** blocks only the X, Y or Z directions you choose; **Frictionless** lets a face slide along itself, at any angle; **Cylindrical** holds a hole or shaft radially, around or along its axis, like a pin. The study needs enough support to stop the part from sliding or spinning freely, and Sprung FEA tells you if it doesn't.
+4. **Add supports.** Click faces in the 3D view or the face list. In an assembly the face list is grouped by body: hide a body, isolate it, or take all its faces at once, and right-click a face in the view for the same choices. Faces being picked show through the bodies in front of them, and each condition's name is pinned where it acts. When adding a bolt, the bolts found in the part are offered. **Fixed** holds a face completely; **Directional** blocks only the X, Y or Z directions you choose; **Frictionless** lets a face slide along itself, at any angle; **Cylindrical** holds a hole or shaft radially, around or along its axis, like a pin. The study needs enough support to stop the part from sliding or spinning freely, and Sprung FEA tells you if it doesn't.
 5. **Add loads.**
    - **Force** is one total force shared across all the selected faces.
    - **Pressure** acts normal to the faces; positive pushes inward.
@@ -99,7 +99,7 @@ Sprung FEA 0.1 uses ten-node tetrahedral solid elements and assumes:
 - Isotropic materials. Plasticity, when turned on, follows a straight line from yield to ultimate strength, or the stress–strain points you enter. Heat transfer and thermal stress can use properties that change with temperature.
 - Slowly applied loads.
 - Small deflections unless **Large deformation** is on.
-- Bodies in an assembly are bonded. There is no sliding or separating contact.
+- Bodies in an assembly are bonded unless contact is turned on. Contact works between faces that touch in the CAD model, not across gaps.
 
 It does not do shells or beams, fatigue, or transient dynamics. Stresses right at sharp internal corners and at the edges of supports are often higher than the real part would see. Use the convergence study, and judge those spots with care.
 

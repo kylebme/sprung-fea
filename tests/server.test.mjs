@@ -389,6 +389,10 @@ test("recovery on disk, error statuses, and document pruning", async () => {
       { preload: "yes" },
       { material: { ...aluminum, hardening: [[5]] } },
       { material: { ...aluminum, byTemperature: [{ young: 1 }] } },
+      { contact: "on" },
+      { contacts: [{ id: "1-2", kind: "glued" }] },
+      { contacts: [{ id: "1-2", kind: "frictional", friction: 3 }] },
+      { bolts: [{ id: "b", name: "Bolt", faces: [2], preload: 0 }] },
     ]) {
       const response = await post(`/api/documents/${imported.id}/solve`, {
         ...valid,

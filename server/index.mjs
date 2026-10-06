@@ -233,6 +233,7 @@ export async function createServer({
       beam: "Cantilever beam.step",
       bracket: "Mounting bracket.step",
       "post-plate": "Post on plate.step",
+      "bolted-joint": "Bolted joint.step",
     };
     if (!samples[req.params.name]) return res.sendStatus(404);
     const id = randomUUID();
@@ -283,7 +284,7 @@ export async function createServer({
       document: id,
       name,
       study,
-      sample: ["beam", "bracket", "post-plate"].includes(sample)
+      sample: ["beam", "bracket", "post-plate", "bolted-joint"].includes(sample)
         ? sample
         : undefined,
       at: Date.now(),

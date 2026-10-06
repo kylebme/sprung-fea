@@ -18,9 +18,9 @@ Result schema (version 2), shared by every analysis:
 Frame k > 0 stores its arrays in view.bin as `name@k`."""
 import json, math, time
 import numpy as np
-import calculix
+import calculix, contact
 from cad import emit, threads, mesh_view, write_view
-from model import Model, finite, validate, build_loads, validate_vibration, rbe3
+from model import Model, finite, validate, build_loads, validate_vibration, rbe3, fixed_dofs
 
 SCHEMA=2
 
@@ -84,11 +84,13 @@ def mass_check(study, model):
     return {'label':label,'values':[part+extra],'unit':'kg','digits':4}
 
 
-def static_checks(frame, held, loading):
+def static_checks(frame, held, loading, extra=np.zeros(3), floor=0.):
     """Support reactions and force balance. CalculiX's RF includes applied
     loads, so their equivalent nodal forces are subtracted at supported
     nodes; in a node's free directions the two cancel. Returns (check rows,
-    reactions, applied resultant, balance)."""
+    reactions, applied resultant, balance). `extra` is a further external
+    force (stabilizing springs) and `floor` a further scale for the balance
+    (bolt preloads, which load the part without a resultant)."""
     reactions=np.zeros(3)
     forces=frame['fields'].get('FORC',{})
     held_nodes=held.nodes()
@@ -98,11 +100,11 @@ def static_checks(frame, held, loading):
     # Resultants can cancel for pressure around a bore. Normalize by the
     # larger of the resultant and absolute equivalent nodal loading; a
     # purely thermal study has neither, and its reactions must cancel.
-    scale=max(np.linalg.norm(total),sum(np.linalg.norm(v) for v in loading.applied.values()))
+    scale=max(np.linalg.norm(total),sum(np.linalg.norm(v) for v in loading.applied.values()),floor)
     # Without applied loads (thermal stress alone) the reactions must cancel:
     # judge them against their own size, above a 1 µN floor of round-off.
     if scale<1e-9: scale=max(sum(np.abs(forces.get(n,[0,0,0])[:3]).sum() for n in held_nodes),1e-6)
-    balance=float(np.linalg.norm(reactions+total)/scale)
+    balance=float(np.linalg.norm(reactions+total+extra)/scale)
     checks=[{'label':'Applied force X, Y, Z','values':total.tolist(),'unit':'N'},
             {'label':'Reaction X, Y, Z','values':reactions.tolist(),'unit':'N'},
             {'label':'Force balance error','values':[balance*100],'unit':'%'}]
@@ -197,45 +199,82 @@ def large_deformation(study):
     return value
 
 
+# Phases of a stepped static solve, one CalculiX step each.
+PHASE_LABELS={'tighten':'Tightening','load':'Load','unload':'Unloading, load'}
+
+
+def phase_of(time, phases):
+    """(phase, fraction done) of a frame at total step time `time`."""
+    k=min(len(phases)-1,max(0,math.ceil(time-1e-9)-1))
+    return phases[k],time-k
+
+
 class Static(Analysis):
     id='static'
     name='Linear static'
 
     def validate(self, study, mesh):
-        nodes,fixed=super().validate(study,mesh)
+        calculix.solver_of(study)
+        bolts=contact.bolts_of(study)
+        if contact.contact_on(study):
+            if not mesh.get('interfaces'):
+                raise ValueError('Contact needs bodies that touch. This part has none: turn contact off.')
+            contact.contacts_of(study,mesh)
+        nodes,fixed=validate(study,mesh,require_loads=not bolts)
         if plasticity(study):
             for m in [study['material'],*(study.get('bodyMaterials') or {}).values()]: check_plastic(m)
         unloading(study)
         return nodes,fixed
 
     def deck(self, folder, study, mesh):
-        nodes, fixed = self.validate(study, mesh)
-        model=Model(mesh)
+        self.validate(study, mesh)
+        setup=contact.Setup(study,mesh)
+        model=Model(setup.mesh)
+        fixed=fixed_dofs(study['supports'],model)
         loading=build_loads(study, model)
         large=large_deformation(study);plastic=plasticity(study)
-        title='static study'+(', large deformation' if large else '')+(', elastic–plastic' if plastic else '')
-        lines=calculix.mesh_lines(model, title if large or plastic else 'linear static study')
+        stepped=large or plastic or bool(setup)
+        phases=(['tighten'] if setup.bolts else [])+(['load'] if study['loads'] or not setup.bolts else [])
+        if plastic and unloading(study) and 'load' in phases: phases.append('unload')
+        title='static study'+(', large deformation' if large else '')+(', elastic–plastic' if plastic else '')+(', contact' if setup else '')
+        lines=calculix.mesh_lines(model, title if stepped else 'linear static study')
         lines+=calculix.section_lines(model,study,plastic_lines if plastic else (lambda m:[]))
         lines+=calculix.boundary_lines(fixed)
+        lines+=setup.model_lines(model,study,fixed,calculix.number)
         solver='*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0]
         output=['*NODE FILE','U, RF','*EL FILE','S, E'+(', PEEQ' if plastic else ''),'*NODE PRINT, NSET=HELD, TOTALS=YES','RF']
+        if setup.contacts:
+            output+=['*CONTACT FILE','CDIS, CSTR']
+            for k in range(1,len(setup.contacts)+1): output+=[f'*CONTACT PRINT, SLAVE=CS{k}, MASTER=CM{k}','CF']
+        if setup.bolts: output+=['*NODE PRINT, NSET=BOLTS','RF']
         step='*STEP'+(', NLGEOM' if large else '')+', INC=200'
-        if large or plastic:
-            # Automatic load steps: start at 10%, at most 25%, results at each.
-            lines+=[step,solver,'0.1, 1.0, 1e-5, 0.25']
-        else:
-            lines+=['*STEP',solver]
-        lines+=calculix.load_lines(loading)+output+['*END STEP']
-        if plastic and unloading(study):
-            # A second step removes every load: what stays is permanent.
-            lines+=[step,solver,'0.25, 1.0, 1e-5, 0.5','*CLOAD, OP=NEW','*DLOAD, OP=NEW']+output+['*END STEP']
+        # Automatic load steps: start at 10%, at most 25% (50% while only
+        # bolts tighten), results at each.
+        loads=calculix.load_lines(loading)
+        for phase in phases:
+            if not stepped:
+                lines+=['*STEP',solver]+loads
+            elif phase=='tighten':
+                lines+=[step,solver,'0.25, 1.0, 1e-5, 1.0','*CLOAD']+[f'{n}, 1, {calculix.number(float(b["preload"]))}' for n,(b,_,_) in zip(setup.refs,setup.sections)]
+            elif phase=='load':
+                lines+=[step,solver,'0.2, 1.0, 1e-5, 0.5' if setup else '0.1, 1.0, 1e-5, 0.25']
+                if setup.bolts:
+                    # Bolts keep the length they were tightened to; their
+                    # pretension force gives way to the loads.
+                    lines+=['*BOUNDARY, FIXED']+[f'{n}, 1, 1' for n in setup.refs]
+                    lines+=[l if l!='*CLOAD' else '*CLOAD, OP=NEW' for l in loads] if '*CLOAD' in loads else ['*CLOAD, OP=NEW']+loads
+                else: lines+=loads
+            else:
+                # Removing every load: what stays is permanent.
+                lines+=[step,solver,'0.25, 1.0, 1e-5, 0.5','*CLOAD, OP=NEW','*DLOAD, OP=NEW']
+            lines+=output+['*END STEP']
         (folder/'analysis.inp').write_text('\n'.join(lines)+'\n')
         (folder/'applied.json').write_text(json.dumps({n:v.tolist() for n,v in loading.applied.items()}))
-        return {'held':fixed,'loading':loading}
+        return {'held':fixed,'loading':loading,'setup':setup,'phases':phases,'stepped':stepped,'mesh':setup.mesh}
 
     def results(self, folder, study, model, frames, context):
         large=large_deformation(study);plastic=plasticity(study)
-        stepped=large or plastic
+        setup=context['setup'];phases=context['phases'];stepped=context['stepped']
         steps=frames if stepped else frames[-1:]
         ids=model.ids
         view=[]
@@ -244,13 +283,20 @@ class Static(Analysis):
             fields={'displacement':u,**measures(f,ids),'force':nodal(f,'FORC',ids,3,'nodal force')}
             # Averaging integration points to nodes can dip below zero.
             if plastic: fields['peeq']=np.maximum(0,nodal(f,'PE',ids,1,'plastic strain')[:,0])
+            if setup.contacts:
+                pressure=f['fields'].get('CONTACT',{})
+                fields['contactPressure']=np.array([max(0.,pressure.get(n,[0,0,0,0])[3]) for n in ids])
             view.append(fields)
-        # The fully loaded state: the last frame of the loading step.
-        full=max(i for i,f in enumerate(steps) if not stepped or f['value']<=1+1e-9)
+        kinds=[phase_of(f['value'],phases) if stepped else ('load',1.) for f in steps]
+        # The fully loaded state: the last frame of the load (else the
+        # tightening) phase.
+        last=next(p for p in ('load','tighten') if p in phases)
+        full=max(i for i,(p,_) in enumerate(kinds) if p==last)
         frame=steps[full]
         displacements=view[full]['displacement'];stress=view[full]['vonMises']
         movement=np.linalg.norm(displacements,axis=1)
-        checks,reactions,total_load,balance=static_checks(frame,context['held'],context['loading'])
+        checks,reactions,total_load,balance=static_checks(frame,context['held'],context['loading'],
+                                                          floor=sum(float(b['preload']) for b in setup.bolts))
         follower=large and any(l['kind'] in ('pressure','rotation') for l in study['loads'])
         if follower:
             # Pressure and rotation follow the deformed shape, so their
@@ -285,31 +331,90 @@ class Static(Analysis):
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))]}
         if plastic:
             summary['maxPlastic']=peeq
-            if full<len(view)-1:
+            if 'unload' in phases:
                 summary['permanentSet']=float(np.linalg.norm(view[-1]['displacement'],axis=1).max())
                 checks.append({'label':'Permanent displacement after unloading','values':[summary['permanentSet']],'unit':'mm','digits':4})
             checks.append({'label':'Largest plastic strain','values':[peeq*100],'unit':'%','digits':3})
+        charts=[]
         if stepped:
-            # Load fraction: time in the loading step, 2 − time in unloading.
-            loads=[100*(f['value'] if f['value']<=1+1e-9 else 2-f['value']) for f in steps]
+            labels=[]
+            for i,(p,x) in enumerate(kinds):
+                pct=100*(1-x if p=='unload' else x)
+                text='Unloaded' if p=='unload' and i==len(kinds)-1 else f'{PHASE_LABELS[p]} {pct:.4g}%'
+                labels.append({'label':text,'value':pct,'unit':'%'})
             peaks=[float(np.linalg.norm(v['displacement'],axis=1).max()) for v in view]
-            labels=[{'label':(f'Load {x:.4g}%' if i<=full else ('Unloaded' if i==len(steps)-1 else f'Unloading, load {x:.4g}%')),
-                     'value':x,'unit':'%'} for i,x in enumerate(loads)]
-            # The straight line through the first load step: what a linear
-            # elastic analysis would predict.
-            linear=[peaks[0]/loads[0]*x for x in loads]
-            name='Elastic–plastic' if plastic and not large else 'Large deformation' if not plastic else 'Nonlinear'
-            charts=[{'id':'loadPath','title':'Load and displacement','x':{'label':'Load','unit':'%','values':loads},
-                     'series':[{'label':name,'unit':'mm','values':peaks},
-                               {'label':'Linear','unit':'mm','values':linear}]}]
+            # The load path: frames of loading and unloading, against load.
+            path=[i for i,(p,_) in enumerate(kinds) if p!='tighten']
+            if path:
+                loads=[labels[i]['value'] for i in path]
+                series=[{'label':'Elastic–plastic' if plastic and not large and not setup else 'Large deformation' if large and not plastic and not setup else 'Nonlinear',
+                         'unit':'mm','values':[peaks[i] for i in path]}]
+                if not setup.bolts:
+                    # The straight line through the first load step: what a
+                    # linear elastic analysis would predict.
+                    series.append({'label':'Linear','unit':'mm','values':[peaks[path[0]]/loads[0]*x for x in loads]})
+                charts.append({'id':'loadPath','title':'Load and displacement','frames':path,
+                               'x':{'label':'Load','unit':'%','values':loads},'series':series})
         else:
-            labels=[{'label':'Static load','value':None,'unit':''}];charts=[]
-        result={'frames':labels,'fields':['displacement',*STRESS_FIELDS]+(['peeq'] if plastic else []),
+            labels=[{'label':'Static load','value':None,'unit':''}]
+        if setup:
+            self.contact_results(folder,study,model,steps,view,kinds,full,context,summary,checks,warnings,charts)
+        result={'frames':labels,'fields':['displacement',*STRESS_FIELDS]+(['peeq'] if plastic else [])+(['contactPressure'] if setup.contacts else []),
                 'summary':summary,'warnings':warnings,'charts':charts,
                 'checks':[mass_check(study,model)]+checks,
                 'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
         if plastic: result['peeq']=view[full]['peeq'].tolist()
         return result,view
+
+    def contact_results(self, folder, study, model, steps, view, kinds, full, context, summary, checks, warnings, charts):
+        """Bolt forces, contact forces and the stabilizing springs' share."""
+        setup=context['setup'];loading=context['loading'];held=context['held']
+        geometry=json.loads((folder/'geometry.json').read_text()) if (folder/'geometry.json').exists() else {}
+        names={b['id']:b['name'] for b in geometry.get('bodies') or []}
+        names.update({int(k):names.get(int(k),f'Body {k}') for k in setup.mesh['bodies']})
+        scale=max(np.linalg.norm(loading.total()),sum(np.linalg.norm(v) for v in loading.applied.values()),
+                  sum(float(b['preload']) for b in setup.bolts),1e-9)
+        if setup.contacts:
+            contacts=setup.contact_forces(calculix.read_dat(folder/'analysis.dat'),steps[full]['value'],steps[full],model)
+            summary['contacts']=contacts
+            for c in contacts:
+                pair=c['label']=' · '.join(names[b] for b in c['bodies'])
+                checks.append({'label':f'Contact {pair}: normal, shear force','values':[c['normal'],c['shear']],'unit':'N'})
+                checks.append({'label':f'Contact {pair}: peak pressure','values':[c['peak']],'unit':'MPa'})
+                checks.append({'label':f'Contact {pair}: area in contact','values':[c['touching']*100],'unit':'%','digits':0})
+            summary['maxContactPressure']=max(c['peak'] for c in contacts)
+            sliding=[c['label'] for c in contacts if c['state']=='sliding']
+            if sliding:
+                warnings.append(f"Sliding: friction can no longer hold {', '.join(sliding)}; the shear there has reached the friction coefficient times the clamping force. Other paths, such as a bolt in bending, carry the rest.")
+            warnings.append('Contact: touching bodies can separate'+(' and slide; friction holds them until the shear reaches the friction coefficient times the pressure. The friction coefficient is uncertain: check how a lower value changes the result.' if any(c[3]=='frictional' for c in setup.contacts) else ' and slide freely.'))
+        if setup.springs:
+            force=setup.spring_force(steps[full])
+            checks.append({'label':'Steadying springs across contacts, total force','values':[force],'unit':'N','digits':4})
+            if force>.01*scale:
+                warnings.append(f'Contact alone does not hold some bodies in place: the weak springs that steady them carry {force:.3g} N, more than 1% of the loads. Add supports, or use friction or bonded contact where those bodies should be held.')
+        if setup.bolts:
+            dat=calculix.read_dat(folder/'analysis.dat')
+            history=contact.bolt_forces(dat,setup.refs)
+            times=sorted(history)
+            at=lambda t:history[min(times,key=lambda s:abs(s-t))] if times else [0.]*len(setup.refs)
+            tightened=at(1.)
+            loaded=at(steps[full]['value'])
+            bolts=[{'name':b['name'],'preload':float(b['preload']),'tightened':tightened[k],'loaded':loaded[k]} for k,(b,_,_) in enumerate(setup.sections)]
+            summary['bolts']=bolts
+            for b in bolts:
+                checks.append({'label':f'{b["name"]}: force tightened, loaded','values':[b['tightened'],b['loaded']],'unit':'N'})
+            warnings.append('Bolts are pulled to their preload, then hold that length while the loads act: a load that pulls the joint apart raises the bolt force a little and lowers the clamping force. Real preload from a tightening torque scatters by ±25% or more.')
+            path=[i for i,(p,_) in enumerate(kinds) if p=='load']
+            if path:
+                # The joint's response: bolt force against load, from the
+                # tightened state.
+                start=max(i for i,(p,_) in enumerate(kinds) if p=='tighten')
+                pts=[start]+path
+                charts.append({'id':'boltForce','title':'Bolt force','frames':pts,
+                               'x':{'label':'Load','unit':'%','values':[0.]+[100*kinds[i][1] for i in path]},
+                               'series':[{'label':b['name'],'unit':'N','values':[at(steps[i]['value'])[k] for i in pts]} for k,b in enumerate(bolts)]})
+            low=[b for b in bolts if b['loaded']<.05*b['tightened']]
+            if low: warnings.append('A bolt has lost nearly all its force under the loads: the joint has opened.')
 
     def key_results(self, result):
         s=result['summary']
@@ -317,6 +422,8 @@ class Static(Analysis):
               {'id':'maxStress','label':'Peak stress','unit':'MPa','value':s['maxStress'],'peak':True}]
         if 'maxPlastic' in s and s['maxPlastic']>0:
             keys.append({'id':'maxPlastic','label':'Largest plastic strain','unit':'mm/mm','value':s['maxPlastic'],'peak':True})
+        for k,b in enumerate(s.get('bolts') or []):
+            keys.append({'id':f'bolt{k}','label':f"{b['name']} force",'unit':'N','value':b['loaded']})
         return keys
 
 
@@ -532,6 +639,8 @@ def solve(folder, study):
     frames=calculix.parse_frd(folder/'analysis.frd')
     if not frames:
         raise ValueError('CalculiX did not produce any results. Inspect the solver log.')
+    # Contact and bolts give the mesh extra nodes where bodies separate.
+    mesh=context.get('mesh',mesh) if isinstance(context,dict) else mesh
     result,view=analysis.results(folder,study,Model(mesh),frames,context)
     result['summary']['seconds']=time.monotonic()-start
     result['keys']=analysis.key_results(result)

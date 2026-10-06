@@ -8,6 +8,7 @@ import {
 } from "react";
 import { ChevronRight, Plus, type LucideIcon } from "lucide-react";
 import { fmt, moveFocus, sig } from "./logic";
+import type { ConditionKind } from "./types";
 import {
   converts,
   fromShown,
@@ -252,7 +253,7 @@ export function Node({
 }: {
   depth?: number;
   icon?: LucideIcon;
-  swatch?: "support" | "load" | "mass" | "thermal";
+  swatch?: ConditionKind;
   label: string;
   value?: string;
   active?: boolean;

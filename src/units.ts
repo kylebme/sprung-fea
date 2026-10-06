@@ -20,6 +20,7 @@ const US: Record<string, Conversion> = {
   "mm³": { unit: "in³", scale: IN ** 3 },
   N: { unit: "lbf", scale: LBF },
   "N·mm": { unit: "lbf·in", scale: LBF * IN },
+  "N·m": { unit: "lbf·ft", scale: LBF / 0.3048 },
   MPa: { unit: "psi", scale: PSI },
   "MPa per mm": { unit: "psi per in", scale: PSI / IN },
   "kg/m³": { unit: "lb/in³", scale: 1 / 27679.9047 },

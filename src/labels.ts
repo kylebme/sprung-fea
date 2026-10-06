@@ -16,6 +16,10 @@ import type {
   ThermalCondition,
   ThermalKind,
   Transient,
+  Bolt,
+  Contact,
+  ContactKind,
+  Geometry,
 } from "./types";
 
 export const DETAILS = [
@@ -63,6 +67,7 @@ export const PLOTS: Record<
   strainMax: { name: "Max principal strain", unit: "µm/m", digits: 1 },
   strainMin: { name: "Min principal strain", unit: "µm/m", digits: 1 },
   amplitude: { name: "Displacement amplitude", unit: "mm", digits: 4 },
+  contact: { name: "Contact pressure", unit: "MPa", digits: 3 },
 };
 /** Thermal condition kinds, in the editor's order, with their help text. */
 export const THERMAL_KINDS: {
@@ -202,11 +207,13 @@ export const ANALYSES: Record<
 };
 /** The analysis as named in the title bar and study tree. */
 export const analysisName = (study: Study) =>
-  study.analysis === "static" && (study.largeDeformation || study.plasticity)
+  study.analysis === "static" &&
+  (study.largeDeformation || study.plasticity || study.contact)
     ? [
         "Static",
         study.largeDeformation && "large deformation",
         study.plasticity && "plastic",
+        study.contact && "contact",
       ]
         .filter(Boolean)
         .join(", ")
@@ -347,6 +354,12 @@ export const CONDITIONS: Record<
     empty:
       "Point masses stand in for parts that are not modeled, such as a motor bolted to a face.",
   },
+  bolt: {
+    group: "Bolts",
+    add: "Add bolt",
+    empty:
+      "Bolts are tightened to their preload before the loads act, then hold that length while the loads change their force.",
+  },
 };
 export const conditionValue = (
   kind: ConditionKind,
@@ -359,7 +372,138 @@ export const conditionValue = (
       ? massValue(c as PointMass, system)
       : kind === "thermal"
         ? thermalValue(c as ThermalCondition, system)
-        : "";
+        : kind === "bolt"
+          ? quantity((c as Bolt).preload, "N", system)
+          : "";
+/** A likely bolt: its body and the shank faces that pass through holes. */
+export type BoltCandidate = { body: number; faces: number[]; diameter: number };
+/**
+ * Likely bolt shanks: cylindrical faces of one body that pass through a
+ * hole in another body: a coaxial cylinder at most 1.5 times as wide (or 3
+ * mm wider), overlapping it along the axis. Faces of one body on one axis
+ * make one bolt.
+ */
+export function boltCandidates(geometry: Geometry): BoltCandidate[] {
+  const cylinders = geometry.faces.filter(
+    (f) => f.radius && f.axis && f.extent && f.body !== undefined,
+  );
+  const dot = (a: number[], b: number[]) =>
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const out: (BoltCandidate & { point: number[]; direction: number[] })[] = [];
+  for (const shank of cylinders) {
+    const r = shank.radius!;
+    const point = shank.axis!.slice(0, 3);
+    const direction = shank.axis!.slice(3);
+    const through = cylinders.some((hole) => {
+      if (hole.body === shank.body) return false;
+      const R = hole.radius!;
+      if (R < r || R > Math.max(1.5 * r, r + 3)) return false;
+      const d = hole.axis!.slice(3);
+      if (Math.abs(dot(d, direction)) < 0.999) return false;
+      const offset = hole.axis!.slice(0, 3).map((v, i) => v - point[i]);
+      const along = dot(offset, direction);
+      const across = Math.hypot(
+        ...offset.map((v, i) => v - along * direction[i]),
+      );
+      if (across > 0.05 * r) return false;
+      // The hole's extent along the shank's axis must overlap the shank's.
+      const ends = hole.extent!.map((t) => along + t * dot(d, direction));
+      const [lo, hi] = [Math.min(...ends), Math.max(...ends)];
+      return (
+        Math.min(hi, shank.extent![1]) - Math.max(lo, shank.extent![0]) > 1e-6
+      );
+    });
+    if (!through) continue;
+    const same = out.find(
+      (c) =>
+        c.body === shank.body &&
+        Math.abs(dot(c.direction, direction)) > 0.999 &&
+        Math.hypot(
+          ...point.map(
+            (v, i) =>
+              v -
+              c.point[i] -
+              dot(
+                point.map((x, j) => x - c.point[j]),
+                c.direction,
+              ) *
+                c.direction[i],
+          ),
+        ) <
+          0.05 * r,
+    );
+    if (same) same.faces.push(shank.id);
+    else
+      out.push({
+        body: shank.body!,
+        faces: [shank.id],
+        diameter: 2 * r,
+        point,
+        direction,
+      });
+  }
+  return out.map(({ body, faces, diameter }) => ({ body, faces, diameter }));
+}
+export const blankBolt = (): Bolt => ({
+  id: crypto.randomUUID(),
+  name: "Bolt",
+  faces: [],
+  preload: 10000,
+});
+/**
+ * How touching bodies interact, in the editor's order. Frictional starts
+ * with DEFAULT_FRICTION.
+ */
+export const CONTACT_KINDS: {
+  id: ContactKind;
+  name: string;
+  note: string;
+}[] = [
+  {
+    id: "bonded",
+    name: "Bonded",
+    note: "Joined where they touch, as if glued or welded: no sliding or separation. Also the right choice for threads, press fits and welds.",
+  },
+  {
+    id: "frictional",
+    name: "Frictional",
+    note: "Can separate, and slides once the shear exceeds the friction coefficient times the contact pressure. Use for clamped joints and parts resting on each other.",
+  },
+  {
+    id: "frictionless",
+    name: "Frictionless",
+    note: "Can separate and slide freely. Use for lubricated or rolling surfaces, or as the cautious case when friction is uncertain.",
+  },
+];
+export const DEFAULT_FRICTION = 0.2;
+/** A touching pair of bodies, with the faces where they meet. */
+export type ContactPair = {
+  id: string;
+  bodies: number[];
+  faces: number[];
+  area: number;
+};
+/** Touching body pairs of an assembly, in body order. */
+export function contactPairs(geometry: Geometry): ContactPair[] {
+  const pairs = new Map<string, ContactPair>();
+  for (const i of geometry.interfaces ?? []) {
+    const [a, b] = [...i.bodies].sort((x, y) => x - y);
+    const id = `${a}-${b}`;
+    const pair = pairs.get(id) ?? { id, bodies: [a, b], faces: [], area: 0 };
+    pair.faces.push(i.id);
+    pair.area += i.area;
+    pairs.set(id, pair);
+  }
+  return [...pairs.values()].sort(
+    (p, q) => p.bodies[0] - q.bodies[0] || p.bodies[1] - q.bodies[1],
+  );
+}
+/** Contact and bolts apply to static studies that turn contact on. */
+export const contactActive = (study: Study) =>
+  study.analysis === "static" && !!study.contact;
+/** A pair's contact setting; pairs the study does not list are bonded. */
+export const contactOf = (study: Study, id: string): Contact =>
+  study.contacts?.find((c) => c.id === id) ?? { id, kind: "bonded" };
 export const blankMass = (point: number[]): PointMass => ({
   id: crypto.randomUUID(),
   name: "Point mass",

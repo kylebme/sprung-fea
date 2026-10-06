@@ -207,7 +207,7 @@ def check_materials(study, mesh):
         check_material(m)
 
 
-def validate(study, mesh):
+def validate(study, mesh, require_loads=True):
     """Checks the material, face references and support directions, and that
     the supports remove all six rigid motions. Returns node coordinates and
     the blocked directions (Held)."""
@@ -216,7 +216,7 @@ def validate(study, mesh):
     loads = study.get('loads', [])
     if not supports:
         raise ValueError('Add a support to hold the part in place.')
-    if not loads:
+    if not loads and require_loads:
         raise ValueError('Add a force, pressure, or gravity load.')
     masses = study.get('masses') or []
     check_faces(supports+[l for l in loads if l.get('kind') not in BODY_LOADS]+masses, mesh)
@@ -224,7 +224,7 @@ def validate(study, mesh):
     model=Model(mesh)
     fixed=fixed_dofs(supports,model)
     rigid_motions(fixed,model)
-    check_loads(loads)
+    if loads: check_loads(loads, required=require_loads)
     return model.nodes, fixed
 
 
@@ -259,7 +259,9 @@ class Held:
 # Faces meeting at a smoother edge share one averaged direction.
 DISTINCT=math.tan(math.radians(5))
 # A blocked subspace within this of the global axes is written as such.
-ALIGNED=1e-6
+# Snapping a direction that is only nearly aligned would constrain motions
+# the support leaves free, by that much.
+ALIGNED=1e-9
 # Frames a support's `axes` refer to: global X, Y, Z; the face normal
 # (frictionless); radial, tangential and axial for a cylinder.
 FRAMES=('global','normal','cylinder')
@@ -401,7 +403,9 @@ def free_motions(held, model, nodes):
         if node not in nodes: continue
         r=(model.nodes[node]-center)/scale
         rows.append([*d,*np.cross(r,d)])
-    return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-8) if rows else 0))
+    # A motion resisted only at round-off (fitted cylinder axes are exact to
+    # about 1e-6) is free.
+    return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-6) if rows else 0))
 
 
 def rigid_motions(fixed, model):

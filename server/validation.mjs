@@ -35,6 +35,8 @@ export const THERMAL = [
   "radiation",
   "generation",
 ];
+/** How touching bodies interact (engine/contact.py KINDS). */
+export const CONTACTS = ["bonded", "frictional", "frictionless"];
 /** What a support's blocked directions refer to (engine/model.py FRAMES). */
 export const FRAMES = ["global", "normal", "cylinder"];
 // Errors caused by the request itself; the service reports them as 400.
@@ -218,11 +220,52 @@ export function validateStudy(s) {
   }
   if (s.referenceTemperature !== undefined)
     number(s.referenceTemperature, "Stress-free temperature");
+  // Contact and bolts, for static assemblies.
+  if (s.contact !== undefined && typeof s.contact !== "boolean")
+    throw new RequestError("A study setting must be on or off.");
+  if (s.contacts !== undefined) {
+    if (!Array.isArray(s.contacts) || s.contacts.length > 1000)
+      throw new RequestError("This project contains an invalid study setup.");
+    for (const c of s.contacts) {
+      if (!c || typeof c.id !== "string" || !/^\d{1,9}-\d{1,9}$/.test(c.id))
+        throw new RequestError(
+          "A contact refers to an invalid pair of bodies.",
+        );
+      if (!CONTACTS.includes(c.kind))
+        throw new RequestError(
+          "Choose bonded, frictional or frictionless contact.",
+        );
+      if (c.friction !== undefined) {
+        number(c.friction, "Friction coefficient", { positive: true });
+        if (c.friction > 2)
+          throw new RequestError(
+            "The friction coefficient must lie between 0 and 2.",
+          );
+      }
+    }
+  }
+  if (s.contactStiffness !== undefined)
+    number(s.contactStiffness, "Contact stiffness factor", { positive: true });
+  // Studies saved before bolts have none.
+  const bolts = s.bolts ?? [];
+  if (!Array.isArray(bolts) || bolts.length > 100)
+    throw new RequestError("This project contains an invalid study setup.");
+  for (const b of bolts) {
+    if (!b?.faces?.length)
+      throw new RequestError("A bolt must select its shank.");
+    number(b.preload, "Bolt preload", { positive: true });
+  }
   // Studies saved before point masses have none.
   s.masses ??= [];
   if (!Array.isArray(s.masses) || s.masses.length > 100)
     throw new RequestError("This project contains an invalid study setup.");
-  const conditions = [...s.supports, ...s.loads, ...s.masses, ...s.thermal];
+  const conditions = [
+    ...s.supports,
+    ...s.loads,
+    ...s.masses,
+    ...s.thermal,
+    ...bolts,
+  ];
   for (const c of conditions) {
     text(c.id, "Condition identifier");
     text(c.name, "Condition name");

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Box, FolderOpen, Upload } from "lucide-react";
+import type { Part } from "./types";
 
 export type Recovery = { name: string; at: number; legacy?: boolean };
 
@@ -17,7 +18,7 @@ export function StartScreen({
   onImport: () => void;
   onOpen: () => void;
   onRestore: () => void;
-  onSample: (name: "beam" | "bracket" | "post-plate") => void;
+  onSample: (name: NonNullable<Part["sample"]>) => void;
   children?: ReactNode;
 }) {
   return (
@@ -85,6 +86,11 @@ export function StartScreen({
             <button onClick={() => onSample("post-plate")} disabled={busy}>
               <b>Post on plate</b>
               <small>Assembly · 2 bonded bodies</small>
+              <span className="r">Open</span>
+            </button>
+            <button onClick={() => onSample("bolted-joint")} disabled={busy}>
+              <b>Bolted joint</b>
+              <small>Two plates and a bolt · contact</small>
               <span className="r">Open</span>
             </button>
           </div>

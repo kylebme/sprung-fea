@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Scene,
+  type SceneLabel,
   type Projection,
   type SceneState,
   type Theme,
@@ -19,7 +20,7 @@ import {
   type SectionCut,
   type ViewData,
 } from "./viewData";
-import type { Filters, Geometry, Plot, Study } from "./types";
+import type { ConditionKind, Filters, Geometry, Plot, Study } from "./types";
 export { palette, type Projection, type Theme } from "./scene";
 
 export type ViewerHandle = {
@@ -46,7 +47,7 @@ type Props = {
   probeLabel: string | null;
   theme: Theme;
   projection: Projection;
-  draftKind: "support" | "load" | "mass" | "thermal" | null;
+  draftKind: ConditionKind | null;
   marginMax: number;
   yieldStrength: number | null;
   filters: Filters;
@@ -55,12 +56,44 @@ type Props = {
   origin: boolean;
   /** Oscillate the deformed shape, for mode shapes. */
   animate: boolean;
+  /** Bodies not drawn or picked. */
+  hidden: number[];
+  /** A right-click on a face, at a position in the view (CSS px). */
+  onContext: (face: number, at: { x: number; y: number }) => void;
 };
+
+/**
+ * Condition labels over the view, updated in place every frame: one tag
+ * per condition, reused while it stays.
+ */
+function placeLabels(host: HTMLDivElement | null, list: SceneLabel[]) {
+  if (!host) return;
+  const existing = new Map(
+    [...host.children].map((el) => [
+      (el as HTMLElement).dataset.id!,
+      el as HTMLElement,
+    ]),
+  );
+  for (const l of list) {
+    let tag = existing.get(l.id);
+    if (!tag) {
+      tag = document.createElement("span");
+      tag.dataset.id = l.id;
+      host.appendChild(tag);
+    }
+    existing.delete(l.id);
+    tag.className = "condition-label " + l.kind;
+    tag.textContent = l.text;
+    tag.style.translate = `${l.x}px ${l.y}px`;
+  }
+  for (const el of existing.values()) el.remove();
+}
 
 export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const label = useRef<HTMLDivElement>(null);
+  const tags = useRef<HTMLDivElement>(null);
   const props = useRef(p);
   props.current = p;
   const [scene, setScene] = useState<Scene | null>(null);
@@ -94,6 +127,8 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         tag.hidden = !at || !props.current.probeLabel;
         if (at) tag.style.translate = `${at.x}px ${at.y}px`;
       },
+      onLabels: (list) => placeLabels(tags.current, list),
+      onContext: (face, at) => props.current.onContext(face, at),
     })
       .then((s) => {
         if (!live) return s.dispose();
@@ -139,6 +174,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       region: p.region,
       origin: p.origin,
       animate: p.animate,
+      hidden: p.hidden,
     };
     scene.update(state);
     const cut = scene.sectionCut();
@@ -161,6 +197,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
         <div className="viewer-note">Starting 3D view…</div>
       )}
       {failure && <div className="viewer-note">{failure}</div>}
+      <div className="condition-labels" ref={tags} aria-hidden="true" />
       <div className="probe-label" ref={label} hidden>
         {p.probeLabel}
       </div>

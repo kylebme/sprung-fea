@@ -89,7 +89,7 @@ def failure(tail):
 
 
 # FRD blocks this reader keeps, by their CalculiX label.
-FIELDS={'DISP','DISPI','PDISP','STRESS','STRESSI','TOSTRAIN','FORC','NDTEMP','PE','FLUX','RFL','ERROR'}
+FIELDS={'DISP','DISPI','PDISP','STRESS','STRESSI','TOSTRAIN','FORC','NDTEMP','PE','FLUX','RFL','ERROR','CONTACT'}
 
 
 def parse_frd(path, keep=FIELDS):

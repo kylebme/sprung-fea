@@ -25,6 +25,8 @@ export type ViewData = {
   triangles: Int32Array;
   triangleFaces: Int32Array;
   tets: Int32Array | null;
+  /** Each tetrahedron's body; absent in results saved before it. */
+  tetBodies: Int32Array | null;
   frames: Frame[];
   frame: number;
   displacement: Float64Array | null;
@@ -55,7 +57,8 @@ export type Plot =
   | "strain"
   | "strainMax"
   | "strainMin"
-  | "amplitude";
+  | "amplitude"
+  | "contact";
 /**
  * A plot shows one scalar per node: an engine field, or a quantity derived
  * from them (displacement magnitude, yield margin). Ranges start at zero
@@ -78,6 +81,7 @@ export const PLOT_SOURCES: Record<
   temperature: { field: "temperature", signed: true },
   plastic: { field: "peeq" },
   heatflux: { field: "heatFlux" },
+  contact: { field: "contactPressure" },
 };
 
 const MAGIC = "SFEAVIEW";
@@ -134,6 +138,7 @@ export function decodeView(buffer: ArrayBuffer): ViewData {
       triangles: arrays.triangles as Int32Array,
       triangleFaces: arrays.triangleFaces as Int32Array,
       tets: (arrays.tets as Int32Array) || null,
+      tetBodies: (arrays.tetBodies as Int32Array) || null,
       frames: Array.from(frames, (f) => f || {}),
       frame: 0,
       displacement: null,
@@ -145,7 +150,14 @@ export function decodeView(buffer: ArrayBuffer): ViewData {
   return view;
 }
 
-const MESH = ["nodeIds", "points", "tets", "triangles", "triangleFaces"];
+const MESH = [
+  "nodeIds",
+  "points",
+  "tets",
+  "tetBodies",
+  "triangles",
+  "triangleFaces",
+];
 /** Frame arrays with three components per node; the rest are scalars. */
 const VECTORS = ["displacement", "force"];
 
@@ -160,6 +172,7 @@ function validate(v: ViewData) {
     v.triangleFaces?.length !== v.triangles.length / 3 ||
     !inRange(v.triangles) ||
     (v.tets && (v.tets.length % 10 || !inRange(v.tets))) ||
+    (v.tetBodies && v.tetBodies.length * 10 !== v.tets?.length) ||
     v.frames.some(
       (f) =>
         !Object.keys(f).length ||
@@ -246,6 +259,7 @@ export function geometryView(surface: Surface): ViewData {
       surface.faces.flatMap((f) => Array(f.indices.length / 3).fill(f.id)),
     ),
     tets: null,
+    tetBodies: null,
     frames: [],
     frame: 0,
     displacement: null,
@@ -309,6 +323,7 @@ const CSV_COLUMNS: Record<string, [string, string]> = {
   strainMax: ["max_principal_strain", "µm/m"],
   strainMin: ["min_principal_strain", "µm/m"],
   amplitude: ["displacement_amplitude", "mm"],
+  contactPressure: ["contact_pressure", "MPa"],
 };
 /** Unit labels as column-name suffixes. */
 const SLUG: Record<string, string> = {

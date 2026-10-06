@@ -10,7 +10,7 @@ import {
   movement,
   plotRange,
 } from "./viewData";
-import type { Face, Filters, Plot, Study } from "./types";
+import type { ConditionKind, Face, Filters, Plot, Study } from "./types";
 
 export type Theme = "light" | "dark";
 export type Projection = "perspective" | "orthographic";
@@ -23,7 +23,7 @@ export type SceneState = {
   study: Study;
   selected: number[];
   hovered: number | null;
-  draftKind: "support" | "load" | "mass" | "thermal" | null;
+  draftKind: ConditionKind | null;
   /** The plotted result, or null before solving. */
   plot: Plot | null;
   deformation: number;
@@ -40,6 +40,16 @@ export type SceneState = {
   animate: boolean;
   /** A box outline: the region being refined, by its corners. */
   region: { lo: number[]; hi: number[] } | null;
+  /** Bodies not drawn or picked, by body id. */
+  hidden: number[];
+};
+/** A condition's name pinned where it acts, in CSS px over the canvas. */
+export type SceneLabel = {
+  id: string;
+  text: string;
+  kind: ConditionKind;
+  x: number;
+  y: number;
 };
 
 export type SceneEvents = {
@@ -48,6 +58,10 @@ export type SceneEvents = {
   onProbe: (probe: Probe) => void;
   /** Screen position (CSS px) of the probe marker after each render. */
   onOverlay: (position: { x: number; y: number } | null) => void;
+  /** Condition labels, placed after each render. */
+  onLabels: (labels: SceneLabel[]) => void;
+  /** A right-click on a face, with its position in CSS px. */
+  onContext: (face: number, at: { x: number; y: number }) => void;
 };
 
 export const palette = [
@@ -72,6 +86,8 @@ const COLORS = {
     massFace: "#8f7ab8",
     thermal: "#e8606a",
     thermalFace: "#b5646b",
+    bolt: "#3fa7d6",
+    boltFace: "#4f8aa6",
     select: "#4d9bff",
     ghost: "#aab3bb",
     viewA: "#1d2227",
@@ -90,6 +106,8 @@ const COLORS = {
     massFace: "#c9b6ea",
     thermal: "#d23f4b",
     thermalFace: "#efb4b8",
+    bolt: "#1f7fae",
+    boltFace: "#a9d2e6",
     select: "#2f6fd8",
     ghost: "#7f8b95",
     viewA: "#ffffff",
@@ -127,6 +145,7 @@ const FIELD: Record<Plot, string> = {
   strainMax: "strainMax",
   strainMin: "strainMin",
   amplitude: "amplitude",
+  contact: "contactPressure",
 };
 /** Arrays that are geometry or derived, not engine fields, when probing. */
 const NOT_PROBED = new Set([
@@ -156,6 +175,12 @@ const unit = (a: number[]) => {
  * The VTK.wasm runtime is served by the local service and cached for the
  * page. Each scene gets its own session, so disposing it frees its objects.
  */
+/** The color of faces being picked for a condition of the draft's kind. */
+const pickColor = (s: SceneState) => {
+  const colors = COLORS[s.theme];
+  return s.draftKind ? colors[s.draftKind] : colors.select;
+};
+
 const runtime = () => loadAsync({ url: "/vtk-wasm", urlIsGzip: false });
 
 // Generated declarations collapse C++ overloads to one signature (for
@@ -221,6 +246,10 @@ export class Scene {
   private fieldArrays: Record<string, Obj> = {};
   private pickPoint: Obj;
   private pickData: Obj;
+  /** Triangles drawn: indices into the view's triangles, visible bodies only. */
+  private shown = new Int32Array(0);
+  /** Selected and hovered faces, drawn over everything. */
+  private mark: { data: Obj; fill: Obj; outline: Obj; lines: Obj };
 
   static async create(canvas: HTMLCanvasElement, events: SceneEvents) {
     return new Scene(
@@ -372,6 +401,22 @@ export class Scene {
       return { source: glyph, data, actor };
     });
 
+    // Faces being picked show through whatever hides them: a translucent
+    // fill and an outline in the overlay layer.
+    const markData = make("vtkPolyData");
+    const markLines = make("vtkPolyData");
+    const fill = this.actor(this.mapper({ data: markData }), this.overlay);
+    const outline = this.actor(this.mapper({ data: markLines }), this.overlay);
+    for (const a of [fill, outline]) {
+      a.pickableOff();
+      a.getProperty().setAmbient(1);
+      a.getProperty().setDiffuse(0);
+      a.setVisibility(0);
+    }
+    fill.getProperty().setOpacity(0.3);
+    outline.getProperty().setLineWidth(2.5);
+    this.mark = { data: markData, fill, outline, lines: markLines };
+
     this.links = [0, 1, 2].map(() => {
       const data = make("vtkPolyData");
       const actor = this.actor(this.mapper({ data }));
@@ -475,8 +520,12 @@ export class Scene {
       prevView.triangles !== next.view.triangles ||
       prevView.tets !== next.view.tets;
     const model = changed("view");
+    const shown = changed("hidden");
     if (geometry) this.setModel(next);
-    else if (model) this.setFields(next.view);
+    else {
+      if (model) this.setFields(next.view);
+      if (shown) this.applyVisibility(next);
+    }
     if (model || changed("deformation")) this.deform();
     if (
       model ||
@@ -485,12 +534,20 @@ export class Scene {
       this.colorFields();
     if (
       model ||
+      shown ||
       changed("selected", "hovered", "study", "draftKind", "theme", "plot")
     )
       this.paintFaces();
-    if (model || changed("study", "theme", "plot")) this.annotate();
     if (
       model ||
+      shown ||
+      changed("selected", "hovered", "draftKind", "theme", "plot")
+    )
+      this.highlight();
+    if (model || shown || changed("study", "theme", "plot")) this.annotate();
+    if (
+      model ||
+      shown ||
       changed("filters", "plot", "marginMax", "theme", "deformation")
     )
       this.filter();
@@ -528,26 +585,57 @@ export class Scene {
     this.pointsArray = this.array(new Float64Array(v.points), 3, "Points");
     this.points.setData(this.pointsArray);
     this.surface.setPoints(this.points);
-    const polys = this.cells(v.triangles, 3);
+    this.colors = null;
+    this.applyVisibility(s);
+    this.setFields(v);
+  }
+
+  /**
+   * Draws only the visible bodies: their surface triangles, CAD edges and
+   * tetrahedra (so sections and filters leave hidden bodies out). Results
+   * saved before tetrahedra recorded their body keep every tetrahedron.
+   */
+  private applyVisibility(s: SceneState) {
+    const v = s.view;
+    const hidden = new Set(s.hidden);
+    const bodyOf = new Map(s.faces.map((f) => [f.id, f.body]));
+    const keep: number[] = [];
+    for (let i = 0; i < v.triangleFaces.length; i++)
+      if (!hidden.has(bodyOf.get(v.triangleFaces[i]) ?? -1)) keep.push(i);
+    this.shown = Int32Array.from(keep);
+    const triangles = new Int32Array(keep.length * 3);
+    keep.forEach((t, k) =>
+      triangles.set(v.triangles.subarray(t * 3, t * 3 + 3), k * 3),
+    );
+    const polys = this.cells(triangles, 3);
     this.surface.setPolys(polys);
     polys.$delete();
     this.surface.getCellData().removeArray("Colors");
-    this.colors = this.array(
-      new Uint8Array(v.triangleFaces.length * 3),
-      3,
-      "Colors",
-    );
+    this.colors?.$delete();
+    this.colors = this.array(new Uint8Array(keep.length * 3), 3, "Colors");
     this.surface.getCellData().addArray(this.colors);
-    // The grid shares the new points, so its cells must be replaced too;
-    // stale tetrahedra would index past the end of a smaller point set.
+    // The grid shares the points, so its cells must be replaced too; stale
+    // tetrahedra would index past the end of a smaller point set.
     this.grid.reset();
     this.grid.setPoints(this.points);
     if (v.tets) {
-      const tets = this.cells(v.tets, 10);
-      this.grid.setCells(VTK_QUADRATIC_TETRA, tets);
-      tets.$delete();
+      let tets = v.tets;
+      if (hidden.size && v.tetBodies) {
+        const kept: number[] = [];
+        v.tetBodies.forEach((b, k) => {
+          if (!hidden.has(b)) kept.push(k);
+        });
+        tets = new Int32Array(kept.length * 10);
+        kept.forEach((k, j) =>
+          tets.set(v.tets!.subarray(k * 10, k * 10 + 10), j * 10),
+        );
+      }
+      const cells = this.cells(tets, 10);
+      this.grid.setCells(VTK_QUADRATIC_TETRA, cells);
+      cells.$delete();
     }
-    this.setFields(v);
+    this.surface.modified();
+    this.grid.modified();
     this.buildEdges(v);
   }
 
@@ -594,8 +682,9 @@ export class Scene {
     const owner = new Map<number, number>();
     const lines: number[] = [];
     const t = v.triangles;
-    for (let i = 0; i < t.length; i += 3) {
-      const face = v.triangleFaces[i / 3];
+    for (const k of this.shown) {
+      const i = k * 3;
+      const face = v.triangleFaces[k];
       for (let k = 0; k < 3; k++) {
         const a = t[i + k],
           b = t[i + ((k + 1) % 3)];
@@ -683,20 +772,12 @@ export class Scene {
       return;
     }
     const colors = COLORS[s.theme];
-    const pick =
-      s.draftKind === "support"
-        ? colors.support
-        : s.draftKind === "load"
-          ? colors.load
-          : s.draftKind === "mass"
-            ? colors.mass
-            : s.draftKind === "thermal"
-              ? colors.thermal
-              : colors.select;
+    const pick = pickColor(s);
     const supported = new Set(s.study.supports.flatMap((c) => c.faces));
     const loaded = new Set(s.study.loads.flatMap((c) => c.faces));
     const massed = new Set(s.study.masses.flatMap((c) => c.faces));
     const heated = new Set((s.study.thermal || []).flatMap((c) => c.faces));
+    const bolted = new Set((s.study.bolts || []).flatMap((c) => c.faces));
     const byFace = new Map<number, number[]>();
     const bodies = [...new Set(s.faces.map((f) => f.body))];
     for (const f of s.faces) {
@@ -705,7 +786,8 @@ export class Scene {
         supported.has(f.id) ||
         loaded.has(f.id) ||
         massed.has(f.id) ||
-        heated.has(f.id)
+        heated.has(f.id) ||
+        bolted.has(f.id)
       );
       let c = rgb(
         s.selected.includes(f.id)
@@ -718,7 +800,9 @@ export class Scene {
                 ? colors.massFace
                 : heated.has(f.id)
                   ? colors.thermalFace
-                  : colors.base,
+                  : bolted.has(f.id)
+                    ? colors.boltFace
+                    : colors.base,
       );
       // Assemblies: each body gets its own tint of the base color.
       if (plain && bodies.length > 1)
@@ -736,8 +820,8 @@ export class Scene {
     const out = this.ta.toJSTypedArray(this.colors as any) as Uint8Array;
     const faces = s.view.triangleFaces;
     const fallback = rgb(colors.base).map((x) => Math.round(x * 255));
-    for (let i = 0; i < faces.length; i++) {
-      const c = byFace.get(faces[i]) || fallback;
+    for (let i = 0; i < this.shown.length; i++) {
+      const c = byFace.get(faces[this.shown[i]]) || fallback;
       out[i * 3] = c[0];
       out[i * 3 + 1] = c[1];
       out[i * 3 + 2] = c[2];
@@ -748,6 +832,101 @@ export class Scene {
     m.setArrayAccessMode(1);
     m.setArrayName("Colors");
     m.scalarVisibilityOn();
+  }
+
+  /**
+   * The faces being picked (and the one hovered), drawn in the overlay
+   * layer so they show through the bodies in front of them, even hidden
+   * ones: a translucent fill and their outline.
+   */
+  private highlight() {
+    const s = this.state!;
+    const colors = COLORS[s.theme];
+    const faces = new Set(s.plot ? [] : s.selected);
+    const hovered = s.plot ? null : s.hovered;
+    const tri: number[] = [];
+    const lines: number[] = [];
+    const v = s.view;
+    const n = v.nodeIds.length;
+    for (const group of [
+      faces,
+      hovered === null ? new Set<number>() : new Set([hovered]),
+    ]) {
+      const edges = new Map<number, number>();
+      for (let k = 0; k < v.triangleFaces.length; k++) {
+        if (!group.has(v.triangleFaces[k])) continue;
+        const t = v.triangles.subarray(k * 3, k * 3 + 3);
+        tri.push(...t);
+        for (let j = 0; j < 3; j++) {
+          const a = t[j],
+            b = t[(j + 1) % 3];
+          const key = Math.min(a, b) * n + Math.max(a, b);
+          edges.set(key, (edges.get(key) ?? 0) + 1);
+        }
+      }
+      // The outline: edges used by one triangle of the group.
+      for (const [key, count] of edges)
+        if (count === 1) lines.push(Math.floor(key / n), key % n);
+    }
+    const { data, fill, outline, lines: lineData } = this.mark;
+    data.setPoints(this.points);
+    const polys = this.cells(Int32Array.from(tri), 3);
+    data.setPolys(polys);
+    polys.$delete();
+    data.modified();
+    lineData.setPoints(this.points);
+    const cells = this.cells(Int32Array.from(lines), 2);
+    lineData.setLines(cells);
+    cells.$delete();
+    lineData.modified();
+    const pick = pickColor(s);
+    const color = faces.size ? pick : colors.hover;
+    fill.getProperty().setColor(...rgb(color));
+    outline.getProperty().setColor(...rgb(color));
+    fill.setVisibility(tri.length ? 1 : 0);
+    outline.setVisibility(lines.length ? 1 : 0);
+  }
+
+  /**
+   * Where each condition acts: its name at the first face's anchor (or a
+   * mass's center), on screen, for conditions on visible bodies.
+   */
+  private labels() {
+    const s = this.state!;
+    if (s.plot) return [];
+    const faces = new Map(s.faces.map((f) => [f.id, f]));
+    const hidden = new Set(s.hidden);
+    const out: SceneLabel[] = [];
+    const lists: [
+      ConditionKind,
+      { id: string; name: string; faces: number[] }[],
+    ][] = [
+      ["support", s.study.supports],
+      ["load", s.study.loads],
+      ["mass", s.study.masses],
+      ["thermal", s.study.thermal || []],
+      ["bolt", s.study.bolts || []],
+    ];
+    for (const [kind, list] of lists)
+      for (const c of list) {
+        const f = c.faces
+          .map((id) => faces.get(id))
+          .find((f) => f && !hidden.has(f.body ?? -1));
+        if (!f) continue;
+        const at = this.screen(f.anchor);
+        if (at) out.push({ id: c.id, text: c.name, kind, ...at });
+      }
+    return out;
+  }
+
+  /** A world point in CSS px over the canvas, or null behind the camera. */
+  private screen(p: number[]) {
+    this.renderer.setWorldPoint(p[0], p[1], p[2], 1);
+    this.renderer.worldToDisplay();
+    const [x, y, z] = this.renderer.getDisplayPoint();
+    if (z < 0 || z > 1) return null;
+    const scale = this.size.scale;
+    return { x: x / scale, y: this.size.height - y / scale };
   }
 
   private annotate() {
@@ -762,7 +941,11 @@ export class Scene {
       masses: number[][] = [],
       massLinks: number[] = [];
     if (!s.plot) {
-      const faces = new Map(s.faces.map((f) => [f.id, f]));
+      // Conditions on hidden bodies are not drawn.
+      const hidden = new Set(s.hidden);
+      const faces = new Map(
+        s.faces.filter((f) => !hidden.has(f.body ?? -1)).map((f) => [f.id, f]),
+      );
       for (const c of s.study.supports)
         for (const id of c.faces) {
           const f = faces.get(id);
@@ -1246,6 +1429,7 @@ export class Scene {
     this.renderer.resetCameraClippingRange();
     this.window.render();
     this.events.onOverlay(this.markerScreen());
+    this.events.onLabels(this.labels());
   }
 
   private markerScreen() {
@@ -1293,7 +1477,9 @@ export class Scene {
     if (!this.picker.pick(this.display(e), this.renderer)) return null;
     if (this.picker.getActor()?.$id !== this.surfaceActor.$id) return null;
     const cell = this.picker.getCellId();
-    return cell >= 0 ? (this.state!.view.triangleFaces[cell] ?? null) : null;
+    return cell >= 0 && cell < this.shown.length
+      ? (this.state!.view.triangleFaces[this.shown[cell]] ?? null)
+      : null;
   }
 
   /** Interpolated values at the picked point of the displayed result. */
@@ -1333,7 +1519,9 @@ export class Scene {
     let hover: number | null = null;
     let pending: PointerEvent | null = null;
     const down = (e: PointerEvent) => {
-      drag = { x: e.clientX, y: e.clientY, button: e.button, moved: false };
+      // Control-click is the secondary click on Mac trackpads.
+      const button = e.button === 0 && e.ctrlKey ? 2 : e.button;
+      drag = { x: e.clientX, y: e.clientY, button, moved: false };
       el.setPointerCapture(e.pointerId);
       el.focus();
     };
@@ -1371,7 +1559,19 @@ export class Scene {
     };
     const up = (e: PointerEvent) => {
       const click = drag && !drag.moved && drag.button === 0;
+      const context = drag && !drag.moved && drag.button === 2;
       drag = null;
+      if (context && this.state) {
+        // A right-click without dragging: the face's menu.
+        const face = this.pickFace(e);
+        const r = this.canvas.getBoundingClientRect();
+        if (face)
+          this.events.onContext(face, {
+            x: e.clientX - r.left,
+            y: e.clientY - r.top,
+          });
+        return;
+      }
       if (!click || !this.state) return;
       if (this.state.plot) {
         const probe = this.pickProbe(e);

@@ -1,5 +1,6 @@
 // Pure study logic. Only type imports, so Node can run the unit tests directly.
 import type {
+  Bolt,
   Condition,
   ConditionKind,
   Face,
@@ -19,9 +20,10 @@ export const LISTS = {
   load: "loads",
   mass: "masses",
   thermal: "thermal",
+  bolt: "bolts",
 } as const satisfies Record<ConditionKind, keyof Study>;
 export const conditionsOf = (study: Study, kind: ConditionKind) =>
-  study[LISTS[kind]] as Condition[];
+  (study[LISTS[kind]] ?? []) as Condition[];
 
 /** Fills settings that older projects lack with the values they implied. */
 export function normalizeStudy(study: Study): Study {
@@ -175,7 +177,8 @@ export type Draft =
   | { kind: "support"; value: Support }
   | { kind: "load"; value: Load }
   | { kind: "mass"; value: PointMass }
-  | { kind: "thermal"; value: ThermalCondition };
+  | { kind: "thermal"; value: ThermalCondition }
+  | { kind: "bolt"; value: Bolt };
 
 /** The study as it would be if the draft condition were saved now. */
 export function previewStudy(

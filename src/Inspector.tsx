@@ -19,6 +19,11 @@ import {
   DETAIL_NAMES,
   ANALYSES,
   CONDITIONS,
+  CONTACT_KINDS,
+  DEFAULT_FRICTION,
+  contactOf,
+  contactPairs,
+  type BoltCandidate,
   DEFAULT_HARMONIC,
   DEFAULT_MODES,
   DEFAULT_TRANSIENT,
@@ -71,6 +76,9 @@ import {
   type Region,
   type RegionResult,
   type Material,
+  type Bolt,
+  type Contact,
+  type Face,
   type TemperatureRow,
   type Mesh,
   type Part,
@@ -135,9 +143,12 @@ export function PartPanel({
 /** Chooses the analysis type and its settings. */
 export function AnalysisPanel({
   study,
+  touching,
   onChange,
 }: {
   study: Study;
+  /** Whether the part has bodies that touch. */
+  touching: boolean;
   onChange: (s: Study) => void;
 }) {
   const current = ANALYSES[study.analysis];
@@ -259,6 +270,28 @@ export function AnalysisPanel({
               stress locked in.
             </p>
           )}
+          {touching && (
+            <>
+              <div className="switch-row" style={{ marginTop: 10 }}>
+                <span>Contact and bolts</span>
+                <button
+                  className={"switch" + (study.contact ? " on" : "")}
+                  role="switch"
+                  aria-checked={!!study.contact}
+                  aria-label="Contact and bolts"
+                  onClick={() =>
+                    onChange({ ...study, contact: !study.contact })
+                  }
+                />
+              </div>
+              <p className="note">
+                Off, touching bodies are bonded. On, you choose under Contacts
+                whether each touching pair can separate and slide, and you can
+                add bolts to tighten. The load is then applied in steps, so the
+                solve takes longer.
+              </p>
+            </>
+          )}
         </div>
       )}
       {current.eigen && (
@@ -333,7 +366,7 @@ function TimeSettings({
           ))}
         </div>
       </div>
-      {t.on ? (
+      {t.on && (
         <>
           <NumberField
             label="Duration"
@@ -347,18 +380,15 @@ function TimeSettings({
             unit="°C"
             onChange={(start) => onChange({ ...t, start })}
           />
-          <p className="note">
-            The part starts at one temperature everywhere, and every thermal
-            condition switches on at time zero. Needs the material's specific
-            heat.
-          </p>
         </>
-      ) : (
-        <p className="note">
-          The temperatures the part settles at. At least one fixed temperature,
-          convection or radiation is needed, so heat can leave the part.
-        </p>
       )}
+      <p className="note">
+        Settled: the temperatures the part reaches in the end; at least one
+        fixed temperature, convection or radiation is needed, so heat can leave.
+        Over time: the part starts at one temperature everywhere, every
+        condition switches on at time zero, and the material needs its specific
+        heat.
+      </p>
     </div>
   );
 }
@@ -654,9 +684,10 @@ function HardeningPoints({
         Add point
       </button>
       <p className="note">
-        {points.length
-          ? "Total strain and stress beyond yield, from a tensile test, as true values (below about 5% strain, engineering values are close). They replace the straight line to the ultimate strength; stress stays flat beyond the last point."
-          : "Optional: add points from a tensile test to follow its curve instead of a straight line from yield to the ultimate strength."}
+        Optional: total strain and stress beyond yield from a tensile test, as
+        true values (below about 5% strain, engineering values are close). They
+        replace the straight line to the ultimate strength; stress stays flat
+        beyond the last point.
       </p>
     </div>
   );
@@ -768,6 +799,125 @@ function TemperatureTable({
   );
 }
 
+/**
+ * How each pair of touching bodies interacts. Pairs not set stay bonded.
+ */
+export function ContactsPanel({
+  part,
+  study,
+  onChange,
+  onShow,
+}: {
+  part: Part;
+  study: Study;
+  onChange: (s: Study) => void;
+  /** Highlights the bodies of a pair. */
+  onShow: (bodies: number[]) => void;
+}) {
+  const u = useUnits();
+  const pairs = contactPairs(part.geometry);
+  const name = (id: number) =>
+    part.geometry.bodies?.find((b) => b.id === id)?.name ?? `Body ${id}`;
+  const set = (id: string, changes: Partial<Contact>) => {
+    const next = { ...contactOf(study, id), ...changes };
+    const others = (study.contacts ?? []).filter((c) => c.id !== id);
+    onChange({
+      ...study,
+      contacts: next.kind === "bonded" ? others : [...others, next],
+    });
+  };
+  const frictional = pairs.some(
+    (p) => contactOf(study, p.id).kind === "frictional",
+  );
+  return (
+    <>
+      <Head
+        small="Contacts"
+        title={`${pairs.length} touching pair${pairs.length === 1 ? "" : "s"}`}
+      />
+      <div className="sec">
+        {pairs.map((p) => {
+          const c = contactOf(study, p.id);
+          const label = `${name(p.bodies[0])} · ${name(p.bodies[1])}`;
+          return (
+            <div className="contact-pair" key={p.id}>
+              <h4>
+                <button className="link" onClick={() => onShow(p.bodies)}>
+                  {label}
+                </button>
+                <span className="mono">
+                  {u.show(p.area, "mm²", 0)} {u.label("mm²")}
+                </span>
+              </h4>
+              <div className="seg" role="group" aria-label={`${label} contact`}>
+                {CONTACT_KINDS.map((k) => (
+                  <button
+                    key={k.id}
+                    className={c.kind === k.id ? "on" : ""}
+                    aria-pressed={c.kind === k.id}
+                    onClick={() =>
+                      set(p.id, {
+                        kind: k.id,
+                        friction:
+                          k.id === "frictional"
+                            ? (c.friction ?? DEFAULT_FRICTION)
+                            : undefined,
+                      })
+                    }
+                  >
+                    {k.name}
+                  </button>
+                ))}
+              </div>
+              {c.kind === "frictional" && (
+                <NumberField
+                  label="Friction coefficient"
+                  value={c.friction ?? DEFAULT_FRICTION}
+                  step="0.05"
+                  onChange={(friction) => set(p.id, { friction })}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="sec">
+        {CONTACT_KINDS.map((k) => (
+          <p className="note" key={k.id} style={{ marginTop: 0 }}>
+            <b>{k.name}.</b> {k.note}
+          </p>
+        ))}
+        {frictional && (
+          <p className="note">
+            Typical friction coefficients: dry machined steel on steel 0.15–0.2,
+            aluminum on steel about 0.3, lubricated 0.05–0.1. Bolted joints are
+            usually checked for slip with 0.1–0.15, to be safe.
+          </p>
+        )}
+        <More title="Contact stiffness">
+          <NumberField
+            label="Stiffness factor"
+            value={study.contactStiffness ?? 1}
+            step="0.5"
+            onChange={(v) =>
+              onChange({
+                ...study,
+                contactStiffness: v > 0 && v !== 1 ? v : undefined,
+              })
+            }
+          />
+          <p className="note">
+            Contact is enforced by stiff springs between the surfaces, so they
+            overlap slightly where pressed: by about the pressure ÷ (20 ×
+            elastic modulus) of an element. A higher factor overlaps less but
+            converges more slowly; lower it if a solve with contact fails.
+          </p>
+        </More>
+      </div>
+    </>
+  );
+}
+
 export function ConditionsPanel({
   kind,
   list,
@@ -847,14 +997,18 @@ const DRAFT_NAMES = {
   load: "load",
   mass: "mass",
   thermal: "condition",
+  bolt: "bolt",
 } as const;
 
 export function ConditionEditor({
   draft,
   exists,
   selected,
+  selectedFaces,
   selectedArea,
   center,
+  boltCandidates,
+  onPick,
   onChange,
   onRemoveFace,
   onCancel,
@@ -864,7 +1018,12 @@ export function ConditionEditor({
   draft: Draft;
   exists: boolean;
   selected: number[];
+  selectedFaces: Face[];
   selectedArea: number;
+  /** Likely bolts, offered when editing a bolt. */
+  boltCandidates: (BoltCandidate & { name: string })[];
+  /** Replaces the selected faces. */
+  onPick: (faces: number[]) => void;
   /** Area-weighted center of the selected faces, and of the part. */
   center: { selection: number[] | null; part: number[] };
   onChange: (changes: Record<string, unknown>) => void;
@@ -916,6 +1075,15 @@ export function ConditionEditor({
           <LoadFields load={draft.value} center={center} onChange={onChange} />
         ) : draft.kind === "thermal" ? (
           <ThermalFields condition={draft.value} onChange={onChange} />
+        ) : draft.kind === "bolt" ? (
+          <BoltFields
+            bolt={draft.value}
+            faces={selectedFaces}
+            candidates={boltCandidates}
+            selected={selected}
+            onPick={onPick}
+            onChange={onChange}
+          />
         ) : (
           <MassFields mass={draft.value} center={center} onChange={onChange} />
         )}
@@ -1028,6 +1196,121 @@ function ThermalFields({
         />
       )}
       <p className="note">{kind.note}</p>
+    </>
+  );
+}
+
+/**
+ * A bolt: its preload, the stress that puts in the shank, and the preload
+ * a tightening torque gives.
+ */
+function BoltFields({
+  bolt,
+  faces,
+  candidates,
+  selected,
+  onPick,
+  onChange,
+}: {
+  bolt: Bolt;
+  faces: Face[];
+  /** Likely bolts in the part, with their body's name. */
+  candidates: (BoltCandidate & { name: string })[];
+  selected: number[];
+  onPick: (faces: number[]) => void;
+  onChange: (changes: Record<string, unknown>) => void;
+}) {
+  const u = useUnits();
+  const picked = (c: BoltCandidate) =>
+    c.faces.length === selected.length &&
+    c.faces.every((f) => selected.includes(f));
+  const radius = faces.find((f) => f.radius)?.radius;
+  const [torque, setTorque] = useState(50);
+  const [factor, setFactor] = useState(0.2);
+  const diameter = radius ? 2 * radius : NaN;
+  // T = K F d, with T in N·m and d in mm.
+  const fromTorque = (torque * 1000) / (factor * diameter);
+  return (
+    <>
+      {candidates.length > 0 && (
+        <div className="field">
+          <span>Bolts found</span>
+          <div className="presets" role="group" aria-label="Bolts found">
+            {candidates.map((c) => (
+              <button
+                key={c.faces.join("-")}
+                className={picked(c) ? "on" : ""}
+                aria-pressed={picked(c)}
+                onClick={() => onPick(c.faces)}
+              >
+                <span>
+                  {c.name}
+                  <small>
+                    {u.show(c.diameter, "mm", 2)} {u.label("mm")} shank through
+                    a hole · face{c.faces.length > 1 ? "s" : ""}{" "}
+                    {c.faces.join(", ")}
+                  </small>
+                </span>
+                {picked(c) && <Check size={14} />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <NumberField
+        label="Preload"
+        value={bolt.preload}
+        unit="N"
+        onChange={(preload) => onChange({ preload })}
+      />
+      {radius && (
+        <Row label="Shank stress">
+          <Qty value={bolt.preload / (Math.PI * radius ** 2)} unit="MPa" />
+        </Row>
+      )}
+      {faces.some((f) => f.type !== "Cylinder") && (
+        <p className="note warn">
+          Select only the bolt’s shank: cylindrical faces of the bolt.
+        </p>
+      )}
+      <p className="note">
+        Select the plain shank between the head and the nut, where it does not
+        touch the clamped parts. The bolt is cut there, pulled to the preload,
+        then held at that length while the loads act. A typical preload is
+        70–75% of the bolt’s proof load: about 25 kN for an M10 class 8.8 bolt.
+      </p>
+      <More title="Preload from tightening torque">
+        <NumberField
+          label="Tightening torque"
+          value={torque}
+          unit="N·m"
+          onChange={setTorque}
+        />
+        <NumberField
+          label="Nut factor"
+          value={factor}
+          step="0.01"
+          onChange={setFactor}
+        />
+        <button
+          className="btn full"
+          disabled={!(fromTorque > 0 && Number.isFinite(fromTorque))}
+          onClick={() =>
+            onChange({ preload: Number(fromTorque.toPrecision(3)) })
+          }
+        >
+          {fromTorque > 0 && Number.isFinite(fromTorque)
+            ? `Use ${u.show(fromTorque, "N", 0)} ${u.label("N")}`
+            : "Select the shank first"}
+        </button>
+        <p className="note">
+          Preload = torque ÷ (nut factor × shank diameter
+          {radius ? `, ${u.show(diameter, "mm", 2)} ${u.label("mm")}` : ""}).
+          Nut factor: about 0.2 for plain or black-oxide steel, 0.15 zinc plated
+          or lightly oiled, 0.1–0.12 with anti-seize. Torque tightening scatters
+          the preload by ±25% or more.
+        </p>
+      </More>
     </>
   );
 }
@@ -1789,6 +2072,14 @@ export function ResultsPanel({
           </p>
         )}
       </div>
+      {plot === "contact" && (
+        <p className="foot note" style={{ marginTop: 0 }}>
+          Contact faces lie inside the assembly, where the bodies meet. Cut a
+          section through the joint under Filters to see the pressure across
+          them.
+        </p>
+      )}
+      <JointTables result={result} />
       {result.charts.map((c) => (
         <div className="sec" key={c.id}>
           <h4>{c.title}</h4>
@@ -1803,24 +2094,30 @@ export function ResultsPanel({
             yLabel={u.label(c.series[0].unit)}
             logY={RESPONSE.includes(c.id)}
             selected={
-              FRAME_CHARTS.includes(c.id)
-                ? frame
-                : RESPONSE.includes(c.id)
-                  ? nearest(c.x.values, result.frames[frame]?.value ?? 0)
+              c.frames
+                ? c.frames.includes(frame)
+                  ? c.frames.indexOf(frame)
                   : undefined
+                : FRAME_CHARTS.includes(c.id)
+                  ? frame
+                  : RESPONSE.includes(c.id)
+                    ? nearest(c.x.values, result.frames[frame]?.value ?? 0)
+                    : undefined
             }
             onSelect={
-              FRAME_CHARTS.includes(c.id)
-                ? onFrame
-                : RESPONSE.includes(c.id)
-                  ? (i) =>
-                      onFrame(
-                        nearest(
-                          result.frames.map((f) => f.value ?? 0),
-                          c.x.values[i],
-                        ),
-                      )
-                  : undefined
+              c.frames
+                ? (i) => onFrame(c.frames![i])
+                : FRAME_CHARTS.includes(c.id)
+                  ? onFrame
+                  : RESPONSE.includes(c.id)
+                    ? (i) =>
+                        onFrame(
+                          nearest(
+                            result.frames.map((f) => f.value ?? 0),
+                            c.x.values[i],
+                          ),
+                        )
+                    : undefined
             }
           />
           <p className="legend-note">
@@ -2348,6 +2645,105 @@ function ModeTable({
   );
 }
 
+type BoltResult = {
+  name: string;
+  preload: number;
+  tightened: number;
+  loaded: number;
+};
+type ContactResult = {
+  id: string;
+  label: string;
+  bodies: number[];
+  kind: string;
+  normal: number;
+  shear: number;
+  peak: number;
+  touching: number;
+  state: keyof typeof STATES;
+};
+const STATES = {
+  open: "Open",
+  pressed: "Pressed",
+  stuck: "Stuck",
+  sliding: "Sliding",
+};
+
+/** Bolt forces and contact forces of a static study with contact. */
+function JointTables({ result }: { result: Result }) {
+  const u = useUnits();
+  const bolts = result.summary.bolts as BoltResult[] | undefined;
+  const contacts = result.summary.contacts as ContactResult[] | undefined;
+  const force = (v: number) => u.show(v, "N", 0);
+  return (
+    <>
+      {bolts && (
+        <div className="sec">
+          <h4>
+            Bolts<span className="mono">force, {u.label("N")}</span>
+          </h4>
+          <table className="result-table" aria-label="Bolt forces">
+            <thead>
+              <tr>
+                <th>Bolt</th>
+                <th>Tightened</th>
+                <th>Loaded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bolts.map((b) => (
+                <tr key={b.name}>
+                  <td>{b.name}</td>
+                  <td>{force(b.tightened)}</td>
+                  <td>{force(b.loaded)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="note">
+            Loads that pull a joint apart raise the bolt force only a little:
+            mostly they unload the clamped parts. The joint opens when the bolt
+            force starts rising steeply.
+          </p>
+        </div>
+      )}
+      {contacts && (
+        <div className="sec">
+          <h4>
+            Contacts<span className="mono">force, {u.label("N")}</span>
+          </h4>
+          <table className="result-table" aria-label="Contact forces">
+            <thead>
+              <tr>
+                <th>Bodies</th>
+                <th>Normal</th>
+                <th>Shear</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.label}</td>
+                  <td>{force(c.normal)}</td>
+                  <td>{force(c.shear)}</td>
+                  <td>{STATES[c.state]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="note">
+            Normal force presses the bodies together. Frictional contact is
+            stuck until its shear reaches the friction coefficient times the
+            normal force, then slides; open contact has separated. Peak
+            pressures and the area in contact are in the console’s Checks tab.
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Charts with one point per frame, whose points pick the frame shown. */
 const FRAME_CHARTS = ["loadPath", "history", "stressHistory"];
 /** Response charts, whose points pick the frequency shown. */
@@ -2415,18 +2811,19 @@ function HarmonicSettings({
           ))}
         </div>
       </div>
-      {settings.excitation === "base" ? (
+      {settings.excitation === "base" && (
         <VectorField
           label="Base acceleration, g"
           name="base acceleration"
           value={settings.base}
           onChange={(base) => set({ base })}
         />
-      ) : (
-        <p className="note">
-          Each load is the amplitude of a sinusoidal load at every frequency.
-        </p>
       )}
+      <p className="note">
+        By its loads: each load is the amplitude of a sinusoidal load at every
+        frequency. By base shaking: the supports shake with the acceleration
+        given, and the loads play no part.
+      </p>
       <NumberField
         label="Modes to use"
         value={modes}
@@ -2454,6 +2851,9 @@ function assumptions(study: Study, result: Result) {
     case "static":
       return (
         `${material}, ${study.largeDeformation ? "large" : "small"} deformation, slowly applied loads.` +
+        (study.contact
+          ? " Contact through stiff springs between the surfaces; bolts are tightened before the loads act."
+          : "") +
         peak
       );
     case "thermalStress":

@@ -49,15 +49,28 @@ def topology():
 def bodies(solids, adjacency):
     """Body list and the groups of bodies bonded to each other."""
     out = [{'id': tag, 'name': f'Body {i+1}', 'volume': gmsh.model.occ.getMass(3, tag)} for i, (_, tag) in enumerate(solids)]
-    group = {b['id']: b['id'] for b in out}
+    return out, groups([b['id'] for b in out], adjacency)
+
+
+def groups(ids, adjacency):
+    """Groups of bodies joined by faces they share."""
+    group = {b: b for b in ids}
     def root(b):
         while group[b] != b: b = group[b]
         return b
     for volumes in adjacency.values():
         if len(volumes) == 2: group[root(volumes[0])] = root(volumes[1])
     components = {}
-    for b in out: components.setdefault(root(b['id']), []).append(b['id'])
-    return out, sorted(components.values())
+    for b in ids: components.setdefault(root(b), []).append(b)
+    return sorted(components.values())
+
+
+def interfaces(adjacency):
+    """Faces where two bodies touch: [{id, bodies, area, center}]. They are
+    bonded unless a study gives them contact."""
+    return [{'id':tag,'bodies':sorted(v),'area':gmsh.model.occ.getMass(2,tag),
+             'center':list(gmsh.model.occ.getCenterOfMass(2,tag))}
+            for tag,v in sorted(adjacency.items()) if len(v)==2]
 
 
 def size_settings(size):
@@ -110,9 +123,17 @@ def surface_data(quadratic=False):
         anchor=centroids[np.argmin(np.linalg.norm(centroids-center,axis=1))]
         closest,param=gmsh.model.getClosestPoint(2,tag,anchor)
         normal=gmsh.model.getNormal(tag,param)
-        faces.append({'anchor':closest.tolist(),'normal':normal.tolist(),'id': tag, 'name': f'Face {tag}', 'type': gmsh.model.getType(2, tag),
-                      'body': adjacency[tag][0],
-                      'area': gmsh.model.occ.getMass(2, tag), 'center': list(gmsh.model.occ.getCenterOfMass(2, tag)), 'indices': tris})
+        face={'anchor':closest.tolist(),'normal':normal.tolist(),'id': tag, 'name': f'Face {tag}', 'type': gmsh.model.getType(2, tag),
+              'body': adjacency[tag][0],
+              'area': gmsh.model.occ.getMass(2, tag), 'center': list(gmsh.model.occ.getCenterOfMass(2, tag)), 'indices': tris}
+        if face['type'] == 'Cylinder' and not quadratic:
+            # Holes and shafts: their radius sizes bolts, and their axis
+            # tells a bolt's shank from the holes it passes through.
+            try:
+                point, axis, radius, lo, hi = cylinder_of([tag])
+                face.update(radius=radius, axis=[*point.tolist(), *axis.tolist()], extent=[lo, hi])
+            except ValueError: pass
+        faces.append(face)
     return {'positions': coords.flatten().tolist(), 'nodeIds': [int(t) for t in tags], 'faces': faces}
 
 
@@ -139,16 +160,19 @@ def write_view(folder, arrays):
 
 
 def mesh_view(mesh):
-    """Points, VTK-ordered quadratic tetrahedra and boundary triangles tagged
-    with their CAD face. Indices refer to the surface node order."""
+    """Points, VTK-ordered quadratic tetrahedra with their body, and
+    boundary triangles tagged with their CAD face. Indices refer to the
+    surface node order."""
     surface=mesh['surface']
     tags=np.asarray(surface['nodeIds'])
     index=np.full(tags.max()+1,-1,np.int32);index[tags]=np.arange(len(tags))
     tets=index[np.asarray(mesh['elements'])][:,TET10_ORDER]
     triangles=np.concatenate([np.asarray(f['indices'],np.int32) for f in surface['faces']])
     faces=np.concatenate([np.full(len(f['indices'])//3,f['id'],np.int32) for f in surface['faces']])
+    owner={e:int(b) for b,es in (mesh.get('bodies') or {}).items() for e in es}
+    bodies=np.array([owner.get(e,0) for e in mesh['elementIds']],np.int32)
     return {'nodeIds':('i4',surface['nodeIds']),'points':('f8',np.asarray(surface['positions']).reshape(-1,3)),
-            'tets':('i4',tets),'triangles':('i4',triangles.reshape(-1,3)),'triangleFaces':('i4',faces)}
+            'tets':('i4',tets),'tetBodies':('i4',bodies),'triangles':('i4',triangles.reshape(-1,3)),'triangleFaces':('i4',faces)}
 
 
 def mesh_info(mesh):
@@ -167,8 +191,9 @@ def import_part(folder):
     preview_settings(dims)
     gmsh.model.mesh.generate(2)
     geometry = surface_data()
-    body_list, components = bodies(solids, topology())
-    geometry.update({'bodies': body_list, 'components': components,
+    adjacency = topology()
+    body_list, components = bodies(solids, adjacency)
+    geometry.update({'bodies': body_list, 'components': components, 'interfaces': interfaces(adjacency),
                      'bounds': list(bbox), 'dimensions': dims, 'volume': sum(b['volume'] for b in body_list),
                      'recommendedSize': default, 'hash': hashlib.sha256((folder/'part.step').read_bytes()).hexdigest(), 'units': 'mm'})
     (folder/'geometry.json').write_text(json.dumps(geometry))
@@ -183,12 +208,112 @@ def mesh_part(folder, study):
     size = float(study.get('meshSize') or geo['recommendedSize'])
     if not math.isfinite(size) or size <= 0:
         raise ValueError('Mesh size must be a positive number in mm.')
-    return mesh_model(folder, size)
+    bolts = (study.get('bolts') or []) if contact_on(study) else []
+    return mesh_model(folder, size, relabel=cut_bolts(bolts) if bolts else None)
 
 
-def mesh_model(folder, size, finalize=True):
+def contact_on(study):
+    """Contact and bolts apply to static studies that turn them on."""
+    return (study.get('analysis') or 'static') == 'static' and study.get('contact') is True
+
+
+def cylinder_of(faces):
+    """Axis point, unit axis, radius and axial extent (lowest and highest
+    position along the axis from the point) of cylindrical CAD faces, from
+    points sampled on them."""
+    points=[];normals=[]
+    for tag in faces:
+        if gmsh.model.getType(2, tag) != 'Cylinder':
+            raise ValueError('Select the bolt’s shank: a cylindrical face.')
+        lo, hi = gmsh.model.getParametrizationBounds(2, tag)
+        grid = np.array([[a, b] for a in np.linspace(lo[0], hi[0], 13) for b in np.linspace(lo[1], hi[1], 5)]).flatten()
+        points.append(np.asarray(gmsh.model.getValue(2, tag, grid)).reshape(-1, 3))
+        normals.append(np.asarray(gmsh.model.getNormal(tag, grid)).reshape(-1, 3))
+    points=np.vstack(points);normals=np.vstack(normals)
+    values, vectors = np.linalg.eigh(normals.T @ normals)
+    axis = vectors[:, 0]
+    if values[0] > 1e-6 * values[2]:
+        raise ValueError('The bolt’s shank faces must share one axis.')
+    A = np.zeros((3, 3)); b = np.zeros(3)
+    for x, n in zip(points, normals):
+        P = np.eye(3) - np.outer(n, n) - np.outer(axis, axis)
+        A += P; b += P @ x
+    A += len(points) * np.outer(axis, axis); b += np.outer(axis, axis) @ points.sum(0)
+    point = np.linalg.solve(A, b)
+    along = (points - point) @ axis
+    radial = np.linalg.norm((points - point) - np.outer(along, axis), axis=1)
+    return point, axis, float(radial.mean()), float(along.min()), float(along.max())
+
+
+def point_on(tag):
+    """A point inside a (trimmed) face, from a grid over its parameters."""
+    lo, hi = gmsh.model.getParametrizationBounds(2, tag)
+    for a in np.linspace(.5, .05, 10):
+        for u in (lo[0] + a * (hi[0] - lo[0]), hi[0] - a * (hi[0] - lo[0])):
+            for v in (lo[1] + a * (hi[1] - lo[1]), hi[1] - a * (hi[1] - lo[1])):
+                x = np.asarray(gmsh.model.getValue(2, tag, [u, v]))
+                if gmsh.model.isInside(2, tag, x): return x
+    return np.asarray(gmsh.model.occ.getCenterOfMass(2, tag))
+
+
+def cut_bolts(bolts):
+    """Cuts each bolt across its shank, halfway along the selected shank
+    faces, so the mesh has a pretension section there. The cut renumbers the
+    bolt's faces and splits its volume; returns how to name them as before:
+    {'faces': {new tag: original}, 'volumes': {new: original}, 'cuts':
+    {bolt id: (section face, volume on its far side)}}."""
+    o = gmsh.model.occ
+    faces = {}; volumes = {}; cuts = {}
+    for bolt in bolts:
+        selected = [int(f) for f in bolt['faces']]
+        owners = {int(v) for f in selected for v in gmsh.model.getAdjacencies(2, f)[0]}
+        if len(owners) != 1:
+            raise ValueError(f"The shank faces of “{bolt.get('name','a bolt')}” must belong to one body, the bolt.")
+        body = owners.pop()
+        point, axis, radius, lo, hi = cylinder_of(selected)
+        center = point + axis * (lo + hi) / 2
+        # The bolt's cross section there: a large disk trimmed to the body.
+        disk = o.addDisk(*center, 3 * radius, 3 * radius, zAxis=axis.tolist())
+        section, _ = o.intersect([(2, disk)], [(3, body)], removeTool=False)
+        # Copies of the bolt's faces, to recognize them after the cut.
+        boundary = [t for _, t in gmsh.model.getBoundary([(3, body)], oriented=False)]
+        copies = {c[1]: f for f, c in zip(boundary, o.copy([(2, f) for f in boundary]))}
+        others = [v for v in gmsh.model.getEntities(3)]
+        _, pieces = o.fragment(others, section)
+        o.synchronize()
+        halves = [t for _, t in pieces[others.index((3, body))]]
+        if len(halves) != 2:
+            raise ValueError(f"“{bolt.get('name','A bolt')}” could not be cut across its shank. Select the plain shank between the head and the nut.")
+        original = volumes.get(body, body)
+        for h in halves: volumes[h] = original
+        # Name every face of the cut bolt after the face it lies on.
+        known = set(faces) | set(boundary)
+        new_section = [t for t in set(t for _, t in gmsh.model.getBoundary([(3, halves[0])], oriented=False))
+                       & set(t for _, t in gmsh.model.getBoundary([(3, halves[1])], oriented=False))]
+        if len(new_section) != 1:
+            raise ValueError(f"“{bolt.get('name','A bolt')}” could not be cut across its shank. Select the plain shank between the head and the nut.")
+        for h in halves:
+            for _, t in gmsh.model.getBoundary([(3, h)], oriented=False):
+                if t == new_section[0] or t in faces: continue
+                closest = point_on(t)
+                # Closest points ignore trimming, so coplanar faces also
+                # need the point inside the face.
+                match = [copies[c] for c in copies
+                         if gmsh.model.getType(2, c) == gmsh.model.getType(2, t)
+                         and np.linalg.norm(gmsh.model.getClosestPoint(2, c, closest)[0] - closest) < 1e-6 * max(radius, 1)
+                         and gmsh.model.isInside(2, c, closest)]
+                if match: faces[t] = faces.get(match[0], match[0])
+        o.remove([(2, c) for c in copies], recursive=True)
+        o.synchronize()
+        cuts[str(bolt['id'])] = (new_section[0], halves[1])
+    return {'faces': faces, 'volumes': volumes, 'cuts': cuts}
+
+
+def mesh_model(folder, size, finalize=True, relabel=None):
     """Meshes the solids loaded in the current Gmsh model with quadratic
-    tetrahedra and writes mesh.json, view.bin and part.msh to folder."""
+    tetrahedra and writes mesh.json, view.bin and part.msh to folder.
+    `relabel` (from cut_bolts) names cut faces and volumes as before the
+    cut."""
     size_settings(size)
     gmsh.model.mesh.generate(3)
     gmsh.model.mesh.setOrder(2)
@@ -198,19 +323,42 @@ def mesh_model(folder, size, finalize=True):
         raise ValueError('This part did not produce a quadratic tetrahedral mesh.')
     tags, conn = gmsh.model.mesh.getElementsByType(11)
     conn = np.asarray(conn).reshape(-1, 10)
+    relabel = relabel or {'faces': {}, 'volumes': {}, 'cuts': {}}
+    face_of = lambda t: relabel['faces'].get(t, t)
+    volume_of = lambda v: relabel['volumes'].get(v, v)
+    section = {t: bolt for bolt, (t, _) in relabel['cuts'].items()}
     surface = surface_data(True)
-    faces = {}
-    adjacency = topology()
+    # Pieces of a cut face show as the face they came from.
+    merged = {}
+    for f in surface['faces']:
+        tag = face_of(f['id'])
+        if tag in merged: merged[tag]['indices'] += f['indices']
+        else: merged[tag] = {**f, 'id': tag, 'name': f'Face {tag}', 'body': volume_of(f['body'])}
+    surface['faces'] = list(merged.values())
+    faces = {};shared = {};cuts = {}
+    adjacency = {t: sorted({volume_of(v) for v in vs}) if t not in section else vs for t, vs in topology().items()}
     for _, tag in gmsh.model.getEntities(2):
-        if len(adjacency[tag]) != 1: continue
         nt, _, _ = gmsh.model.mesh.getNodes(2, tag, includeBoundary=True)
         _, tn = gmsh.model.mesh.getElementsByType(9, tag)
-        faces[str(tag)] = {'nodes': [int(n) for n in nt], 'triangles': np.asarray(tn).reshape(-1,6).tolist()}
+        face = {'nodes': [int(n) for n in nt], 'triangles': np.asarray(tn).reshape(-1,6).tolist()}
+        # Outer faces carry conditions; faces between two bodies can carry
+        # contact; a bolt's section carries its pretension.
+        if tag in section:
+            far = relabel['cuts'][section[tag]][1]
+            cuts[section[tag]] = {**face, 'far': [int(e) for e in gmsh.model.mesh.getElements(3, far)[1][0]]}
+        elif len(adjacency[tag]) == 1:
+            key = str(face_of(tag))
+            if key in faces:
+                faces[key]['nodes'] = sorted(set(faces[key]['nodes']) | set(face['nodes']))
+                faces[key]['triangles'] += face['triangles']
+            else: faces[key] = {**face, 'body': adjacency[tag][0]}
+        else: shared[str(tag)] = {**face, 'bodies': adjacency[tag]}
     quality = np.asarray(gmsh.model.mesh.getElementQualities(tags, 'minSICN'))
-    solids = gmsh.model.getEntities(3)
-    elements = {str(v): [int(e) for e in gmsh.model.mesh.getElements(3, v)[1][0]] for _, v in solids}
-    body_list, components = bodies(solids, adjacency)
-    mesh = {'bodies': elements, 'components': components,
+    elements = {}
+    for _, v in gmsh.model.getEntities(3):
+        elements.setdefault(str(volume_of(v)), []).extend(int(e) for e in gmsh.model.mesh.getElements(3, v)[1][0])
+    components = groups([int(v) for v in elements], {t: vs for t, vs in adjacency.items() if t not in section})
+    mesh = {'bodies': elements, 'components': components, 'interfaces': shared, 'cuts': cuts,
             'surface': surface, 'elementIds': [int(t) for t in tags], 'elements': conn.tolist(),
             'faces': faces, 'size': size, 'nodeCount': len(surface['nodeIds']), 'elementCount': len(tags),
             'minQuality': float(quality.min())}

@@ -6,8 +6,12 @@ import {
   Box,
   Grid3X3,
   Layers,
+  Eye,
+  EyeOff,
   Gauge,
+  Nut,
   Search,
+  Spline,
   Thermometer,
   Weight,
 } from "lucide-react";
@@ -15,6 +19,10 @@ import { LISTS, conditionsOf, faceHint, fmt, type Draft } from "./logic";
 import {
   ANALYSES,
   CONDITIONS,
+  CONTACT_KINDS,
+  contactActive,
+  contactOf,
+  contactPairs,
   DETAIL_NAMES,
   analysisName,
   conditionValue,
@@ -26,6 +34,7 @@ import { Group, Node, listKeys, useUnits } from "./ui";
 import type {
   Condition,
   ConditionKind,
+  Face,
   Mesh,
   Part,
   Plot,
@@ -41,6 +50,8 @@ export type Section =
   | "loads"
   | "masses"
   | "thermal"
+  | "contacts"
+  | "bolts"
   | "mesh"
   | "results";
 const ICONS = {
@@ -48,20 +59,24 @@ const ICONS = {
   load: ArrowDown,
   mass: Weight,
   thermal: Thermometer,
+  bolt: Nut,
 };
 /** Condition groups the analysis uses, in tree order. */
 export const conditionKinds = (study: Study) => {
   const a = ANALYSES[study.analysis];
-  return (["thermal", "support", "load", "mass"] as const).filter((k) =>
-    k === "thermal"
-      ? a.thermal
-      : k === "load"
-        ? a.loads &&
-          !(
-            study.analysis === "harmonic" &&
-            study.harmonic?.excitation === "base"
-          )
-        : a.mechanical,
+  return (["thermal", "support", "load", "mass", "bolt"] as const).filter(
+    (k) =>
+      k === "thermal"
+        ? a.thermal
+        : k === "load"
+          ? a.loads &&
+            !(
+              study.analysis === "harmonic" &&
+              study.harmonic?.excitation === "base"
+            )
+          : k === "bolt"
+            ? contactActive(study)
+            : a.mechanical,
   );
 };
 
@@ -127,13 +142,17 @@ export function StudyTree({
         icon={Gauge}
         label="Analysis"
         value={
-          study.analysis === "static" && study.largeDeformation
-            ? study.plasticity
-              ? "Large deformation, plastic"
-              : "Large deformation"
-            : study.analysis === "static" && study.plasticity
-              ? "Plastic"
-              : analysisName(study)
+          study.analysis === "static" &&
+          (study.largeDeformation || study.plasticity || study.contact)
+            ? [
+                study.largeDeformation && "large deformation",
+                study.plasticity && "plastic",
+                study.contact && "contact",
+              ]
+                .filter(Boolean)
+                .join(", ")
+                .replace(/^./, (c) => c.toUpperCase())
+            : analysisName(study)
         }
         active={section === "analysis"}
         onClick={() => onSection("analysis")}
@@ -148,6 +167,17 @@ export function StudyTree({
         onClick={() => onSection("material")}
         disabled={busy}
       />
+      {contactActive(study) && (
+        <Node
+          depth={1}
+          icon={Spline}
+          label="Contacts"
+          value={contactSummary(part, study)}
+          active={section === "contacts"}
+          onClick={() => onSection("contacts")}
+          disabled={busy}
+        />
+      )}
       {conditionKinds(study).map((kind) => (
         <Fragment key={kind}>
           <Group
@@ -225,6 +255,19 @@ export function StudyTree({
   );
 }
 
+/** "2 frictional, 1 bonded": how many touching pairs of each kind. */
+function contactSummary(part: Part, study: Study) {
+  const pairs = contactPairs(part.geometry);
+  return (
+    CONTACT_KINDS.map(({ id }) => {
+      const n = pairs.filter((p) => contactOf(study, p.id).kind === id).length;
+      return n ? `${n} ${id}` : "";
+    })
+      .filter(Boolean)
+      .join(", ") || "none"
+  );
+}
+
 export function FaceList({
   part,
   study,
@@ -232,9 +275,13 @@ export function FaceList({
   hover,
   draftKind,
   disabled,
+  busy,
   query,
+  hidden,
   onQuery,
   onSelect,
+  onSelectBody,
+  onHidden,
   onHover,
 }: {
   part: Part;
@@ -242,10 +289,18 @@ export function FaceList({
   selected: number[];
   hover: number | null;
   draftKind: ConditionKind | null;
+  /** Faces cannot be picked (a result is shown, or a job runs). */
   disabled: boolean;
+  /** A job runs: body visibility cannot change either. */
+  busy: boolean;
   query: string;
+  /** Bodies hidden from the view. */
+  hidden: number[];
   onQuery: (q: string) => void;
   onSelect: (id: number) => void;
+  /** Adds every face of a body to the selection (or removes them all). */
+  onSelectBody: (body: number) => void;
+  onHidden: (bodies: number[]) => void;
   onHover: (id: number | null) => void;
 }) {
   const units = useUnits();
@@ -255,11 +310,54 @@ export function FaceList({
       for (const f of c.faces)
         if (!use.has(f)) use.set(f, { kind, name: c.name });
   const q = query.trim().toLowerCase();
+  const bodies = part.geometry.bodies ?? [];
+  const grouped = bodies.length > 1;
+  const row = (f: Face) => {
+    const u = use.get(f.id);
+    const isSelected = selected.includes(f.id);
+    return (
+      <button
+        key={f.id}
+        className={
+          "face-row" +
+          (isSelected ? " selected " + (draftKind || "") : "") +
+          (hover === f.id ? " hovered" : "") +
+          (hidden.includes(f.body ?? -1) ? " dim" : "")
+        }
+        onClick={() => onSelect(f.id)}
+        onMouseEnter={() => onHover(f.id)}
+        onMouseLeave={() => onHover(null)}
+        onFocus={() => onHover(f.id)}
+        onBlur={() => onHover(null)}
+        aria-pressed={isSelected}
+        aria-label={`Face ${f.id}, ${f.type}, ${units.show(f.area, "mm²", 1)} ${units.label("mm²")}${u ? ", " + u.name : ""}`}
+        title={`Center ${f.center.map((c) => fmt(c, 1)).join(", ")} mm`}
+        disabled={disabled}
+      >
+        <b>{f.id}</b>
+        <span>{faceHint(f, (mm) => units.show(mm, "mm", 1))}</span>
+        {u ? (
+          <span className={"tag " + u.kind}>{u.name}</span>
+        ) : (
+          <span className="tag">{units.show(f.area, "mm²", 1)}</span>
+        )}
+      </button>
+    );
+  };
+  const matching = part.geometry.faces.filter((f) =>
+    (f.id + " " + f.type).toLowerCase().includes(q),
+  );
   return (
     <div className="faces">
       <div className="phead">
         Faces
-        <span className="mono faint">{part.geometry.faces.length}</span>
+        {grouped && hidden.length > 0 ? (
+          <button className="link" disabled={busy} onClick={() => onHidden([])}>
+            Show all
+          </button>
+        ) : (
+          <span className="mono faint">{part.geometry.faces.length}</span>
+        )}
       </div>
       {part.geometry.faces.length > 8 && (
         <label className="face-search">
@@ -278,43 +376,57 @@ export function FaceList({
         aria-label="Faces"
         onKeyDown={listKeys(".face-row")}
       >
-        {part.geometry.faces
-          .filter((f) => (f.id + " " + f.type).toLowerCase().includes(q))
-          .map((f) => {
-            const u = use.get(f.id);
-            const isSelected = selected.includes(f.id);
-            return (
-              <button
-                key={f.id}
-                className={
-                  "face-row" +
-                  (isSelected ? " selected " + (draftKind || "") : "") +
-                  (hover === f.id ? " hovered" : "")
-                }
-                onClick={() => onSelect(f.id)}
-                onMouseEnter={() => onHover(f.id)}
-                onMouseLeave={() => onHover(null)}
-                onFocus={() => onHover(f.id)}
-                onBlur={() => onHover(null)}
-                aria-pressed={isSelected}
-                aria-label={`Face ${f.id}, ${f.type}, ${units.show(f.area, "mm²", 1)} ${units.label("mm²")}${u ? ", " + u.name : ""}`}
-                title={`Center ${f.center.map((c) => fmt(c, 1)).join(", ")} mm`}
-                disabled={disabled}
-              >
-                <b>{f.id}</b>
-                <span>
-                  {faceHint(f, (mm) => units.show(mm, "mm", 1))}
-                  {(part.geometry.bodies?.length ?? 1) > 1 &&
-                    ` · ${part.geometry.bodies!.find((b) => b.id === f.body)?.name}`}
-                </span>
-                {u ? (
-                  <span className={"tag " + u.kind}>{u.name}</span>
-                ) : (
-                  <span className="tag">{units.show(f.area, "mm²", 1)}</span>
-                )}
-              </button>
-            );
-          })}
+        {grouped
+          ? bodies.map((b) => {
+              const off = hidden.includes(b.id);
+              const own = matching.filter((f) => f.body === b.id);
+              return (
+                <Fragment key={b.id}>
+                  <div className={"body-row" + (off ? " dim" : "")}>
+                    <button
+                      className="icon-button"
+                      aria-label={(off ? "Show " : "Hide ") + b.name}
+                      aria-pressed={!off}
+                      title={off ? "Show" : "Hide"}
+                      disabled={busy}
+                      onClick={() =>
+                        onHidden(
+                          off
+                            ? hidden.filter((h) => h !== b.id)
+                            : [...hidden, b.id],
+                        )
+                      }
+                    >
+                      {off ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                    <b>{b.name}</b>
+                    {draftKind && !disabled && (
+                      <button
+                        className="link"
+                        aria-label={`Select all faces of ${b.name}`}
+                        onClick={() => onSelectBody(b.id)}
+                      >
+                        All faces
+                      </button>
+                    )}
+                    <button
+                      className="link"
+                      aria-label={`Isolate ${b.name}`}
+                      disabled={busy}
+                      onClick={() =>
+                        onHidden(
+                          bodies.filter((o) => o.id !== b.id).map((o) => o.id),
+                        )
+                      }
+                    >
+                      Isolate
+                    </button>
+                  </div>
+                  {own.map(row)}
+                </Fragment>
+              );
+            })
+          : matching.map(row)}
       </div>
     </div>
   );
