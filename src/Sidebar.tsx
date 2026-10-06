@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, type CSSProperties } from "react";
 import {
   Activity,
   Anchor,
@@ -10,9 +10,11 @@ import {
   EyeOff,
   Gauge,
   Nut,
+  Scan,
   Search,
   Spline,
   Thermometer,
+  TrendingDown,
   Weight,
 } from "lucide-react";
 import { LISTS, conditionsOf, faceHint, fmt, type Draft } from "./logic";
@@ -53,7 +55,9 @@ export type Section =
   | "contacts"
   | "bolts"
   | "mesh"
-  | "results";
+  | "results"
+  | "convergence"
+  | "region";
 const ICONS = {
   support: Anchor,
   load: ArrowDown,
@@ -90,6 +94,7 @@ export function StudyTree({
   plot,
   plots,
   busy,
+  tools,
   onSection,
   onAdd,
   onEdit,
@@ -100,11 +105,13 @@ export function StudyTree({
   mesh: Mesh | null;
   result: Result | null;
   draft: Draft | null;
-  section: Section;
+  section: Section | null;
   plot: Plot;
   /** Plots the displayed result can show. */
   plots: Plot[];
   busy: boolean;
+  /** States of the result's tools; `region` is null where it can't apply. */
+  tools: { convergence: string; region: string | null };
   onSection: (s: Section) => void;
   onAdd: (kind: ConditionKind) => void;
   onEdit: (kind: ConditionKind, c: Condition) => void;
@@ -226,20 +233,49 @@ export function StudyTree({
             icon={Activity}
             label="Results"
             value={fmt(result.summary.seconds, 2) + " s"}
-            group
+            active={section === "results"}
             onClick={() => onSection("results")}
             disabled={busy}
           />
-          {plots.map((k) => (
+          {/* Which quantity the view plots: one Results panel shows them all. */}
+          <div role="radiogroup" aria-label="Plotted result">
+            {plots.map((k) => (
+              <button
+                key={k}
+                role="radio"
+                aria-checked={plot === k}
+                className="node plot"
+                style={{ "--d": 2 } as CSSProperties}
+                disabled={busy}
+                onClick={() => onPlot(k)}
+              >
+                <span className="radio" />
+                <span className="label">
+                  {plotInfo(k, result.analysis).name}
+                </span>
+              </button>
+            ))}
+          </div>
+          <Node
+            depth={1}
+            icon={TrendingDown}
+            label="Convergence"
+            value={tools.convergence}
+            active={section === "convergence"}
+            onClick={() => onSection("convergence")}
+            disabled={busy}
+          />
+          {tools.region !== null && (
             <Node
-              key={k}
-              depth={2}
-              label={plotInfo(k, result.analysis).name}
-              active={section === "results" && plot === k}
+              depth={1}
+              icon={Scan}
+              label="Refined region"
+              value={tools.region}
+              active={section === "region"}
+              onClick={() => onSection("region")}
               disabled={busy}
-              onClick={() => onPlot(k)}
             />
-          ))}
+          )}
         </>
       ) : (
         <Node

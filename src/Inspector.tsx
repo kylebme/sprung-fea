@@ -1,10 +1,7 @@
 import { useState } from "react";
 import {
-  Camera,
   Check,
   ChevronRight,
-  Download,
-  FileText,
   Grid3X3,
   Layers,
   Play,
@@ -1839,8 +1836,6 @@ export type RegionState = {
 
 export function ResultsPanel({
   result,
-  region,
-  mesh,
   study,
   plot,
   stats,
@@ -1851,29 +1846,16 @@ export function ResultsPanel({
   wire,
   animate,
   onAnimate,
-  probe,
   filters,
   bounds,
   scale,
   section,
   onFilters,
-  comparison,
-  fromProject,
-  busy,
   onDeform,
   onWire,
   onProbe,
-  onRefine,
-  convergeOptions,
-  onConvergeOptions,
-  onConverge,
-  onCsv,
-  onImage,
-  onSolverFile,
 }: {
   result: Result;
-  region: RegionState;
-  mesh: Mesh | null;
   study: Study;
   plot: Plot;
   stats: PlotStats;
@@ -1884,25 +1866,14 @@ export function ResultsPanel({
   wire: boolean;
   animate: boolean;
   onAnimate: (on: boolean) => void;
-  probe: Probe | null;
   filters: Filters;
   bounds: number[];
   scale: { min: number; max: number };
   section: SectionCut | null;
   onFilters: (f: Filters) => void;
-  comparison: Comparison | null;
-  fromProject: boolean;
-  busy: boolean;
   onDeform: (d: "off" | "true" | "auto") => void;
   onWire: (on: boolean) => void;
   onProbe: (node: number | null) => void;
-  onRefine: () => void;
-  convergeOptions: ConvergenceOptions;
-  onConvergeOptions: (o: ConvergenceOptions) => void;
-  onConverge: () => void;
-  onCsv: () => void;
-  onImage: () => void;
-  onSolverFile: (kind: "deck" | "log" | "frd") => void;
 }) {
   const u = useUnits();
   const s = result.summary;
@@ -1916,9 +1887,6 @@ export function ResultsPanel({
     node: stats.peak.node,
     label: low ? "Minimum" : "Maximum",
   };
-  const solverNote = fromProject
-    ? "Loaded from the project. Solve again to regenerate solver files."
-    : undefined;
   return (
     <>
       <Head small="Result" title={info.name} />
@@ -2020,57 +1988,7 @@ export function ResultsPanel({
             onClick={() => onWire(!wire)}
           />
         </div>
-      </div>
-      <div className="sec probe-card">
-        <h4>
-          Probe
-          {probe ? (
-            <button className="link" onClick={() => onProbe(null)}>
-              Clear
-            </button>
-          ) : (
-            <span className="mono">click model</span>
-          )}
-        </h4>
-        {probe ? (
-          <>
-            <Row label="At">
-              {probe.node === null ? "Interpolated" : "Node " + probe.node}
-            </Row>
-            <Row label="Position">
-              {probe.point.map((n) => u.show(n, "mm", 2)).join(", ")}
-              <em>{u.label("mm")}</em>
-            </Row>
-            {PROBE_ROWS.map(({ plot: p, label: plain, digits }) => {
-              const label = ANALYSES[result.analysis].eigen
-                ? plotInfo(p, result.analysis).name
-                : plain;
-              const value = probeValue(probe, p, yieldStrength);
-              return (
-                value !== null && (
-                  <Row key={p} label={label}>
-                    {p === "safety" ? (
-                      <>
-                        {value >= 1000 ? "> 1000" : fmt(value, digits)}
-                        <em>×</em>
-                      </>
-                    ) : (
-                      <Qty
-                        value={value}
-                        unit={plotInfo(p, result.analysis).unit}
-                        digits={digits}
-                      />
-                    )}
-                  </Row>
-                )
-              );
-            })}
-          </>
-        ) : (
-          <p className="note" style={{ marginTop: 0 }}>
-            Click the model or a section to read interpolated values.
-          </p>
-        )}
+        <p className="note">Click the model to read values at a point.</p>
       </div>
       {plot === "contact" && (
         <p className="foot note" style={{ marginTop: 0 }}>
@@ -2147,96 +2065,6 @@ export function ResultsPanel({
         }
         onChange={onFilters}
       />
-      {!region.showing && (
-        <div className="sec">
-          <h4>Mesh convergence</h4>
-          {result.convergence && (
-            <ConvergenceReport report={result.convergence} />
-          )}
-          {comparison && !result.convergence && (
-            <div className="comparison">
-              <Row label="Elements">
-                {fmt(comparison.before.elementCount)} →{" "}
-                {fmt(result.elementCount)}
-              </Row>
-              {result.keys.map((k) => {
-                const before = comparison.before.keys.find(
-                  (b) => b.id === k.id,
-                )?.value;
-                return (
-                  before !== undefined && (
-                    <Row key={k.id} label={k.label + " change"}>
-                      {fmt(Math.abs(k.value / before - 1) * 100, 2)}
-                      <em>%</em>
-                    </Row>
-                  )
-                );
-              })}
-              <div style={{ height: 8 }} />
-            </div>
-          )}
-          {!result.convergence && !comparison && (
-            <p className="note" style={{ marginTop: 0 }}>
-              Results depend on the mesh. Solve on finer meshes until the
-              numbers stop changing.
-            </p>
-          )}
-          <ConvergenceControls
-            options={convergeOptions}
-            onChange={onConvergeOptions}
-          />
-          <button
-            className="btn primary full"
-            onClick={onConverge}
-            disabled={busy}
-          >
-            <Layers size={14} />
-            Check mesh convergence
-          </button>
-          <button className="btn full" onClick={onRefine} disabled={busy}>
-            Re-solve once with{" "}
-            {u.show((mesh?.size || study.meshSize) * 0.7, "mm", 2)}{" "}
-            {u.label("mm")} mesh
-          </button>
-        </div>
-      )}
-      {result.analysis === "static" && <RegionControls region={region} />}
-      <div className="sec">
-        <h4>Export</h4>
-        <div className="exports">
-          <button
-            className="btn"
-            onClick={onCsv}
-            title="Node positions, displacement and stress on the part surface"
-          >
-            <Download size={13} />
-            Surface CSV
-          </button>
-          <button className="btn" onClick={onImage}>
-            <Camera size={13} />
-            View PNG
-          </button>
-          {(
-            [
-              ["deck", "Deck .inp"],
-              ["frd", "Results .frd"],
-              ["log", "Solver log"],
-            ] as const
-          ).map(([kind, label]) => (
-            <button
-              key={kind}
-              className="btn"
-              onClick={() => onSolverFile(kind)}
-              disabled={fromProject}
-              title={solverNote}
-            >
-              <FileText size={13} />
-              {label}
-            </button>
-          ))}
-        </div>
-        {fromProject && <p className="note">{solverNote}</p>}
-      </div>
       {result.warnings
         .filter((w) => !w.startsWith("Peak stress"))
         .map((w) => (
@@ -2245,6 +2073,154 @@ export function ResultsPanel({
           </p>
         ))}
       <p className="foot">{assumptions(study, result)}</p>
+    </>
+  );
+}
+
+/** Values at the probed point, shown over the view. */
+export function ProbeReadout({
+  probe,
+  result,
+  yieldStrength,
+  onClear,
+}: {
+  probe: Probe;
+  result: Result;
+  yieldStrength: number | null;
+  onClear: () => void;
+}) {
+  const u = useUnits();
+  return (
+    <div className="probe-card" role="group" aria-label="Probe">
+      <h4>
+        Probe
+        <button className="link" onClick={onClear}>
+          Clear
+        </button>
+      </h4>
+      <Row label="At">
+        {probe.node === null ? "Interpolated" : "Node " + probe.node}
+      </Row>
+      <Row label="Position">
+        {probe.point.map((n) => u.show(n, "mm", 2)).join(", ")}
+        <em>{u.label("mm")}</em>
+      </Row>
+      {PROBE_ROWS.map(({ plot: p, label: plain, digits }) => {
+        const label = ANALYSES[result.analysis].eigen
+          ? plotInfo(p, result.analysis).name
+          : plain;
+        const value = probeValue(probe, p, yieldStrength);
+        return (
+          value !== null && (
+            <Row key={p} label={label}>
+              {p === "safety" ? (
+                <>
+                  {value >= 1000 ? "> 1000" : fmt(value, digits)}
+                  <em>×</em>
+                </>
+              ) : (
+                <Qty
+                  value={value}
+                  unit={plotInfo(p, result.analysis).unit}
+                  digits={digits}
+                />
+              )}
+            </Row>
+          )
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Mesh convergence of the whole-part result: solve on finer meshes until
+ * the numbers stop changing, or compare one finer re-solve.
+ */
+export function ConvergencePanel({
+  result,
+  comparison,
+  mesh,
+  study,
+  busy,
+  convergeOptions,
+  onConvergeOptions,
+  onConverge,
+  onRefine,
+}: {
+  result: Result;
+  comparison: Comparison | null;
+  mesh: Mesh | null;
+  study: Study;
+  busy: boolean;
+  convergeOptions: ConvergenceOptions;
+  onConvergeOptions: (o: ConvergenceOptions) => void;
+  onConverge: () => void;
+  onRefine: () => void;
+}) {
+  const u = useUnits();
+  return (
+    <>
+      <Head small="Result" title="Mesh convergence" />
+      <div className="sec">
+        {result.convergence && (
+          <ConvergenceReport report={result.convergence} />
+        )}
+        {comparison && !result.convergence && (
+          <div className="comparison">
+            <Row label="Elements">
+              {fmt(comparison.before.elementCount)} → {fmt(result.elementCount)}
+            </Row>
+            {result.keys.map((k) => {
+              const before = comparison.before.keys.find(
+                (b) => b.id === k.id,
+              )?.value;
+              return (
+                before !== undefined && (
+                  <Row key={k.id} label={k.label + " change"}>
+                    {fmt(Math.abs(k.value / before - 1) * 100, 2)}
+                    <em>%</em>
+                  </Row>
+                )
+              );
+            })}
+            <div style={{ height: 8 }} />
+          </div>
+        )}
+        {!result.convergence && !comparison && (
+          <p className="note" style={{ marginTop: 0 }}>
+            Results depend on the mesh. Solve on finer meshes until the numbers
+            stop changing.
+          </p>
+        )}
+        <ConvergenceControls
+          options={convergeOptions}
+          onChange={onConvergeOptions}
+        />
+        <button
+          className="btn primary full"
+          onClick={onConverge}
+          disabled={busy}
+        >
+          <Layers size={14} />
+          Check mesh convergence
+        </button>
+        <button className="btn full" onClick={onRefine} disabled={busy}>
+          Re-solve once with{" "}
+          {u.show((mesh?.size || study.meshSize) * 0.7, "mm", 2)}{" "}
+          {u.label("mm")} mesh
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** Region refinement in its own card: the box, its solve and the result. */
+export function RegionPanel({ region }: { region: RegionState }) {
+  return (
+    <>
+      <Head small="Result" title="Refined region" />
+      <RegionControls region={region} />
     </>
   );
 }
@@ -2469,7 +2445,6 @@ function RegionControls({ region }: { region: RegionState }) {
   const s = result?.summary;
   return (
     <div className="sec region">
-      <h4>Refine a region</h4>
       {result && (
         <div className="seg" role="group" aria-label="Show result">
           {(

@@ -26,7 +26,7 @@ test("remote force, moment and rotation loads: set up, solve, and balance", asyn
   await solve(page);
   expectClose(numbers(await check(page, "Applied force")), [0, 0, -100]);
   expectClose(numbers(await check(page, "Reaction")), [0, 0, 100]);
-  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
   // Beam theory: F L³/3EI + (F × 50 mm) L²/2EI = 0.508 mm, plus shear.
   const tip = Number(await inspector(page).locator(".big strong").innerText());
   expect(tip).toBeGreaterThan(0.5);

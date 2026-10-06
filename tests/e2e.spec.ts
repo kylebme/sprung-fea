@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { exportItem, viewCenter } from "./helpers";
 const inspector = (page: Page) =>
   page.getByRole("complementary", { name: "Inspector" });
 test("complete study, real contours, probe, refine, save, reopen, and invalidate", async ({
@@ -41,20 +42,23 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
     page.getByRole("heading", { name: "von Mises stress" }),
   ).toBeVisible({ timeout: 60000 });
   await page.screenshot({ path: "output/playwright/stress.png" });
-  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
   await expect(inspector(page).locator(".big")).toContainText("0.288");
   await page.getByRole("button", { name: "Magnified" }).click();
   await expect(page.getByText(/Displacement ×/)).toBeVisible();
-  const canvas = page.locator("canvas");
-  const box = await canvas.boundingBox();
-  await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
+  const middle = await viewCenter(page);
+  await page.mouse.click(middle.x, middle.y);
   await expect(page.locator(".probe-card")).toContainText("Interpolated");
+  // Convergence has its own card, opened from its row under Results.
+  await page
+    .getByRole("button", { name: /^Convergence\s*not checked/ })
+    .click();
   await page.getByRole("button", { name: /^Re-solve once with/ }).click();
   await expect(
     page.getByText("Peak stress change", { exact: true }),
   ).toBeVisible({ timeout: 60000 });
   await page.screenshot({ path: "output/playwright/refined.png" });
-  await page.getByRole("button", { name: "Yield margin", exact: true }).click();
+  await page.getByRole("radio", { name: "Yield margin", exact: true }).click();
   // Minimum margin is 9.3, so the scale widens beyond the 0–5 default.
   await expect(page.locator(".legend")).toContainText("20+");
   // Switching console tabs re-runs its scroll effect; it must not crash.
@@ -87,7 +91,7 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
     page.getByRole("heading", { name: "Yield margin" }),
   ).toBeVisible();
   const csvPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Surface CSV" }).click();
+  await (await exportItem(page, "Surface CSV")).click();
   const csv = await csvPromise;
   expect(csv.suggestedFilename()).toBe("sprung-fea-surface-nodes.csv");
   expect(await fs.readFile(await csv.path(), "utf8")).toMatch(/^surface_node,/);
@@ -104,7 +108,8 @@ test("complete study, real contours, probe, refine, save, reopen, and invalidate
     page.getByRole("heading", { name: "von Mises stress" }),
   ).toBeVisible();
   await expect(page.getByText("Results loaded from project")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Deck .inp" })).toBeDisabled();
+  await expect(await exportItem(page, "Deck .inp")).toBeDisabled();
+  await page.keyboard.press("Escape");
   await expect(
     page.getByRole("button", { name: /^Fixed\s*Face 1$/ }),
   ).toBeVisible();
@@ -202,9 +207,7 @@ test("free rotation and orthographic projection keep picking working", async ({
   await expect(
     page.getByRole("button", { name: "Perspective" }),
   ).toHaveAttribute("aria-pressed", "true");
-  const box = (await page.locator("canvas").boundingBox())!;
-  const cx = box.x + box.width / 2,
-    cy = box.y + box.height / 2;
+  const { x: cx, y: cy } = await viewCenter(page);
   // Drag across and back so the trackball ends near the starting view.
   await page.mouse.move(cx, cy);
   await page.mouse.down();
@@ -259,8 +262,8 @@ test("result filters: section area, section probing, iso-surface, threshold, and
     .click();
   // Looking at the cut face: a click probes the section, inside the part.
   await page.getByRole("button", { name: "Right", exact: true }).click();
-  const box = (await page.locator("canvas").boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const middle = await viewCenter(page);
+  await page.mouse.click(middle.x, middle.y);
   const card = page.locator(".probe-card");
   await expect(card).toContainText("Interpolated");
   await expect(card).toContainText(/Position\s*50, 10, 5\s*mm/);
@@ -271,7 +274,7 @@ test("result filters: section area, section probing, iso-surface, threshold, and
   await expect(filters).toContainText(/Iso value\s*14\.\d+ MPa/);
   await page.screenshot({ path: "output/playwright/iso-surface.png" });
   await page.getByRole("switch", { name: "Iso-surface" }).click();
-  await page.getByRole("button", { name: "Yield margin", exact: true }).click();
+  await page.getByRole("radio", { name: "Yield margin", exact: true }).click();
   await page.getByRole("switch", { name: "Threshold" }).click();
   await expect(filters).toContainText("Show below");
   await page.getByRole("button", { name: "Magnified" }).click();
@@ -321,7 +324,7 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
   await expect(
     page.getByRole("heading", { name: "von Mises stress" }),
   ).toBeVisible({ timeout: 60000 });
-  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
   // Same answer as the direct solver.
   await expect(inspector(page).locator(".big")).toContainText("0.288");
   await page.getByRole("button", { name: "Checks", exact: true }).click();
@@ -401,6 +404,7 @@ for (const name of [
     await expect(page.locator(".probe-card")).toContainText("Node");
     await page.getByRole("button", { name: "Magnified" }).click();
     await page.screenshot({ path: `output/playwright/${name}.png` });
+    await page.getByRole("button", { name: /^Convergence\s/ }).click();
     await page.getByRole("button", { name: /^Re-solve once with/ }).click();
     // Jobs don't block the view: the camera stays usable while solving.
     await expect(page.locator(".job-card")).toBeVisible();
@@ -468,11 +472,11 @@ test("principal stress, Tresca shear and strain plots", async ({ page }) => {
     page.getByRole("heading", { name: "von Mises stress" }),
   ).toBeVisible({ timeout: 60000 });
   // Bending: tension above, an equal compression below.
-  await page.getByRole("button", { name: "Max principal stress" }).click();
+  await page.getByRole("radio", { name: "Max principal stress" }).click();
   const tension = Number(
     await inspector(page).locator(".big strong").innerText(),
   );
-  await page.getByRole("button", { name: "Min principal stress" }).click();
+  await page.getByRole("radio", { name: "Min principal stress" }).click();
   await expect(inspector(page)).toContainText("Minimum");
   const compression = Number(
     await inspector(page).locator(".big strong").innerText(),
@@ -482,17 +486,17 @@ test("principal stress, Tresca shear and strain plots", async ({ page }) => {
   await page.getByRole("switch", { name: "Threshold" }).click();
   await expect(page.locator(".filters")).toContainText("Show below");
   await page.getByRole("switch", { name: "Threshold" }).click();
-  await page.getByRole("button", { name: "Max shear stress (Tresca)" }).click();
+  await page.getByRole("radio", { name: "Max shear stress (Tresca)" }).click();
   const shear = Number(
     await inspector(page).locator(".big strong").innerText(),
   );
   expect(shear).toBeGreaterThan(0);
-  const box = (await page.locator("canvas").boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const middle = await viewCenter(page);
+  await page.mouse.click(middle.x, middle.y);
   await expect(page.locator(".probe-card")).toContainText("Max principal");
   await expect(page.locator(".probe-card")).toContainText("Equivalent strain");
   // Strain at the surface: σ/E, about 430 µm/m at the root.
-  await page.getByRole("button", { name: "Max principal strain" }).click();
+  await page.getByRole("radio", { name: "Max principal strain" }).click();
   await expect(page.locator(".vlabel")).toContainText("µm/m");
   const strain = Number(
     (await inspector(page).locator(".big strong").innerText()).replace(

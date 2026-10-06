@@ -19,7 +19,7 @@ test("large deformation: a heavily loaded cantilever, load steps and the load pa
     "Static, large deformation",
   );
   await solve(page);
-  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
   const tip = Number(await inspector(page).locator(".big strong").innerText());
   expect(tip).toBeGreaterThan(29.5);
   expect(tip).toBeLessThan(31.5);

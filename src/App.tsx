@@ -1,6 +1,15 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type CSSProperties,
+} from "react";
 import {
   Camera,
+  ChevronDown,
+  Download,
+  FileText,
   FolderOpen,
   Grid3X3,
   Maximize,
@@ -13,6 +22,7 @@ import {
   Undo2,
   Upload,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   Viewer,
@@ -23,7 +33,7 @@ import {
 } from "./Viewer";
 import { api, post, saveFile } from "./api";
 import { SYSTEM_LABEL, unitLabel, type UnitSystem } from "./units";
-import { UnitsContext } from "./ui";
+import { InspectorCard, UnitsContext } from "./ui";
 import {
   fmt,
   history,
@@ -65,9 +75,12 @@ import {
   ConditionEditor,
   ConditionsPanel,
   ContactsPanel,
+  ConvergencePanel,
   MaterialPanel,
   MeshPanel,
   PartPanel,
+  ProbeReadout,
+  RegionPanel,
   ResultsPanel,
   type Comparison,
 } from "./Inspector";
@@ -143,6 +156,8 @@ const fetchView = async (id: string, region = false) => {
   if (!response.ok) throw Error((await response.json()).error);
   return decodeView(await response.arrayBuffer());
 };
+/** Width the inspector card covers at the view's left edge, with margins. */
+const CARD_INSET = 324;
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLInputElement ||
   el instanceof HTMLTextAreaElement ||
@@ -158,7 +173,8 @@ export default function App() {
     [mesh, setMesh] = useState<Mesh | null>(null),
     [result, setResult] = useState<Result | null>(null),
     [fromProject, setFromProject] = useState(false);
-  const [section, setSection] = useState<Section>("part"),
+  // The section the inspector card shows; null closes the card.
+  const [section, setSection] = useState<Section | null>("part"),
     [selected, setSelected] = useState<number[]>([]),
     [hover, setHover] = useState<number | null>(null),
     [draft, setDraft] = useState<Draft | null>(null);
@@ -309,7 +325,9 @@ export default function App() {
     setFromProject(false);
     setProbe(null);
     setComparison(null);
-    setSection((s) => (s === "results" ? "mesh" : s));
+    setSection((s) =>
+      s === "results" || s === "convergence" || s === "region" ? "mesh" : s,
+    );
   };
   /** Applies a study history action and invalidates what it affects. */
   const change = (action: HistoryAction) => {
@@ -706,7 +724,8 @@ export default function App() {
         setFromProject(false);
         setWire(false);
         present(r);
-        setSection("results");
+        // A convergence check or finer re-solve opens its own report.
+        setSection(action === "converge" || refine ? "convergence" : "results");
         setSelected([]);
         if (refine && prior) setComparison({ before: prior, after: r });
         const balance = r.summary.forceBalanceError;
@@ -763,7 +782,11 @@ export default function App() {
         e.preventDefault();
         step(e.shiftKey ? "redo" : "undo");
       } else if (e.key === "Escape" && !job) {
-        cancelDraft();
+        if (draft) cancelDraft();
+        else if (!isTyping(e.target)) {
+          setSelected([]);
+          setSection(null);
+        }
       }
     };
     window.addEventListener("keydown", handler);
@@ -788,7 +811,7 @@ export default function App() {
         : [...s, ...own.filter((id) => !s.includes(id))],
     );
   };
-  const chooseSection = (s: Section) => {
+  const chooseSection = (s: Section | null) => {
     if (job) return;
     setSection(s);
     setDraft(null);
@@ -1236,6 +1259,52 @@ export default function App() {
           stats && (
             <ResultsPanel
               result={displayed!}
+              study={study}
+              plot={activePlot}
+              stats={stats}
+              frame={frame}
+              onFrame={(k) => {
+                setFrame(k);
+                setProbe(null);
+              }}
+              deform={deform}
+              autoScale={autoScale}
+              wire={wire}
+              animate={animate}
+              onAnimate={setAnimate}
+              filters={filters!}
+              bounds={viewGeometry!.bounds}
+              scale={stats.scale}
+              section={sectionCut}
+              onFilters={setFilters}
+              onDeform={setDeform}
+              onWire={setWire}
+              onProbe={(node) =>
+                setProbe(node === null ? null : nodeProbe(shown, node))
+              }
+            />
+          )
+        );
+      case "convergence":
+        return (
+          result && (
+            <ConvergencePanel
+              result={result}
+              comparison={comparison}
+              mesh={mesh}
+              study={study}
+              busy={!!job}
+              convergeOptions={convergeOptions}
+              onConvergeOptions={setConvergeOptions}
+              onConverge={() => solveStudy("converge")}
+              onRefine={() => solveStudy("solve", true)}
+            />
+          )
+        );
+      case "region":
+        return (
+          result && (
+            <RegionPanel
               region={{
                 draft: regionDraft,
                 result: regionResult,
@@ -1257,46 +1326,35 @@ export default function App() {
                   setFrame(0);
                 },
               }}
-              mesh={mesh}
-              study={study}
-              plot={activePlot}
-              stats={stats}
-              frame={frame}
-              onFrame={(k) => {
-                setFrame(k);
-                setProbe(null);
-              }}
-              deform={deform}
-              autoScale={autoScale}
-              wire={wire}
-              animate={animate}
-              onAnimate={setAnimate}
-              probe={probe}
-              filters={filters!}
-              bounds={viewGeometry!.bounds}
-              scale={stats.scale}
-              section={sectionCut}
-              onFilters={setFilters}
-              comparison={comparison}
-              fromProject={fromProject}
-              busy={!!job}
-              onDeform={setDeform}
-              onWire={setWire}
-              onProbe={(node) =>
-                setProbe(node === null ? null : nodeProbe(shown, node))
-              }
-              onRefine={() => solveStudy("solve", true)}
-              convergeOptions={convergeOptions}
-              onConvergeOptions={setConvergeOptions}
-              onConverge={() => solveStudy("converge")}
-              onCsv={csv}
-              onImage={screenshot}
-              onSolverFile={exportSolver}
             />
           )
         );
     }
   };
+  const card = inspector();
+  // What the result's tools have done, for their study tree rows.
+  const tools = {
+    convergence: result?.convergence
+      ? result.convergence.quantities.every((q) => q.converged)
+        ? "converged"
+        : "not settled"
+      : comparison
+        ? "compared"
+        : "not checked",
+    region:
+      result?.analysis !== "static"
+        ? null
+        : regionDraft
+          ? "editing"
+          : regionResult
+            ? regionShown
+              ? "shown"
+              : "solved"
+            : "off",
+  };
+  const solverNote = fromProject
+    ? "Loaded from the project. Solve again to regenerate solver files."
+    : undefined;
 
   const status = job
     ? job.message
@@ -1392,6 +1450,34 @@ export default function App() {
                 <Save size={14} />
                 Save
               </button>
+              {result && (
+                <ExportMenu
+                  disabled={!!job}
+                  items={[
+                    {
+                      label: "Surface CSV",
+                      icon: Download,
+                      title:
+                        "Node positions, displacement and stress on the part surface",
+                      onSelect: csv,
+                    },
+                    { label: "View PNG", icon: Camera, onSelect: screenshot },
+                    ...(
+                      [
+                        ["deck", "Deck .inp"],
+                        ["frd", "Results .frd"],
+                        ["log", "Solver log"],
+                      ] as const
+                    ).map(([kind, label]) => ({
+                      label,
+                      icon: FileText,
+                      disabled: fromProject,
+                      title: solverNote,
+                      onSelect: () => exportSolver(kind),
+                    })),
+                  ]}
+                />
+              )}
               <span className="divider" />
               <button
                 className="tb"
@@ -1466,6 +1552,7 @@ export default function App() {
                 plot={activePlot}
                 plots={plots}
                 busy={!!job}
+                tools={tools}
                 onSection={chooseSection}
                 onAdd={add}
                 onEdit={edit}
@@ -1493,7 +1580,12 @@ export default function App() {
             </aside>
 
             <section className="center">
-              <div className="viewport">
+              <div
+                className="viewport"
+                style={
+                  { "--inset": (card ? CARD_INSET : 0) + "px" } as CSSProperties
+                }
+              >
                 <Viewer
                   ref={viewer}
                   geometry={draft ? part.geometry : viewGeometry!}
@@ -1526,6 +1618,7 @@ export default function App() {
                   marginMax={marginMax}
                   yieldStrength={yieldStrength}
                   hidden={regionShown ? [] : hidden}
+                  inset={card ? CARD_INSET : 0}
                   onContext={(face, at) =>
                     (part.geometry.bodies?.length ?? 1) > 1 &&
                     setMenu({ face, ...at })
@@ -1682,7 +1775,23 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                {showingResult && probe && displayed && (
+                  <ProbeReadout
+                    probe={probe}
+                    result={displayed}
+                    yieldStrength={yieldStrength}
+                    onClear={() => setProbe(null)}
+                  />
+                )}
                 {jobCard}
+                {card && (
+                  <InspectorCard
+                    busy={!!job}
+                    onClose={draft ? undefined : () => setSection(null)}
+                  >
+                    {card}
+                  </InspectorCard>
+                )}
               </div>
               <Console
                 log={log}
@@ -1693,14 +1802,6 @@ export default function App() {
                 onTab={setConsoleTab}
               />
             </section>
-
-            <aside
-              className={"pane right" + (job ? " busy" : "")}
-              aria-label="Inspector"
-              inert={!!job}
-            >
-              {inspector()}
-            </aside>
           </main>
         )}
 
@@ -1821,6 +1922,81 @@ function PreloadDialog({
         </footer>
       </div>
     </dialog>
+  );
+}
+
+/**
+ * The title bar's export menu: files from the shown result. Escape, a
+ * click outside or a choice closes it.
+ */
+function ExportMenu({
+  items,
+  disabled,
+}: {
+  items: {
+    label: string;
+    icon: LucideIcon;
+    onSelect: () => void;
+    disabled?: boolean;
+    title?: string;
+  }[];
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    ref.current
+      ?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")
+      ?.focus();
+    const away = (e: PointerEvent) =>
+      !ref.current?.contains(e.target as Node) && setOpen(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [open]);
+  return (
+    <div className="menu-anchor" ref={ref}>
+      <button
+        className="tb"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        title="Export result files"
+        onClick={() => setOpen(!open)}
+      >
+        <Download size={14} />
+        Export
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="menu" role="menu" aria-label="Export">
+          {items.map(({ label, icon: Icon, onSelect, disabled, title }) => (
+            <button
+              key={label}
+              role="menuitem"
+              disabled={disabled}
+              title={title}
+              onClick={() => {
+                setOpen(false);
+                onSelect();
+              }}
+            >
+              <Icon size={13} />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

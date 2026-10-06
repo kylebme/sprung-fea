@@ -60,6 +60,8 @@ type Props = {
   hidden: number[];
   /** A right-click on a face, at a position in the view (CSS px). */
   onContext: (face: number, at: { x: number; y: number }) => void;
+  /** Width in CSS px the inspector card covers at the left edge. */
+  inset: number;
 };
 
 /**
@@ -175,6 +177,7 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       origin: p.origin,
       animate: p.animate,
       hidden: p.hidden,
+      inset: p.inset,
     };
     scene.update(state);
     const cut = scene.sectionCut();

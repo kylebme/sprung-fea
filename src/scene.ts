@@ -42,6 +42,11 @@ export type SceneState = {
   region: { lo: number[]; hi: number[] } | null;
   /** Bodies not drawn or picked, by body id. */
   hidden: number[];
+  /**
+   * Width in CSS px covered at the view's left edge by the inspector card.
+   * The view centres the part, fits and the triad in the rest.
+   */
+  inset: number;
 };
 /** A condition's name pinned where it acts, in CSS px over the canvas. */
 export type SceneLabel = {
@@ -554,6 +559,7 @@ export class Scene {
     if (model || changed("probe", "deformation")) this.placeMarker();
     if (model || changed("region", "theme")) this.drawRegion();
     if (changed("projection")) this.project(next.projection);
+    if (changed("inset")) this.applyInset();
     if (changed("theme")) {
       // Matches the viewport's CSS gradient tokens (--view-a, --view-b).
       this.renderer.setBackground(...rgb(COLORS[next.theme].viewB));
@@ -1237,7 +1243,7 @@ export class Scene {
       right: [1, 0, 0],
     };
     const dir = unit(directions[view] || directions.iso);
-    const aspect = this.size.width / this.size.height;
+    const aspect = this.visibleWidth() / this.size.height;
     const { center, radius } = this.extent();
     const half = (radius * 1.16) / Math.min(1, aspect);
     const distance = half / Math.tan(((VIEW_ANGLE / 2) * Math.PI) / 180);
@@ -1253,7 +1259,7 @@ export class Scene {
   /** Fits the extent while keeping the current view direction and up. */
   private reframe() {
     const c = this.camera;
-    const aspect = this.size.width / this.size.height;
+    const aspect = this.visibleWidth() / this.size.height;
     const { center, radius } = this.extent();
     const half = (radius * 1.16) / Math.min(1, aspect);
     const distance = half / Math.tan(((VIEW_ANGLE / 2) * Math.PI) / 180);
@@ -1333,6 +1339,21 @@ export class Scene {
     this.origin.setVisibility(on);
     this.originReach.$userData.source.setRadius(l * 1.2);
     this.originReach.setVisibility(on);
+  }
+
+  /** The view's width not covered by the inspector card, in CSS px. */
+  private visibleWidth() {
+    return Math.max(1, this.size.width - (this.state?.inset ?? 0));
+  }
+
+  /**
+   * Moves the projection centre right by half the covered width, so the
+   * focal point sits in the middle of the uncovered part of the view.
+   * Picking and labels use the same projection, so they follow.
+   */
+  private applyInset(inset = this.state?.inset ?? 0) {
+    this.camera.setWindowCenter(-inset / this.size.width, 0);
+    this.invalidate();
   }
 
   /** Swaps projection while keeping the view direction and visible size. */
@@ -1429,13 +1450,15 @@ export class Scene {
   private render() {
     if (this.disposed || !this.state) return;
     const { width, height, scale } = this.size;
-    // Keep the triad a fixed 84 px square in the lower left.
+    // Keep the triad a fixed 84 px square in the lower left of the
+    // uncovered view.
     const t = 84 * scale,
-      m = 6 * scale;
+      m = 6 * scale,
+      x = m + (this.state.inset ?? 0) * scale;
     this.triadRenderer.setViewport(
-      m / (width * scale),
+      x / (width * scale),
       m / (height * scale),
-      (m + t) / (width * scale),
+      (x + t) / (width * scale),
       (m + t) / (height * scale),
     );
     const tc = this.triadRenderer.getActiveCamera();
@@ -1471,6 +1494,7 @@ export class Scene {
     this.canvas.width = Math.round(width * scale);
     this.canvas.height = Math.round(height * scale);
     this.window.setSize(this.canvas.width, this.canvas.height);
+    this.applyInset();
     // Frame the part once; later resizes keep the view.
     if (first) this.fit("iso");
     // Resizing clears the canvas; draw now, before the browser paints the
@@ -1480,9 +1504,13 @@ export class Scene {
   }
 
   /** PNG of the current view, base64 without the data-URL prefix. */
+  /** The whole view as a PNG, with the part centred as if uncovered. */
   screenshot() {
+    this.applyInset(0);
     this.render();
-    return this.canvas.toDataURL("image/png").split(",")[1] || "";
+    const png = this.canvas.toDataURL("image/png").split(",")[1] || "";
+    this.applyInset();
+    return png;
   }
 
   // ---- Picking ----

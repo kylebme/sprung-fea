@@ -35,7 +35,7 @@ test("US units: switch, enter loads in lbf, read results in inches and psi", asy
   await solve(page);
   // Peak stress about 29.4 MPa = 4,270 psi; deflection 0.288 mm = 0.01134 in.
   await expect(page.locator(".vlabel")).toContainText("psi");
-  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
   const tip = Number(await inspector(page).locator(".big strong").innerText());
   expect(tip).toBeCloseTo(0.288 / 25.4, 4);
   await expect(inspector(page).locator(".big")).toContainText("in");

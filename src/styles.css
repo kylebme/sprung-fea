@@ -23,6 +23,9 @@
   --mass: #b08cf0;
   --mass-soft: rgba(176, 140, 240, 0.14);
   --danger: #f06a6a;
+  /* The inspector card floats above the view: lighter than the panels. */
+  --card: #1b1f23;
+  --card-line: #363c43;
   --view-a: #1d2227;
   --view-b: #121518;
   --overlay: rgba(20, 23, 26, 0.92);
@@ -53,6 +56,8 @@
   --mass: #7a4fc9;
   --mass-soft: rgba(122, 79, 201, 0.1);
   --danger: #d23c3c;
+  --card: #ffffff;
+  --card-line: #d6dbdf;
   --view-a: #ffffff;
   --view-b: #e8ebee;
   --overlay: rgba(255, 255, 255, 0.94);
@@ -217,7 +222,7 @@ svg {
 /* Workspace */
 .main {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr) 300px;
+  grid-template-columns: 248px minmax(0, 1fr);
   min-height: 0;
 }
 .pane {
@@ -230,9 +235,6 @@ svg {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-.pane.right {
-  border-left: 1px solid var(--line);
 }
 .phead {
   display: flex;
@@ -249,10 +251,11 @@ svg {
 }
 
 /* Study tree */
+/* The tree takes the height it needs; the face list gets the rest. */
 .tree {
   padding: 6px 0;
   overflow: auto;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 120px;
 }
 .node {
@@ -343,8 +346,8 @@ svg {
 .faces {
   display: flex;
   flex-direction: column;
-  flex: 0 1 46%;
-  min-height: 140px;
+  flex: 1 1 0;
+  min-height: 180px;
   border-top: 1px solid var(--line);
 }
 .face-search {
@@ -550,7 +553,7 @@ svg {
 .vlabel {
   position: absolute;
   top: 12px;
-  left: 14px;
+  left: calc(var(--inset, 0px) + 14px);
   pointer-events: none;
 }
 .vlabel b {
@@ -564,7 +567,7 @@ svg {
 .vbar {
   position: absolute;
   top: 10px;
-  left: 50%;
+  left: calc(50% + var(--inset, 0px) / 2);
   transform: translateX(-50%);
   display: flex;
   align-items: center;
@@ -632,7 +635,7 @@ svg {
 }
 .selpill {
   position: absolute;
-  left: 50%;
+  left: calc(50% + var(--inset, 0px) / 2);
   bottom: 14px;
   transform: translateX(-50%);
   display: flex;
@@ -748,6 +751,150 @@ svg {
 }
 .console-empty {
   color: var(--faint);
+}
+
+/* Inspector card: floats over the view's left edge, beside the tree, its
+   caret on the row that opened it. The view's overlays and the 3D view
+   centre themselves in the uncovered part (--inset). */
+.inspector {
+  --panel: var(--card);
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 6;
+  width: 300px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.inspector::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: calc(var(--caret, 40px) - 5.5px);
+  width: 11px;
+  height: 11px;
+  background: var(--card);
+  border-left: 1px solid var(--card-line);
+  border-bottom: 1px solid var(--card-line);
+  transform: rotate(45deg);
+}
+.inspector[data-caret="hidden"]::before {
+  display: none;
+}
+.inspector-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border-radius: inherit;
+}
+.inspector.busy .inspector-body {
+  opacity: 0.55;
+}
+.inspector-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.inspector-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.inspector .ihead {
+  padding-right: 40px;
+}
+
+/* Plotted result: a choice within Results, not a panel of its own. */
+.node.plot {
+  height: 24px;
+  color: var(--muted);
+}
+.node.plot .radio {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--line3);
+}
+.node.plot[aria-checked="true"] {
+  color: var(--text);
+}
+.node.plot[aria-checked="true"] .radio {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 2px, transparent 2.5px);
+}
+
+/* Probe readout: values at the probed point, over the view's lower right. */
+.probe-card {
+  position: absolute;
+  right: 14px;
+  bottom: 36px;
+  z-index: 4;
+  width: 230px;
+  padding: 8px 10px 6px;
+  background: var(--overlay);
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.probe-card h4 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.probe-card .kv {
+  min-height: 19px;
+}
+
+/* Title bar menu */
+.menu-anchor {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  -webkit-app-region: no-drag;
+}
+.menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  text-align: left;
+  font-size: 12px;
+}
+.menu button svg {
+  color: var(--muted);
+}
+.menu button:not(:disabled):hover,
+.menu button:focus-visible {
+  background: var(--hover);
 }
 
 /* Inspector */
@@ -1407,7 +1554,7 @@ svg {
 /* Job progress and errors */
 .job-card {
   position: absolute;
-  left: 50%;
+  left: calc(50% + var(--inset, 0px) / 2);
   bottom: 14px;
   z-index: 5;
   transform: translateX(-50%);
@@ -1449,9 +1596,6 @@ svg {
   grid-column: 2;
   grid-row: 1 / 4;
 }
-.pane.right.busy {
-  opacity: 0.55;
-}
 .progress {
   height: 3px;
   overflow: hidden;
@@ -1482,7 +1626,7 @@ svg {
 }
 .error-panel {
   position: fixed;
-  right: 312px;
+  right: 16px;
   bottom: 36px;
   z-index: 15;
   width: 380px;

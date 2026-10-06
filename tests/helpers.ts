@@ -30,6 +30,26 @@ export async function solve(page: Page, heading = "von Mises stress") {
   });
 }
 
+/**
+ * The middle of the 3D view's uncovered part: the inspector card covers its
+ * left edge, and the view centres the part in the rest.
+ */
+export async function viewCenter(page: Page) {
+  const box = (await page.locator(".view-host canvas").boundingBox())!;
+  const card = await page.locator(".inspector").boundingBox();
+  const covered = card ? card.x + card.width + 12 - box.x : 0;
+  return {
+    x: box.x + (covered + box.width) / 2,
+    y: box.y + box.height / 2,
+  };
+}
+
+/** Opens the title bar's Export menu and returns one of its items. */
+export async function exportItem(page: Page, name: string) {
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  return page.getByRole("menuitem", { name, exact: true });
+}
+
 /** Opens the console's Checks tab and returns a row's value text. */
 export async function check(page: Page, label: string) {
   const tab = page.getByRole("button", { name: "Checks", exact: true });

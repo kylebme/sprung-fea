@@ -65,7 +65,7 @@ test("heat transfer: fixed temperature, heater and air; then thermal stress", as
   const [into, out] = numbers(await check(page, "Heat flowing in, out"));
   expect(into).toBeCloseTo(5, 3);
   expect(out).toBeCloseTo(5, 3);
-  await page.getByRole("button", { name: "Heat flux", exact: true }).click();
+  await page.getByRole("radio", { name: "Heat flux", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Heat flux" })).toBeVisible();
   await page.screenshot({ path: "output/playwright/heat-transfer.png" });
 
@@ -79,7 +79,7 @@ test("heat transfer: fixed temperature, heater and air; then thermal stress", as
     page.getByRole("button", { name: /^Fixed\s*Face 1$/ }),
   ).toBeVisible();
   await solve(page);
-  await page.getByRole("button", { name: "Temperature", exact: true }).click();
+  await page.getByRole("radio", { name: "Temperature", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Temperature" }),
   ).toBeVisible();

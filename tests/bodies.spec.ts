@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { inspector, watchErrors } from "./helpers";
+import { inspector, viewCenter, watchErrors } from "./helpers";
 
 async function openJoint(page: Page) {
   await page.goto("http://127.0.0.1:5173");
@@ -28,10 +28,8 @@ test("hide, isolate and show bodies; labels follow what is visible", async ({
   await page.getByRole("button", { name: "Show all", exact: true }).click();
   await expect(page.locator(".condition-label")).toHaveCount(3);
   // A right-click on a face offers its body's menu.
-  const box = (await page.locator(".view-host canvas").boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, {
-    button: "right",
-  });
+  const middle = await viewCenter(page);
+  await page.mouse.click(middle.x, middle.y, { button: "right" });
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
   const hide = menu.getByRole("menuitem", { name: /^Hide Body \d$/ });

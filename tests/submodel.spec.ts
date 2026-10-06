@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   check,
+  exportItem,
   fillVector,
   inspector,
   numbers,
@@ -16,6 +17,8 @@ test("refine a region: box at the peak, solve, compare, switch views, export", a
   await openBeam(page);
   await solve(page);
   const panel = inspector(page);
+  // Region refinement has its own card, opened from its row under Results.
+  await page.getByRole("button", { name: /^Refined region\s*off/ }).click();
   await panel.getByRole("button", { name: "Refine a region" }).click();
   // The box starts around the peak stress, at the fixed end.
   const x = Number(await page.getByLabel("X region center").inputValue());
@@ -39,14 +42,16 @@ test("refine a region: box at the peak, solve, compare, switch views, export", a
   await expect(page.locator(".vlabel")).toContainText("von Mises stress");
   await page.screenshot({ path: "output/playwright/region-result.png" });
   const deck = page.waitForEvent("download");
-  await panel.getByRole("button", { name: "Deck .inp" }).click();
+  await (await exportItem(page, "Deck .inp")).click();
   expect((await deck).suggestedFilename()).toBe("region-analysis.inp");
 
   // Back to the whole part; the region box stays outlined.
   await show.getByRole("button", { name: "Whole part" }).click();
+  await page.getByRole("button", { name: /^Results\s/ }).click();
   await expect(panel.locator(".big strong")).toHaveText(
     String(Number(whole.toFixed(2))),
   );
+  await page.getByRole("button", { name: /^Refined region\s*solved/ }).click();
   // Move the box to mid-span, where the cut faces agree with the whole part.
   await panel.getByRole("button", { name: "Edit region" }).click();
   await fillVector(page, "region center", [50, 10, 5]);

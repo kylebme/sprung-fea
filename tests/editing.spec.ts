@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { fillVector, inspector, openBeam, solve, watchErrors } from "./helpers";
+import {
+  fillVector,
+  inspector,
+  openBeam,
+  solve,
+  viewCenter,
+  watchErrors,
+} from "./helpers";
 
 test("editing a condition after solving shows the part, and cancel brings the result back", async ({
   page,
@@ -21,8 +28,8 @@ test("editing a condition after solving shows the part, and cancel brings the re
   ).toBeVisible();
   // A click in the view picks a face too.
   await page.getByRole("button", { name: "Top", exact: true }).click();
-  const box = (await page.locator("canvas").boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const middle = await viewCenter(page);
+  await page.mouse.click(middle.x, middle.y);
   await expect(
     inspector(page).getByRole("button", { name: "Remove face 6" }),
   ).toBeVisible();

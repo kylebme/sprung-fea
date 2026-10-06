@@ -1,12 +1,16 @@
 import {
   createContext,
+  useCallback,
   useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { ChevronRight, Plus, type LucideIcon } from "lucide-react";
+import { ChevronRight, Plus, X, type LucideIcon } from "lucide-react";
 import { fmt, moveFocus, sig } from "./logic";
 import type { ConditionKind } from "./types";
 import {
@@ -80,6 +84,89 @@ function useNumberText(value: number, unit: string | undefined) {
     },
     blur: () => setText(null),
   };
+}
+
+/** Margin between the inspector card and the view's edges, in px. */
+const CARD_GAP = 12;
+
+/**
+ * The inspector: a card floating over the view's left edge, next to the
+ * study tree. Its caret points at the tree row that opened it (the row
+ * marked aria-current), and it moves with that row, staying in the view.
+ */
+export function InspectorCard({
+  busy,
+  onClose,
+  children,
+}: {
+  busy: boolean;
+  /** Closes the card; omitted while a condition is edited. */
+  onClose?: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  const place = useCallback(() => {
+    const card = ref.current;
+    const host = card?.parentElement;
+    if (!card || !host) return;
+    const row = card
+      .closest(".main")
+      ?.querySelector<HTMLElement>('.tree [aria-current="true"]');
+    const tree = row?.closest(".tree");
+    const view = host.getBoundingClientRect();
+    // The row's middle, in the view's coordinates, while it is in sight.
+    let mid: number | null = null;
+    if (row && tree) {
+      const r = row.getBoundingClientRect();
+      const t = tree.getBoundingClientRect();
+      const m = r.top + r.height / 2;
+      if (m >= t.top && m <= t.bottom) mid = m - view.top;
+    }
+    const height = card.offsetHeight;
+    const top = Math.max(
+      CARD_GAP,
+      Math.min((mid ?? 0) - 40, host.clientHeight - height - CARD_GAP),
+    );
+    card.style.top = top + "px";
+    const caret = mid === null ? null : mid - top;
+    const shown = caret !== null && caret >= 14 && caret <= height - 14;
+    card.dataset.caret = shown ? "shown" : "hidden";
+    if (shown) card.style.setProperty("--caret", caret + "px");
+  }, []);
+  // Content and the active row change with every render.
+  useLayoutEffect(place);
+  useEffect(() => {
+    const card = ref.current!;
+    const tree = card.closest(".main")?.querySelector(".tree");
+    const observer = new ResizeObserver(place);
+    observer.observe(card);
+    observer.observe(card.parentElement!);
+    tree?.addEventListener("scroll", place);
+    return () => {
+      observer.disconnect();
+      tree?.removeEventListener("scroll", place);
+    };
+  }, [place]);
+  return (
+    <aside
+      ref={ref}
+      className={"inspector" + (busy ? " busy" : "")}
+      aria-label="Inspector"
+      inert={busy}
+    >
+      {onClose && (
+        <button
+          className="inspector-close"
+          aria-label="Close inspector"
+          title="Close (Esc)"
+          onClick={onClose}
+        >
+          <X size={14} />
+        </button>
+      )}
+      <div className="inspector-body">{children}</div>
+    </aside>
+  );
 }
 
 export function Head({ small, title }: { small: string; title: string }) {

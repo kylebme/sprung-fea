@@ -7,6 +7,9 @@ test("mesh convergence: refine until settled, adopt the finest mesh, undo", asyn
   const errors = watchErrors(page);
   await openBeam(page);
   await solve(page);
+  await page
+    .getByRole("button", { name: /^Convergence\s*not checked/ })
+    .click();
   await inspector(page)
     .getByRole("button", { name: "Check mesh convergence" })
     .click();
@@ -44,6 +47,7 @@ test("mesh convergence flags a peak stress that keeps rising at a sharp corner",
   await page.goto("http://127.0.0.1:5173");
   await configureComplexPart(page, "ribbed-bracket");
   await solve(page);
+  await page.getByRole("button", { name: /^Convergence\s/ }).click();
   await inspector(page)
     .getByRole("button", { name: "Check mesh convergence" })
     .click();

@@ -126,7 +126,7 @@ test("bolted joint: tighten the bolt, pull the plates, read bolt and contact for
     0.01,
   );
   await tree(page)
-    .getByRole("button", { name: "Contact pressure", exact: true })
+    .getByRole("radio", { name: "Contact pressure", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Contact pressure" }),

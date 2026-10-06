@@ -27,7 +27,7 @@ test("plasticity: overload the cantilever, see plastic strain and the permanent 
   await expect(page.locator("header")).toContainText("Static, plastic");
   await solve(page);
   await page
-    .getByRole("button", { name: "Plastic strain", exact: true })
+    .getByRole("radio", { name: "Plastic strain", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Plastic strain" }),
