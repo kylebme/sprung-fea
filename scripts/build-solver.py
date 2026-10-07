@@ -103,7 +103,9 @@ class Toolchain:
         elif MAC:
             self.bin,self.lib,self.include=prefix/'bin',prefix/'lib',prefix/'include'
             sdk=subprocess.check_output(['xcrun','--show-sdk-path'],text=True).strip()
-            self.env={'MACOSX_DEPLOYMENT_TARGET':DEPLOYMENT_TARGET,'SDKROOT':sdk}
+            # gfortran runs the environment's clang to assemble.
+            self.env={'MACOSX_DEPLOYMENT_TARGET':DEPLOYMENT_TARGET,'SDKROOT':sdk,
+                      'PATH':os.pathsep.join([str(self.bin),os.environ.get('PATH','')])}
             # Xcode's clang: its SDK declares Accelerate's sparse LU.
             self.cc,self.ar=shutil.which('clang'),shutil.which('ar')
             self.fc=self.tool('arm64-apple-darwin20.0.0-gfortran')
@@ -198,11 +200,15 @@ def build_pastix_windows(tc):
 
 def ccx_sources(src):
     """CalculiX's Fortran and C sources (its Makefile.inc), CalculiX's PaStiX
-    interface replaced by ours."""
+    interface replaced by ours. The list can name a file the release does
+    not have (2.23: mafillmm.c); the link reports anything really missing."""
     text=(src/'Makefile.inc').read_text()
     def listed(name):
         block=re.search(rf'^{name}\s*=(.*?)(?:\n\s*\n|\Z)',text,re.M|re.S).group(1)
-        return re.findall(r'[\w.-]+\.[cf]\b',block)
+        files=re.findall(r'[\w.-]+\.[cf]\b',block)
+        absent=[f for f in files if not (src/f).is_file()]
+        if absent: print('Listed in Makefile.inc but not in the source:',', '.join(absent))
+        return [f for f in files if f not in absent]
     c=[f for f in listed('SCCXC') if f!='pastix.c']
     return listed('SCCXF'),c
 

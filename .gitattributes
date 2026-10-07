@@ -1,0 +1,2 @@
+# Patches apply byte for byte: no line-ending conversion on checkout.
+*.patch -text

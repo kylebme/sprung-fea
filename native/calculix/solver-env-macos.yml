@@ -5,6 +5,7 @@
 channels: [conda-forge]
 dependencies:
   - gfortran_osx-arm64
+  - clang
   - arpack 3.9.*
   - libpastix 6.4.*
   - libblas=*=*openblas
