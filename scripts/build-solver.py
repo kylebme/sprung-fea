@@ -21,8 +21,8 @@ The build carries three direct solvers, all multithreaded:
   native/calculix/mkl_pardiso.c loads an MKL the user has installed, when
   CalculiX first calls PARDISO.
 - PaStiX 6, through native/calculix/pastix_ccx.c in place of CalculiX's
-  pastix.c, which needs a fork of PaStiX. conda-forge ships PaStiX for
-  macOS and Linux; on Windows it is built here from source."""
+  pastix.c, which needs a fork of PaStiX. PaStiX is conda-forge's on
+  Linux, and built here from its release archive on macOS and Windows."""
 import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tarfile, urllib.request
 from pathlib import Path
 
@@ -51,6 +51,9 @@ SPOOLES_PATCHES=(
 # Electron's minimum macOS. Accelerate's LU is used where the OS has it.
 DEPLOYMENT_TARGET='12.0'
 MAC,WINDOWS=sys.platform=='darwin',sys.platform=='win32'
+# What GCC 14 and clang 16 made errors, and older C (CalculiX; PaStiX's
+# code without hwloc) still relies on.
+LENIENT=[f'-Wno-error={w}' for w in ('implicit-function-declaration','implicit-int','int-conversion','incompatible-pointer-types')]
 jobs=os.cpu_count() or 4
 
 
@@ -203,26 +206,34 @@ def scotch_windows(tc):
     return out
 
 
-def build_pastix_windows(tc):
-    """PaStiX 6.4 with the MinGW compilers, Scotch for ordering, OpenBLAS
-    through CBLAS/LAPACKE, and hwloc, all from the environment. Installs into
-    the build folder; returns its prefix."""
-    scotch=scotch_windows(tc)
+def build_pastix(tc):
+    """PaStiX 6.4 from its release archive, for macOS and Windows: Scotch for
+    ordering and OpenBLAS through CBLAS/LAPACKE, from the environment, with
+    64-bit indices as conda-forge builds it for Linux. conda-forge has none
+    for Windows, and its macOS build pairs PaStiX with a Scotch (7.0.5)
+    whose threaded ordering aborts there; Scotch orders on one thread here
+    (ordering takes a fraction of a second; the factorization is what PaStiX
+    threads). No hwloc, as on Linux. Installs into the build folder; returns
+    its prefix."""
+    scotch=scotch_windows(tc) if WINDOWS else tc.prefix
+    # conda's OpenBLAS is BLAS, CBLAS, LAPACK and LAPACKE in one library;
+    # on Windows its headers have their own folder.
+    headers=tc.include/'openblas' if WINDOWS else tc.include
     source=work/'pastix-src';source.mkdir()
     extract(fetch('pastix'),source)
     tree=next(source.iterdir())
     build,install=work/'pastix-build',work/'pastix'
     cmake=tc.tool('cmake')
     run(cmake,'-S',tree,'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
-        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_PREFIX_PATH={scotch};{tc.prefix/"Library"}',
-        f'-DSCOTCH_DIR={scotch}',
+        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',
+        f'-DCMAKE_PREFIX_PATH={scotch};{tc.prefix/"Library" if WINDOWS else tc.prefix}',f'-DSCOTCH_DIR={scotch}',
         f'-DCMAKE_C_COMPILER={tc.cc}',f'-DCMAKE_Fortran_COMPILER={tc.fc}',f'-DPython_EXECUTABLE={sys.executable}',
-        '-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON','-DPASTIX_ORDERING_METIS=OFF',
+        *([f'-DCMAKE_OSX_DEPLOYMENT_TARGET={DEPLOYMENT_TARGET}'] if MAC else []),
+        f'-DCMAKE_C_FLAGS={" ".join(LENIENT)}','-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON',
+        '-DPASTIX_ORDERING_SCOTCH_MT=OFF','-DPASTIX_ORDERING_METIS=OFF',
         '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
         '-DPASTIX_WITH_FORTRAN=OFF','-DSPM_WITH_FORTRAN=OFF','-DSPM_WITH_MPI=OFF','-DBUILD_TESTING=OFF',
-        # conda's OpenBLAS is BLAS, CBLAS, LAPACK and LAPACKE in one library,
-        # its headers in their own folder.
-        '-DBLA_VENDOR=OpenBLAS',f'-DCBLAS_INCDIR={tc.include/"openblas"}',f'-DLAPACKE_INCDIR={tc.include/"openblas"}',
+        '-DBLA_VENDOR=OpenBLAS',f'-DCBLAS_INCDIR={headers}',f'-DLAPACKE_INCDIR={headers}',
         env=tc.env)
     run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
     run(cmake,'--install',build,env=tc.env)
@@ -264,14 +275,13 @@ def build_ccx(tc, spooles, spooles_lib):
         # Present only where the engine finds an installed MKL.
         capabilities['pardiso']='Intel MKL';capabilities['pardisoNeedsMkl']=True
         libs=[] if WINDOWS else ['-ldl']
-    pastix=build_pastix_windows(tc) if WINDOWS else tc.prefix
+    # conda-forge's PaStiX on Linux; built here elsewhere (build_pastix).
+    pastix=tc.prefix if not (MAC or WINDOWS) else build_pastix(tc)
     includes.append(f'-I{pastix/"include"}')
     capabilities['pastix']='PaStiX 6.4'
     extra.append(native/'pastix_ccx.c')
 
-    # CalculiX is old C: newer GCC and clang reject what it relies on.
-    lenient=[f'-Wno-error={w}' for w in ('implicit-function-declaration','implicit-int','int-conversion','incompatible-pointer-types')]
-    cflags=['-O2','-w',*lenient,*includes,*defines]
+    cflags=['-O2','-w',*LENIENT,*includes,*defines]
     fortran,c=ccx_sources(src)
     objects=src/'objects';objects.mkdir()
     print(f'Compiling CalculiX: {len(fortran)} Fortran and {len(c)+len(extra)} C files',flush=True)
