@@ -38,6 +38,10 @@ SOURCES={
                 'http://archive.ubuntu.com/ubuntu/pool/universe/s/spooles/spooles_2.2.orig.tar.gz'],
                'a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd'),
     'pastix':(['https://files.inria.fr/pastix/releases/v6/pastix-6.4.0.tar.gz'],'891d426188eed56c1075fb34d2d80132593a1536ffc05cf333567f68a4811e55'),
+    # Inria's release archive, kept by the Debian/Ubuntu archive.
+    'scotch':(['http://archive.ubuntu.com/ubuntu/pool/universe/s/scotch/scotch_7.0.11.orig.tar.gz',
+               'https://gitlab.inria.fr/scotch/scotch/-/archive/v7.0.11/scotch-v7.0.11.tar.gz'],
+              'd3578b15a8ff5c7924ab0fa4cd166e58d907da4fd95cdaaab37a9034669c64d2'),
 }
 SPOOLES_PATCHES=(
     '0000-transform-ivinit.patch',
@@ -184,26 +188,24 @@ def build_spooles(tc):
 
 
 def scotch_windows(tc):
-    """Scotch as a MinGW DLL. conda-forge's Windows Scotch is a static
-    library built by Microsoft's compiler, which MinGW links once given the
-    few runtime pieces it expects (native/calculix/msvc_compat.c). Exports
-    Scotch's API only; returns a prefix with include, lib and bin."""
-    out=work/'scotch-mingw'
-    for d in ('include','lib','bin'): (out/d).mkdir(parents=True)
-    tool=lambda name: tc.tool('x86_64-w64-mingw32-'+name)
-    static=[tc.lib/'scotch.lib',tc.lib/'scotcherr.lib']
-    symbols=subprocess.check_output([str(tool('nm')),*map(str,static)],text=True,env={**os.environ,**tc.env},stderr=subprocess.DEVNULL)
-    exports=sorted({l.split()[2] for l in symbols.splitlines() if len(l.split())==3 and l.split()[1]=='T' and l.split()[2].startswith('SCOTCH_')})
-    (out/'scotch.def').write_text('EXPORTS\n'+'\n'.join(exports)+'\n')
-    tc.compile([native/'msvc_compat.c'],[out/'msvc_compat.o'],['-O2'],cwd=out)
-    run(tc.cc,'-shared','-o',out/'bin'/'scotch.dll',out/'scotch.def',f'-Wl,--out-implib,{out/"lib"/"libscotch.dll.a"}',
-        # MSVC's stack probe is MinGW's ___chkstk_ms under another name.
-        '-Wl,--defsym,__chkstk=___chkstk_ms','-Wl,--whole-archive',*static,'-Wl,--no-whole-archive',out/'msvc_compat.o',
-        tc.lib/'zlib.lib',tc.lib/'libbz2.lib',tc.lib/'lzma.lib',cwd=out,env=tc.env)
-    # PaStiX looks for scotcherr beside scotch: it is inside the same DLL.
-    shutil.copy2(out/'lib'/'libscotch.dll.a',out/'lib'/'libscotcherr.dll.a')
-    shutil.copy2(tc.include/'scotch.h',out/'include'/'scotch.h')
-    return out
+    """Scotch 7.0.11, static, built with the MinGW compilers: conda-forge's
+    Windows Scotch is built by Microsoft's compiler and does not run under
+    MinGW code (it corrupted the heap during ordering). 64-bit indices as
+    PaStiX is built, one thread (PaStiX orders on one), no compressed graph
+    files. Returns its install prefix."""
+    source=work/'scotch-src';source.mkdir()
+    extract(fetch('scotch'),source)
+    build,install=work/'scotch-build',work/'scotch'
+    cmake=tc.tool('cmake')
+    run(cmake,'-S',next(source.iterdir()),'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
+        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_C_COMPILER={tc.cc}',
+        f'-DCMAKE_C_FLAGS={" ".join(LENIENT)}','-DBUILD_SHARED_LIBS=OFF','-DINTSIZE=64','-DTHREADS=OFF',
+        '-DMPI_THREAD_MULTIPLE=OFF','-DBUILD_PTSCOTCH=OFF','-DBUILD_LIBESMUMPS=OFF','-DBUILD_LIBSCOTCHMETIS=OFF',
+        '-DINSTALL_METIS_HEADERS=OFF','-DBUILD_FORTRAN=OFF','-DUSE_ZLIB=OFF','-DUSE_LZMA=OFF','-DUSE_BZ2=OFF',
+        '-DENABLE_TESTS=OFF',env=tc.env)
+    run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
+    run(cmake,'--install',build,env=tc.env)
+    return install
 
 
 def build_pastix(tc):
@@ -335,7 +337,7 @@ def build_ccx(tc, spooles, spooles_lib):
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src,env=tc.env)
     else:
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
-    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib',tc.prefix/'Library'/'mingw-w64'/'bin',work/'scotch-mingw'/'bin']
+    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib',tc.prefix/'Library'/'mingw-w64'/'bin']
     return exe,capabilities,folders
 
 

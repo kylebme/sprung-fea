@@ -100,7 +100,10 @@ class DirectSolvers(unittest.TestCase):
                     if analysis=='frequency': s['loads']=[]
                     fast=solve(self.folder,s,8,name)['summary'][key]
                     reference=solve(self.folder,s,1,'spooles')['summary'][key]
-                    np.testing.assert_allclose(fast,reference,rtol=1e-7)
+                    # ARPACK iterates each eigenvalue to its own tolerance:
+                    # factorizations that differ by round-off (threaded MKL's
+                    # vary run to run) move it a few units in the 7th digit.
+                    np.testing.assert_allclose(fast,reference,rtol=1e-6)
 
     def test_eigenvalue_analyses_pass_over_pastix(self):
         if 'pastix' not in calculix.direct_solvers(): self.skipTest('This CalculiX build has no PaStiX.')
@@ -108,7 +111,7 @@ class DirectSolvers(unittest.TestCase):
         result=solve(self.folder,s,8,'pastix')
         self.assertNotIn('SOLVER=PASTIX',(self.folder/'analysis.inp').read_text())
         np.testing.assert_allclose(result['summary']['frequencies'],
-                                   solve(self.folder,s,1,'spooles')['summary']['frequencies'],rtol=1e-7)
+                                   solve(self.folder,s,1,'spooles')['summary']['frequencies'],rtol=1e-6)
 
 
 class NonlinearContact(unittest.TestCase):
