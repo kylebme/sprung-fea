@@ -237,6 +237,9 @@ def build_pastix(tc):
         f'-DCMAKE_PREFIX_PATH={scotch};{tc.prefix/"Library" if WINDOWS else tc.prefix}',f'-DSCOTCH_DIR={scotch}',
         f'-DCMAKE_C_COMPILER={tc.cc}',f'-DCMAKE_Fortran_COMPILER={tc.fc}',f'-DPython_EXECUTABLE={sys.executable}',
         *([f'-DCMAKE_OSX_DEPLOYMENT_TARGET={DEPLOYMENT_TARGET}'] if MAC else []),
+        # PaStiX's test helpers use pthreads without linking them; MinGW does
+        # not add winpthreads by itself.
+        *(['-DCMAKE_C_STANDARD_LIBRARIES=-lpthread'] if WINDOWS else []),
         f'-DCMAKE_C_FLAGS={" ".join(LENIENT)}','-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON',
         '-DPASTIX_ORDERING_SCOTCH_MT=OFF','-DPASTIX_ORDERING_METIS=OFF',
         '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
