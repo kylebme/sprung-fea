@@ -222,6 +222,14 @@ def build_pastix(tc):
     source=work/'pastix-src';source.mkdir()
     extract(fetch('pastix'),source)
     tree=next(source.iterdir())
+    # PaStiX's code for running without hwloc does not build: it calls a
+    # pastix_warning that 6.4 does not have, and on macOS sysctl without its
+    # header. Its one notice goes to stderr, which pastix_ccx.c silences.
+    isched=tree/'common'/'isched_nohwloc.c'
+    text=isched.read_text()
+    if 'pastix_warning(' not in text: sys.exit(f'{isched}: expected pastix_warning calls to replace')
+    isched.write_text('#include <stdio.h>\n#ifdef __APPLE__\n#include <sys/types.h>\n#include <sys/sysctl.h>\n#endif\n'
+                      +text.replace('pastix_warning(','fprintf(stderr,'))
     build,install=work/'pastix-build',work/'pastix'
     cmake=tc.tool('cmake')
     run(cmake,'-S',tree,'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
