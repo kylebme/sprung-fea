@@ -37,7 +37,7 @@ SOURCES={
     'spooles':(['https://www.netlib.org/linalg/spooles/spooles.2.2.tgz',
                 'http://archive.ubuntu.com/ubuntu/pool/universe/s/spooles/spooles_2.2.orig.tar.gz'],
                'a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd'),
-    'pastix':(['https://files.inria.fr/pastix/releases/v6/pastix-6.4.0.tar.gz'],None),
+    'pastix':(['https://files.inria.fr/pastix/releases/v6/pastix-6.4.0.tar.gz'],'891d426188eed56c1075fb34d2d80132593a1536ffc05cf333567f68a4811e55'),
 }
 SPOOLES_PATCHES=(
     '0000-transform-ivinit.patch',
@@ -195,7 +195,10 @@ def build_pastix_windows(tc):
         '-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON','-DPASTIX_ORDERING_METIS=OFF',
         '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
         '-DPASTIX_WITH_FORTRAN=OFF','-DSPM_WITH_FORTRAN=OFF','-DSPM_WITH_MPI=OFF','-DBUILD_TESTING=OFF',
-        '-DBLA_VENDOR=OpenBLAS',env=tc.env)
+        # conda's OpenBLAS is BLAS, CBLAS, LAPACK and LAPACKE in one library,
+        # its headers in their own folder.
+        '-DBLA_VENDOR=OpenBLAS',f'-DCBLAS_INCDIR={tc.include/"openblas"}',f'-DLAPACKE_INCDIR={tc.include/"openblas"}',
+        env=tc.env)
     run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
     run(cmake,'--install',build,env=tc.env)
     return install
@@ -258,7 +261,13 @@ def build_ccx(tc, spooles, spooles_lib):
     tc.archive(library,fobj+cobj)
 
     exe=src/('ccx.exe' if WINDOWS else 'ccx')
-    common=[objects/'ccx_main.o',library,spooles_lib,f'-L{pastix/"lib"}','-lpastix','-lspm',f'-L{tc.lib}','-larpack','-llapack','-lblas']
+    if WINDOWS:
+        # conda's MinGW-built ARPACK sits apart from the MSVC-style libraries;
+        # OpenBLAS's import library carries BLAS and LAPACK.
+        blas=[f'-L{tc.prefix/"Library"/"mingw-w64"/"lib"}','-larpack',f'-L{tc.lib}','-lopenblas']
+    else:
+        blas=[f'-L{tc.lib}','-larpack','-llapack','-lblas']
+    common=[objects/'ccx_main.o',library,spooles_lib,f'-L{pastix/"lib"}','-lpastix','-lspm',*blas]
     if MAC:
         # Link with Xcode's clang, which knows the SDK. gfortran's runtime
         # and OpenMP (LLVM's, which implements gfortran's GOMP calls) come
@@ -268,7 +277,7 @@ def build_ccx(tc, spooles, spooles_lib):
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src,env=tc.env)
     else:
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
-    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib']
+    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib',tc.prefix/'Library'/'mingw-w64'/'bin']
     return exe,capabilities,folders
 
 

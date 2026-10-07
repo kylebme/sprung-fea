@@ -9,9 +9,10 @@ dependencies:
   - gfortran_win-64
   - arpack 3.9.*
   - libblas=*=*openblas
-  - libcblas
-  - liblapacke
-  - libscotch
+  # OpenBLAS's import library and headers, for PaStiX and the link.
+  - openblas
+  # 64-bit indices, as PaStiX is built (PASTIX_INT64).
+  - libscotch=*=int64*
   - libhwloc
   - cmake
   - ninja
