@@ -279,6 +279,11 @@ def build_ccx(tc, spooles, spooles_lib):
     # A void function that returns a value (as Homebrew's formula fixes).
     replace(src/'readnewmesh.c','*iprfnp=iprfn;*konrfnp=konrfn;*ratiorfnp=ratiorfn;\n  \n  return NULL;',
             '*iprfnp=iprfn;*konrfnp=konrfn;*ratiorfnp=ratiorfn;\n  \n  return;')
+    # A Windows-only call written outside any function, which GCC 14 rejects;
+    # it chose two-digit exponents in the old msvcrt, which the UCRT prints
+    # anyway.
+    for name in (f'ccx_{VERSION}.c',f'ccx_{VERSION}step.c'):
+        replace(src/name,'#ifdef __WIN32\n_set_output_format(_TWO_DIGIT_EXPONENT);\n#endif\n','')
     capabilities={'version':VERSION,'threadSafeSpooles':True}
     defines=['-DARCH=Linux','-DSPOOLES','-DARPACK','-DMATRIXSTORAGE','-DNETWORKOUT','-DUSE_MT=1','-DPARDISO','-DPASTIX']
     # native/calculix/mkl_service.h stands in for MKL's header: no build
