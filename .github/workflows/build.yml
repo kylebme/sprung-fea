@@ -98,6 +98,10 @@ jobs:
           echo "SPRUNG_FEA_MKL=$mkl" >> "$GITHUB_ENV"
 
       - name: Compare the direct solvers
+        env:
+          # PaStiX's own progress in the solver log on Windows, where it
+          # stops (temporary, for diagnosis).
+          PASTIX_VERBOSE: ${{ runner.os == 'Windows' && '2' || '' }}
         run: |
           if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
           "$py" -m unittest -v tests.test_solvers

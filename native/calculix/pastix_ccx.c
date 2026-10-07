@@ -220,8 +220,13 @@ static void factor(struct context *c, double *ad, double *au, double *adb,
   int symmetric = *symmetryflag == 0;
   double *values;
   if (n == 0) return;
+  /* With PaStiX's statistics on, keep every line even if the solver stops:
+     a pipe (Windows) buffers stdout whole. */
+  if (getenv("PASTIX_VERBOSE") && *getenv("PASTIX_VERBOSE"))
+    setvbuf(stdout, NULL, _IONBF, 0);
   printf(" Factoring the system of equations using the %s PaStiX solver\n",
          symmetric ? "symmetric" : "unsymmetric");
+  fflush(stdout);
   if (n == 1) {
     double a = symmetric && *sigma != 0. ? ad[0] - *sigma * adb[0] : ad[0];
     release(c);
@@ -269,6 +274,7 @@ static void factor(struct context *c, double *ad, double *au, double *adb,
     c->symmetric = symmetric;
     printf(" Using up to %d cpu(s) for PaStiX.\n\n",
            (int)c->iparm[IPARM_THREAD_NBR]);
+    fflush(stdout);
     if (pastix_task_analyze(c->data, &c->spm) != PASTIX_SUCCESS)
       fail(c, "the analysis (ordering) failed");
   }
