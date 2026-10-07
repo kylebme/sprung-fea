@@ -1,0 +1,11 @@
+# Toolchain and libraries for scripts/build-solver.py on Linux x64:
+#   micromamba create -n sprung-solver -f native/calculix/solver-env-linux.yml
+# No MKL: PARDISO loads an MKL the user has installed (mkl_pardiso.c).
+channels: [conda-forge]
+dependencies:
+  - gcc_linux-64
+  - gfortran_linux-64
+  - arpack 3.9.*
+  - libpastix 6.4.*
+  - libblas=*=*openblas
+  - patchelf

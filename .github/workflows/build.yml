@@ -24,15 +24,18 @@ jobs:
         include:
           - name: macOS (Apple Silicon)
             os: macos-14
+            solver: macos
             package: dist:mac
             artifact: release/*.dmg
           - name: Windows (x64)
             os: windows-latest
+            solver: windows
             package: package:win
             artifact: release/*.exe
           - name: Linux (x64)
             # The oldest supported runner, so the app runs on older glibc.
             os: ubuntu-22.04
+            solver: linux
             package: package:linux
             artifact: release/*.AppImage
     env:
@@ -53,35 +56,21 @@ jobs:
         with:
           python-version: "3.10"
 
-      # CalculiX 2.23 on every platform: built from source on macOS, with
-      # thread-safe SPOOLES and Apple Accelerate as its direct solver;
-      # conda-forge on Windows and Linux.
-      - name: Build CalculiX (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install gcc arpack
-          python scripts/build-solver.py
-
-      - name: Install CalculiX (Windows, Linux)
-        if: runner.os != 'macOS'
+      # CalculiX 2.23 built from source on every platform, with threaded
+      # SPOOLES, PaStiX, and PARDISO (Apple Accelerate on macOS; an Intel MKL
+      # the user installs elsewhere), from a conda-forge environment.
+      - name: Set up the solver build environment
         uses: mamba-org/setup-micromamba@v2
         with:
-          environment-name: calculix
-          # OpenBLAS: MKL, the Windows default, loads its kernels at run
-          # time, so they cannot be found and bundled from the imports.
-          # Build 8 and later link the SPOOLES with fixed threading, so the
-          # direct solver can use every core, and carry upstream fixes.
-          create-args: calculix[version='2.23',build_number='>=8'] libblas=*=*openblas
+          environment-name: sprung-solver
+          environment-file: native/calculix/solver-env-${{ matrix.solver }}.yml
           init-shell: none
           cache-environment: true
 
-      - name: Locate CalculiX (Windows, Linux)
-        if: runner.os != 'macOS'
+      - name: Build CalculiX
         run: |
-          env="$MAMBA_ROOT_PREFIX/envs/calculix"
-          if [ "$RUNNER_OS" = Windows ]; then ccx="$env/Library/bin/ccx.exe"; else ccx="$env/bin/ccx"; fi
-          test -f "$ccx"
-          echo "SPRUNG_FEA_CCX=$ccx" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Windows ]; then python -m pip install pefile; fi
+          python scripts/build-solver.py --prefix "$MAMBA_ROOT_PREFIX/envs/sprung-solver"
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -98,11 +87,31 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
           "$py" -m pip install pyinstaller==6.22.3
 
+      # MKL is not bundled. Install it beside the build, as a user would, so
+      # that PARDISO is compared with the other direct solvers.
+      - name: Install Intel MKL for the solver tests (Windows, Linux)
+        if: runner.os != 'macOS'
+        run: |
+          "$MAMBA_EXE" create -y -q -n usermkl -c conda-forge mkl
+          env="$MAMBA_ROOT_PREFIX/envs/usermkl"
+          if [ "$RUNNER_OS" = Windows ]; then mkl="$env/Library/bin"; else mkl="$env/lib"; fi
+          echo "SPRUNG_FEA_MKL=$mkl" >> "$GITHUB_ENV"
+
+      - name: Compare the direct solvers
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
+          "$py" -m unittest -v tests.test_solvers
+
       - name: Package
-        run: npm run ${{ matrix.package }}
+        # The packaged app is tested as shipped: without MKL.
+        run: |
+          unset SPRUNG_FEA_MKL
+          npm run ${{ matrix.package }}
 
       - name: Solve with the packaged engine
-        run: npm run test:packaged
+        run: |
+          unset SPRUNG_FEA_MKL
+          npm run test:packaged
 
       - uses: actions/upload-artifact@v4
         with:

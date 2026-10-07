@@ -1,0 +1,17 @@
+# Toolchain and libraries for scripts/build-solver.py on Windows x64:
+#   micromamba create -n sprung-solver -f native/calculix/solver-env-windows.yml
+# conda-forge has no PaStiX for Windows, so the script builds it from
+# source with CMake. No MKL: PARDISO loads an MKL the user has installed
+# (mkl_pardiso.c).
+channels: [conda-forge]
+dependencies:
+  - gcc_win-64
+  - gfortran_win-64
+  - arpack 3.9.*
+  - libblas=*=*openblas
+  - libcblas
+  - liblapacke
+  - libscotch
+  - libhwloc
+  - cmake
+  - ninja

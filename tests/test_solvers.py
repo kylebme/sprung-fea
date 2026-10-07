@@ -1,10 +1,10 @@
 """Direct solvers and threads: real CalculiX solves on the beam, on one mesh.
 
-Threads must not change answers beyond round-off, and the two direct
-solvers (Apple Accelerate through CalculiX's PARDISO interface, where the
-solver build has it, and SPOOLES) must agree. SPOOLES 2.2 as released loses
-updates between threads on Apple silicon and returns wrong answers, so a
-threaded SPOOLES solve is compared too."""
+Threads must not change answers beyond round-off, and every direct solver
+the solver build has (PARDISO: Apple Accelerate, or an installed Intel MKL;
+PaStiX; SPOOLES) must agree. SPOOLES 2.2 as released loses updates between
+threads on Apple silicon and returns wrong answers, so a threaded SPOOLES
+solve is compared too."""
 import unittest, sys, os, tempfile, shutil
 from pathlib import Path
 from unittest import mock
@@ -37,8 +37,10 @@ class DirectSolvers(unittest.TestCase):
     def tearDownClass(cls):cls.temp.cleanup()
 
     # The .frd file carries six significant digits, so answers that agree
-    # to round-off can still differ in a value's last printed digit.
-    def assertSameAnswer(self, result, reference, rtol=1e-6):
+    # to round-off can still differ in a value's last printed digit: up to
+    # 1e-5 of the largest value. Threaded factorizations (MKL's) are not
+    # bit-reproducible, so such a flip comes and goes between runs.
+    def assertSameAnswer(self, result, reference, rtol=1e-5):
         scale=np.abs(reference['displacements']).max()
         np.testing.assert_allclose(result['displacements'],reference['displacements'],rtol=0,atol=rtol*scale)
         np.testing.assert_allclose(result['stress'],reference['stress'],rtol=0,atol=rtol*np.abs(reference['stress']).max())
@@ -67,24 +69,76 @@ class DirectSolvers(unittest.TestCase):
             self.assertIn('SPOOLES',threaded['solver'])
             self.assertSameAnswer(threaded,self.serial)
 
-    def test_accelerate_matches_spooles(self):
-        if not calculix.capabilities().get('pardiso'):
-            self.skipTest('This CalculiX build has no PARDISO-interface solver.')
-        first=solve(self.folder,study(),8)
-        self.assertIn('Accelerate',first['solver'])
-        self.assertIn('SOLVER=PARDISO',(self.folder/'analysis.inp').read_text())
-        self.assertSameAnswer(first,self.serial)
-        self.assertSameAnswer(solve(self.folder,study(),1),self.serial)
-        # Equilibrium to the six digits the .frd file keeps.
-        self.assertLess(first['summary']['forceBalanceError'],1e-5)
+    def faster_solvers(self):
+        found={n:d for n,d in calculix.direct_solvers().items() if n!='spooles'}
+        if not found: self.skipTest('This CalculiX build has only SPOOLES.')
+        return found
+
+    def test_direct_solvers_match_spooles(self):
+        for name,description in self.faster_solvers().items():
+            with self.subTest(solver=name):
+                first=solve(self.folder,study(),8,name)
+                self.assertIn(description,first['solver'])
+                self.assertIn('SOLVER='+calculix.DIRECT[name],(self.folder/'analysis.inp').read_text())
+                self.assertSameAnswer(first,self.serial)
+                self.assertSameAnswer(solve(self.folder,study(),1,name),self.serial)
+                # Equilibrium to the six digits the .frd file keeps.
+                self.assertLess(first['summary']['forceBalanceError'],1e-5)
+
+    def test_the_fastest_solver_is_the_default(self):
+        fastest=next(iter(self.faster_solvers()))
+        self.assertIn(calculix.direct_solvers()[fastest],solve(self.folder,study(),8)['solver'])
 
     def test_eigenvalue_analyses_agree_across_direct_solvers(self):
-        if not calculix.capabilities().get('pardiso'):
-            self.skipTest('This CalculiX build has no PARDISO-interface solver.')
+        # PaStiX is not used for eigenvalues (calculix.direct_solver).
+        names=[n for n in self.faster_solvers() if n!='pastix']
+        if not names: self.skipTest('This CalculiX build has no PARDISO-interface solver.')
         for analysis,key in [('frequency','frequencies'),('buckling','factors')]:
-            with self.subTest(analysis=analysis):
-                s=study(analysis=analysis,modes=4)
-                if analysis=='frequency': s['loads']=[]
-                fast=solve(self.folder,s,8)['summary'][key]
-                reference=solve(self.folder,s,1,'spooles')['summary'][key]
-                np.testing.assert_allclose(fast,reference,rtol=1e-7)
+            for name in names:
+                with self.subTest(analysis=analysis,solver=name):
+                    s=study(analysis=analysis,modes=4)
+                    if analysis=='frequency': s['loads']=[]
+                    fast=solve(self.folder,s,8,name)['summary'][key]
+                    reference=solve(self.folder,s,1,'spooles')['summary'][key]
+                    np.testing.assert_allclose(fast,reference,rtol=1e-7)
+
+    def test_eigenvalue_analyses_pass_over_pastix(self):
+        if 'pastix' not in calculix.direct_solvers(): self.skipTest('This CalculiX build has no PaStiX.')
+        s=study(analysis='frequency',modes=4,loads=[])
+        result=solve(self.folder,s,8,'pastix')
+        self.assertNotIn('SOLVER=PASTIX',(self.folder/'analysis.inp').read_text())
+        np.testing.assert_allclose(result['summary']['frequencies'],
+                                   solve(self.folder,s,1,'spooles')['summary']['frequencies'],rtol=1e-7)
+
+
+class NonlinearContact(unittest.TestCase):
+    """A nonlinear, nonsymmetric system: the bolted lap joint tightened, then
+    pulled, with friction. Its increments refactor one matrix structure
+    every iteration, which the PaStiX and PARDISO interfaces keep the
+    ordering of. Every direct solver must reach the same state."""
+
+    def test_every_direct_solver_reaches_the_same_state(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parent))
+        import test_contact as joint
+        names=list(calculix.direct_solvers())
+        if len(names)<2: self.skipTest('This CalculiX build has only SPOOLES.')
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp);shutil.copy(ROOT/'samples/bolted-joint.step',folder/'part.step')
+            worker.import_part(folder)
+            s=joint.study([{'kind':'force','faces':[joint.LOADED],'vector':[3000,0,0]}])
+            worker.mesh_part(folder,s)
+            results={n:solve(folder,s,8,n) for n in names}
+        reference=results.pop('spooles')
+        scale=np.abs(reference['displacements']).max()
+        for name,result in results.items():
+            with self.subTest(solver=name):
+                self.assertIn(calculix.direct_solvers()[name],result['solver'])
+                # Within the nonlinear iterations' own tolerance.
+                np.testing.assert_allclose(result['displacements'],reference['displacements'],rtol=0,atol=1e-3*scale)
+                for bolt,expected in zip(result['summary']['bolts'],reference['summary']['bolts']):
+                    self.assertAlmostEqual(bolt['tightened'],expected['tightened'],delta=1e-3*bolt['preload'])
+                    self.assertAlmostEqual(bolt['loaded'],expected['loaded'],delta=1e-3*bolt['preload'])
+                for c in result['summary']['contacts']:
+                    expected=next(e for e in reference['summary']['contacts'] if e['id']==c['id'])
+                    self.assertEqual(c['state'],expected['state'])
+                    self.assertAlmostEqual(c['normal'],expected['normal'],delta=1e-3*20000)

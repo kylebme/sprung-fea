@@ -44,6 +44,7 @@ def stored_frames(peaks):
 
 class Harmonic(Analysis):
     id='harmonic'
+    eigenvalues=True
     name='Harmonic response'
 
     def validate(self, study, mesh):
@@ -66,7 +67,7 @@ class Harmonic(Analysis):
         lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],fixed)
         # Points between natural frequencies: fewer when there are many modes.
         points=max(3,min(12,160//(count+1)))
-        direct=calculix.direct_solver()[0]
+        direct=self.solver(study)[0]
         lines+=['*STEP',f'*FREQUENCY, SOLVER={direct}, STORAGE=YES',str(count),'*END STEP',
                 '*STEP',f'*STEADY STATE DYNAMICS, SOLVER={direct}',f'{calculix.number(low)}, {calculix.number(high)}, {points}, 2.',
                 '*MODAL DAMPING',f'1, {count}, {calculix.number(damping)}']

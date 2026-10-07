@@ -15,5 +15,5 @@ const python =
 run(python, ["-m", "pip", "install", "-r", "engine/requirements.txt"]);
 run(process.execPath, ["scripts/fetch-vtk-wasm.mjs"]);
 console.log(
-  "STEP mesher and VTK.wasm viewer ready. Build CalculiX on Mac with: brew install gcc arpack && npm run build:solver. Elsewhere install CalculiX (ccx) or set SPRUNG_FEA_CCX.",
+  "STEP mesher and VTK.wasm viewer ready. Build CalculiX with npm run build:solver inside the conda-forge environment from native/calculix/solver-env-<platform>.yml (see IMPLEMENTATION.md), or install CalculiX (ccx) and set SPRUNG_FEA_CCX.",
 );

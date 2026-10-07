@@ -98,7 +98,12 @@ try {
   const static_ = await solve(study);
   const movement = static_.summary.maxMovement;
   assert.ok(movement > 0.28 && movement < 0.3, `Movement ${movement} mm`);
-  console.log(`Static solve: ${movement.toFixed(4)} mm tip movement`);
+  // The bundled solver's own fast direct solver: PaStiX, or Accelerate's
+  // PARDISO on macOS (Intel MKL is never bundled).
+  assert.match(static_.solver, /PaStiX|PARDISO/, static_.solver);
+  console.log(
+    `Static solve: ${movement.toFixed(4)} mm tip movement (${static_.solver})`,
+  );
   const modal = await solve({
     ...study,
     analysis: "frequency",
@@ -106,7 +111,7 @@ try {
     loads: [],
   });
   assert.equal(modal.analysis, "frequency");
-  console.log("Frequency solve: ok");
+  console.log(`Frequency solve: ok (${modal.solver})`);
 } finally {
   await service.close();
   await fs.rm(dir, { recursive: true, force: true });

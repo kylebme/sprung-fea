@@ -1,28 +1,43 @@
-"""Build CalculiX 2.23 for macOS with multithreaded SPOOLES that is safe on
-Apple silicon and with Apple Accelerate behind its PARDISO interface.
+"""Build CalculiX 2.23 with its fastest direct solvers, on Apple silicon,
+Linux x64 and Windows x64.
 
-Writes solver/ccx, which the engine and bundle-runtime.py use before any
+Writes solver/ccx (ccx.exe) with the libraries it needs beside it
+(solverlibs.py), which the engine and bundle-runtime.py use before any
 installed CalculiX, and solver/ccx.json, which tells the engine what the
-build can do. Needs Homebrew gcc (gfortran) and arpack, and the Xcode
-command line tools.
+build can do. The compilers and libraries come from a conda-forge
+environment, native/calculix/solver-env-<platform>.yml: pass its folder
+with --prefix, or run with it active (CONDA_PREFIX). macOS also needs the
+Xcode command line tools.
 
-SPOOLES 2.2's threaded factor and solve hand work between threads through
-plain loads and stores. Apple silicon reorders them, so threaded solves
-silently lose updates and return wrong answers. The patches in
-native/calculix/spooles-patches, from conda-forge's spooles feedstock (build
-1006), order those hand-offs. native/calculix/accelerate_pardiso.c answers
-CalculiX's PARDISO calls with Accelerate's multithreaded sparse Cholesky,
-LDLT and LU, which ship with macOS."""
-import hashlib, json, os, shutil, subprocess, sys, tarfile, urllib.request
+The build carries three direct solvers, all multithreaded:
+- SPOOLES 2.2. Its threaded factor and solve hand work between threads
+  through plain loads and stores, which lose updates and return wrong
+  answers (often on Apple silicon). The patches in
+  native/calculix/spooles-patches, from conda-forge's spooles feedstock
+  (build 1006), order those hand-offs.
+- PARDISO: Apple Accelerate's sparse factorizations on macOS, through
+  native/calculix/accelerate_pardiso.c. Elsewhere it is Intel MKL's, which
+  is not free software and is not linked or shipped:
+  native/calculix/mkl_pardiso.c loads an MKL the user has installed, when
+  CalculiX first calls PARDISO.
+- PaStiX 6, through native/calculix/pastix_ccx.c in place of CalculiX's
+  pastix.c, which needs a fork of PaStiX. conda-forge ships PaStiX for
+  macOS and Linux; on Windows it is built here from source."""
+import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tarfile, urllib.request
 from pathlib import Path
 
 root=Path(__file__).resolve().parents[1]
 native=root/'native'/'calculix'
 work=root/'.sprung-fea'/'solver-build'
 downloads=root/'.sprung-fea'/'downloads'
+VERSION='2.23'
 SOURCES={
-    'ccx':('https://www.dhondt.de/ccx_2.23.src.tar.bz2','9c88385c10fb04f5dc6c4e98027a51bebdd8aee3920e05190d6c1dd08357d6e7'),
-    'spooles':('https://www.netlib.org/linalg/spooles/spooles.2.2.tgz','a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd'),
+    'ccx':(['https://www.dhondt.de/ccx_2.23.src.tar.bz2'],'9c88385c10fb04f5dc6c4e98027a51bebdd8aee3920e05190d6c1dd08357d6e7'),
+    # The Debian/Ubuntu archive keeps the identical file.
+    'spooles':(['https://www.netlib.org/linalg/spooles/spooles.2.2.tgz',
+                'http://archive.ubuntu.com/ubuntu/pool/universe/s/spooles/spooles_2.2.orig.tar.gz'],
+               'a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd'),
+    'pastix':(['https://files.inria.fr/pastix/releases/v6/pastix-6.4.0.tar.gz'],None),
 }
 SPOOLES_PATCHES=(
     '0000-transform-ivinit.patch',
@@ -35,35 +50,93 @@ SPOOLES_PATCHES=(
 )
 # Electron's minimum macOS. Accelerate's LU is used where the OS has it.
 DEPLOYMENT_TARGET='12.0'
-jobs=str(os.cpu_count() or 4)
+MAC,WINDOWS=sys.platform=='darwin',sys.platform=='win32'
+jobs=os.cpu_count() or 4
 
 
 def fetch(name):
-    url,digest=SOURCES[name]
-    path=downloads/Path(url).name
-    if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+    urls,digest=SOURCES[name]
+    path=downloads/Path(urls[0]).name
+    def valid():
+        return path.exists() and (digest is None or hashlib.sha256(path.read_bytes()).hexdigest()==digest)
+    for url in urls:
+        if valid(): break
         downloads.mkdir(parents=True,exist_ok=True)
-        print('Downloading',url)
-        with urllib.request.urlopen(url) as response: path.write_bytes(response.read())
-    if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
-        sys.exit(f'{path.name} does not match its expected SHA-256.')
+        print('Downloading',url,flush=True)
+        try:
+            with urllib.request.urlopen(url,timeout=120) as response: path.write_bytes(response.read())
+        except OSError as error: print(' ',error)
+    if not valid(): sys.exit(f'{path.name} could not be downloaded, or does not match its expected SHA-256.')
+    print(f'{path.name}: SHA-256 {hashlib.sha256(path.read_bytes()).hexdigest()}')
     return path
 
 
-def replace(path, old, new):
+def extract(archive, destination):
+    with tarfile.open(archive) as tar:
+        if hasattr(tarfile,'data_filter'): tar.extractall(destination,filter='data')
+        else: tar.extractall(destination)
+
+
+def replace(path, old, new, count=1):
     text=path.read_text(errors='surrogateescape')
-    if text.count(old)!=1: sys.exit(f'{path}: expected one occurrence of {old!r}')
+    if text.count(old)!=count: sys.exit(f'{path}: expected {count} occurrence(s) of {old!r}')
     path.write_text(text.replace(old,new),errors='surrogateescape')
 
 
-def run(*args, cwd=None, env=None):
-    subprocess.run([str(a) for a in args],cwd=cwd,check=True,env={**os.environ,**(env or {})})
+def run(*args, cwd=None, env=None, quiet=False):
+    result=subprocess.run([str(a) for a in args],cwd=cwd,env={**os.environ,**(env or {})},
+                          capture_output=quiet,text=True)
+    if result.returncode:
+        if quiet: print(result.stdout,result.stderr)
+        sys.exit(f'Failed ({result.returncode}): {" ".join(str(a) for a in args)}')
 
 
-def tool(name):
-    found=shutil.which(name)
-    if not found: sys.exit(f'{name} was not found. Install it with: brew install gcc arpack')
-    return found
+class Toolchain:
+    """The environment's compilers and libraries."""
+    def __init__(self, prefix):
+        self.prefix=prefix
+        self.env={}
+        if WINDOWS:
+            base=prefix/'Library'
+            self.bin,self.lib,self.include=base/'bin',base/'lib',base/'include'
+            self.cc,self.fc,self.ar=(self.tool('x86_64-w64-mingw32-'+t) for t in ('gcc','gfortran','ar'))
+        elif MAC:
+            self.bin,self.lib,self.include=prefix/'bin',prefix/'lib',prefix/'include'
+            sdk=subprocess.check_output(['xcrun','--show-sdk-path'],text=True).strip()
+            self.env={'MACOSX_DEPLOYMENT_TARGET':DEPLOYMENT_TARGET,'SDKROOT':sdk}
+            # Xcode's clang: its SDK declares Accelerate's sparse LU.
+            self.cc,self.ar=shutil.which('clang'),shutil.which('ar')
+            self.fc=self.tool('arm64-apple-darwin20.0.0-gfortran')
+        else:
+            self.bin,self.lib,self.include=prefix/'bin',prefix/'lib',prefix/'include'
+            self.cc,self.fc,self.ar=(self.tool('x86_64-conda-linux-gnu-'+t) for t in ('gcc','gfortran','ar'))
+
+    def tool(self, name):
+        path=self.bin/(name+('.exe' if WINDOWS else ''))
+        if not path.is_file(): sys.exit(f'{path} was not found. Create the build environment from native/calculix/solver-env-*.yml.')
+        return path
+
+    def compile(self, sources, objects, flags, cwd, fortran=False):
+        """Compiles in parallel; sources and objects pair up."""
+        compiler=self.fc if fortran else self.cc
+        def one(pair):
+            source,obj=pair
+            result=subprocess.run([str(compiler),*flags,'-c',str(source),'-o',str(obj)],cwd=cwd,
+                                  env={**os.environ,**self.env},capture_output=True,text=True)
+            return source,result
+        with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+            for source,result in pool.map(one,list(zip(sources,objects))):
+                if result.returncode:
+                    print(result.stdout,result.stderr)
+                    sys.exit(f'Compiling {source} failed.')
+
+    def archive(self, library, objects):
+        library.unlink(missing_ok=True)
+        # A response file keeps Windows' command line short.
+        listing=library.with_suffix('.txt')
+        listing.write_text('\n'.join(str(o).replace('\\','/') for o in objects))
+        if MAC: run(self.ar,'rcs',library,*objects,env=self.env)
+        else: run(self.ar,'rcs',library,f'@{listing}')
 
 
 def spooles_patches():
@@ -80,52 +153,137 @@ def spooles_patches():
     return [folder/name for name in SPOOLES_PATCHES]
 
 
-def build_spooles():
+def build_spooles(tc):
+    """spooles.a: the library modules SPOOLES's own makefile lists, and its
+    threaded factor and solve (MT). Every source of each module is
+    compiled; the module makefiles' lists are stale, and the linker takes
+    only what CalculiX uses. Objects are named per module, as the makefiles
+    do, because file names repeat between modules."""
     patches=spooles_patches()
     source=work/'spooles';source.mkdir(parents=True)
-    with tarfile.open(fetch('spooles')) as archive: archive.extractall(source)
-    for patch in patches:
-        run('patch','-p1','--batch','--forward','-i',patch,cwd=source)
-    # The library's file list names a file the distribution does not have.
-    replace(source/'Tree'/'src'/'makeGlobalLib','drawTree.c','tree.c')
-    replace(source/'Make.inc','  CC = /usr/lang-4.0/bin/cc','  CC = clang')
-    replace(source/'Make.inc','  OPTLEVEL = -O\n','  OPTLEVEL = -O2\n')
-    run('make','lib',cwd=source)
-    # The threaded factor and solve go into the same library.
-    run('make','-C','MT/src','makeLib',cwd=source)
-    return source
+    extract(fetch('spooles'),source)
+    patch=shutil.which('patch')
+    if not patch: sys.exit('patch was not found. On Windows, run the build from Git Bash.')
+    for p in patches: run(patch,'-p1','--batch','--forward',*(['--binary'] if WINDOWS else []),'-i',p,cwd=source)
+    modules=re.findall(r'^\s*cd (\w+)\s*; make lib',(source/'makefile').read_text(),re.M)
+    objects=source/'objects';objects.mkdir()
+    for module in [*modules,'MT']:
+        files=sorted((source/module/'src').glob('*.c'))
+        tc.compile(files,[objects/f'{module}_{f.stem}.o' for f in files],['-O2','-w'],cwd=source/module/'src')
+    library=source/'spooles.a'
+    tc.archive(library,sorted(objects.glob('*.o')))
+    return source,library
 
 
-def build_ccx(spooles):
-    with tarfile.open(fetch('ccx')) as archive: archive.extractall(work)
-    src=work/'CalculiX'/'ccx_2.23'/'src'
+def build_pastix_windows(tc):
+    """PaStiX 6.4 with the MinGW compilers, Scotch for ordering, OpenBLAS
+    through CBLAS/LAPACKE, and hwloc, all from the environment. Installs into
+    the build folder; returns its prefix."""
+    source=work/'pastix-src';source.mkdir()
+    extract(fetch('pastix'),source)
+    tree=next(source.iterdir())
+    build,install=work/'pastix-build',work/'pastix'
+    cmake=tc.tool('cmake')
+    run(cmake,'-S',tree,'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
+        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_PREFIX_PATH={tc.prefix/"Library"}',
+        f'-DCMAKE_C_COMPILER={tc.cc}',f'-DCMAKE_Fortran_COMPILER={tc.fc}',f'-DPython_EXECUTABLE={sys.executable}',
+        '-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON','-DPASTIX_ORDERING_METIS=OFF',
+        '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
+        '-DPASTIX_WITH_FORTRAN=OFF','-DSPM_WITH_FORTRAN=OFF','-DSPM_WITH_MPI=OFF','-DBUILD_TESTING=OFF',
+        '-DBLA_VENDOR=OpenBLAS')
+    run(cmake,'--build',build,'--parallel',str(jobs))
+    run(cmake,'--install',build)
+    return install
+
+
+def ccx_sources(src):
+    """CalculiX's Fortran and C sources (its Makefile.inc), CalculiX's PaStiX
+    interface replaced by ours."""
+    text=(src/'Makefile.inc').read_text()
+    def listed(name):
+        block=re.search(rf'^{name}\s*=(.*?)(?:\n\s*\n|\Z)',text,re.M|re.S).group(1)
+        return re.findall(r'[\w.-]+\.[cf]\b',block)
+    c=[f for f in listed('SCCXC') if f!='pastix.c']
+    return listed('SCCXF'),c
+
+
+def build_ccx(tc, spooles, spooles_lib):
+    extract(fetch('ccx'),work)
+    src=work/'CalculiX'/f'ccx_{VERSION}'/'src'
     # A void function that returns a value (as Homebrew's formula fixes).
     replace(src/'readnewmesh.c','*iprfnp=iprfn;*konrfnp=konrfn;*ratiorfnp=ratiorfn;\n  \n  return NULL;',
             '*iprfnp=iprfn;*konrfnp=konrfn;*ratiorfnp=ratiorfn;\n  \n  return;')
-    cflags=f'-O2 -I{spooles} -I{native} -DARCH="Linux" -DSPOOLES -DARPACK -DMATRIXSTORAGE -DNETWORKOUT -DUSE_MT=1 -DPARDISO'
-    env={'MACOSX_DEPLOYMENT_TARGET':DEPLOYMENT_TARGET}
-    run('make',f'-j{jobs}','ccx_2.23.a','CC=clang',f'FC={tool("gfortran")}',f'CFLAGS={cflags}','FFLAGS=-O2 -fopenmp -cpp',cwd=src,env=env)
-    run('clang',*cflags.replace('"Linux"','Linux').split(),'-c','ccx_2.23.c','-o','ccx_main.o',cwd=src,env=env)
-    run('clang','-O2','-Wall','-c',native/'accelerate_pardiso.c','-o','accelerate_pardiso.o',cwd=src,env=env)
-    # Link with clang: gfortran's own SDK can predate Accelerate's LU.
-    runtime=Path(subprocess.check_output([tool('gfortran'),'-print-file-name=libgfortran.dylib'],text=True).strip()).parent
-    arpack=Path(subprocess.check_output(['brew','--prefix','arpack'],text=True).strip())/'lib'
-    run('clang','-o','ccx','ccx_main.o','ccx_2.23.a','accelerate_pardiso.o',spooles/'spooles.a',
-        f'-L{arpack}','-larpack','-framework','Accelerate',f'-L{runtime}','-lgfortran','-lgomp','-lquadmath',cwd=src,env=env)
-    return src/'ccx'
+    capabilities={'version':VERSION,'threadSafeSpooles':True}
+    defines=['-DARCH=Linux','-DSPOOLES','-DARPACK','-DMATRIXSTORAGE','-DNETWORKOUT','-DUSE_MT=1','-DPARDISO','-DPASTIX']
+    # native/calculix/mkl_service.h stands in for MKL's header: no build
+    # links MKL.
+    includes=[f'-I{spooles}',f'-I{native}',f'-I{tc.include}']
+    if MAC:
+        extra=[native/'accelerate_pardiso.c']
+        capabilities['pardiso']='Apple Accelerate'
+        libs=['-framework','Accelerate']
+    else:
+        extra=[native/'mkl_pardiso.c']
+        # Present only where the engine finds an installed MKL.
+        capabilities['pardiso']='Intel MKL';capabilities['pardisoNeedsMkl']=True
+        libs=[] if WINDOWS else ['-ldl']
+    pastix=build_pastix_windows(tc) if WINDOWS else tc.prefix
+    includes.append(f'-I{pastix/"include"}')
+    capabilities['pastix']='PaStiX 6.4'
+    extra.append(native/'pastix_ccx.c')
+
+    # CalculiX is old C: newer GCC and clang reject what it relies on.
+    lenient=[f'-Wno-error={w}' for w in ('implicit-function-declaration','implicit-int','int-conversion','incompatible-pointer-types')]
+    cflags=['-O2','-w',*lenient,*includes,*defines]
+    fortran,c=ccx_sources(src)
+    objects=src/'objects';objects.mkdir()
+    print(f'Compiling CalculiX: {len(fortran)} Fortran and {len(c)+len(extra)} C files',flush=True)
+    fobj=[objects/(Path(f).stem+'_f.o') for f in fortran]
+    tc.compile([src/f for f in fortran],fobj,['-O2','-w','-fopenmp','-cpp','-fallow-argument-mismatch'],cwd=src,fortran=True)
+    cfiles=[src/f for f in c]+extra
+    cobj=[objects/(f.stem+'_c.o') for f in cfiles]
+    tc.compile(cfiles,cobj,cflags,cwd=src)
+    main=src/f'ccx_{VERSION}.c'
+    tc.compile([main],[objects/'ccx_main.o'],cflags,cwd=src)
+    library=src/f'ccx_{VERSION}.a'
+    tc.archive(library,fobj+cobj)
+
+    exe=src/('ccx.exe' if WINDOWS else 'ccx')
+    common=[objects/'ccx_main.o',library,spooles_lib,f'-L{pastix/"lib"}','-lpastix','-lspm',f'-L{tc.lib}','-larpack','-llapack','-lblas']
+    if MAC:
+        # Link with Xcode's clang, which knows the SDK. gfortran's runtime
+        # and OpenMP (LLVM's, which implements gfortran's GOMP calls) come
+        # from the environment.
+        run(tc.cc,'-o',exe,*common,*libs,'-lgfortran','-lomp',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
+    elif WINDOWS:
+        run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src)
+    else:
+        run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src)
+    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib']
+    return exe,capabilities,folders
 
 
 def main():
-    if sys.platform!='darwin':
-        sys.exit('build-solver.py builds the macOS solver. Windows and Linux use conda-forge calculix 2.23 (build 8 or later), whose SPOOLES carries the same thread fixes.')
+    parser=argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    parser.add_argument('--prefix',help='the conda-forge build environment (default: CONDA_PREFIX)')
+    args=parser.parse_args()
+    if not (MAC and os.uname().machine=='arm64' or WINDOWS or sys.platform.startswith('linux')):
+        sys.exit('build-solver.py builds for Apple silicon, Linux x64 and Windows x64.')
+    prefix=args.prefix or os.environ.get('CONDA_PREFIX')
+    if not prefix: sys.exit('Pass --prefix with the build environment, created from native/calculix/solver-env-*.yml.')
+    tc=Toolchain(Path(prefix).resolve())
     shutil.rmtree(work,ignore_errors=True);work.mkdir(parents=True)
-    executable=build_ccx(build_spooles())
-    target=root/'solver';target.mkdir(exist_ok=True)
-    shutil.copy2(executable,target/'ccx')
-    (target/'ccx.json').write_text(json.dumps({'version':'2.23','threadSafeSpooles':True,'pardiso':'Apple Accelerate'},indent=1)+'\n')
-    banner=subprocess.run([str(target/'ccx'),'-v'],capture_output=True,text=True).stdout
-    if 'This is Version 2.23' not in banner: sys.exit('The built solver does not start: '+banner)
-    print('Solver:',target/'ccx')
+    executable,capabilities,folders=build_ccx(tc,*build_spooles(tc))
+    target=root/'solver'
+    shutil.rmtree(target,ignore_errors=True)
+    # patchelf comes with the Linux environment.
+    os.environ['PATH']=os.pathsep.join([str(tc.bin),os.environ.get('PATH','')])
+    sys.path.insert(0,str(root/'scripts'))
+    from solverlibs import relocate
+    exe=relocate(executable,target,folders)
+    (target/'ccx.json').write_text(json.dumps(capabilities,indent=1)+'\n')
+    print('Solver:',exe,json.dumps(capabilities))
+    print('With:',', '.join(sorted(p.name for p in target.iterdir() if p!=exe)))
 
 
 if __name__=='__main__': main()

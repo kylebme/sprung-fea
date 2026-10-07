@@ -1,5 +1,5 @@
 """CalculiX adapter: equation solvers, execution, and reading its output files."""
-import os, re, shutil, subprocess, errno, time, json, functools
+import os, re, sys, shutil, subprocess, errno, time, json, functools, ctypes
 import numpy as np
 from collections import deque
 from pathlib import Path
@@ -27,26 +27,101 @@ def solver(study):
     return SOLVERS[solver_of(study)] or direct_solver()
 
 
-def direct_solver():
-    """(deck keyword, description) of the direct solver: Accelerate through
-    CalculiX's PARDISO interface where the build has it, else SPOOLES. Both
-    factor exactly; SPRUNG_FEA_DIRECT_SOLVER=spooles picks SPOOLES."""
-    backend=capabilities().get('pardiso')
-    if backend and os.environ.get('SPRUNG_FEA_DIRECT_SOLVER')!='spooles':
-        return 'PARDISO',f'{backend} sparse direct'
-    return 'SPOOLES','SPOOLES direct'
+# CalculiX's direct solvers by the name SPRUNG_FEA_DIRECT_SOLVER takes,
+# fastest first, with their deck keywords.
+DIRECT={'pardiso':'PARDISO','pastix':'PASTIX','spooles':'SPOOLES'}
+
+
+def direct_solvers():
+    """{name: description} of the direct solvers this CalculiX can run,
+    fastest first. All factor exactly. PARDISO is Apple Accelerate on macOS
+    and an Intel MKL the user installed elsewhere (find_mkl); PaStiX ships
+    with the solver build (scripts/build-solver.py); SPOOLES is always
+    there."""
+    c=capabilities();found={}
+    if c.get('pardiso'): found['pardiso']=f"{c['pardiso']} PARDISO"
+    if c.get('pastix'): found['pastix']=f"{c['pastix']} sparse direct"
+    found['spooles']='SPOOLES direct'
+    return found
+
+
+def direct_solver(eigenvalues=False):
+    """(deck keyword, description) of the direct solver: the fastest this
+    CalculiX has, or the one SPRUNG_FEA_DIRECT_SOLVER names. For eigenvalue
+    analyses (frequency, buckling), PaStiX is passed over: CalculiX built
+    with PARDISO too sends their PaStiX factorizations to PARDISO, whose
+    pivoting suits shifted indefinite systems."""
+    available=direct_solvers()
+    if eigenvalues: available.pop('pastix',None)
+    choice=os.environ.get('SPRUNG_FEA_DIRECT_SOLVER')
+    if choice and choice not in available and not (eigenvalues and choice=='pastix'):
+        raise ValueError(f'SPRUNG_FEA_DIRECT_SOLVER={choice}: this CalculiX has {", ".join(available)}.')
+    name=choice if choice in available else next(iter(available))
+    return DIRECT[name],available[name]
 
 
 def capabilities(ccx=None):
-    """What the CalculiX executable can do: {'pardiso': backend name, or
-    absent; 'threadSafeSpooles': whether SPOOLES may run threaded}.
-    SPOOLES 2.2 as released loses updates between threads and returns wrong
-    answers, often on Apple silicon and occasionally elsewhere, so it is
-    threaded only in builds known to carry the fixes: those that say so in a
-    ccx.json beside the executable (scripts/build-solver.py,
-    bundle-runtime.py), and conda-forge calculix build 5 or later, which
-    requires the fixed spooles."""
+    """What the CalculiX executable can do here (built_capabilities), with
+    PARDISO only where its library is present: an MKL build needs MKL
+    installed."""
+    found=dict(built_capabilities(ccx))
+    if found.pop('pardisoNeedsMkl',False) and not find_mkl(): found.pop('pardiso',None)
+    return found
+
+
+def built_capabilities(ccx=None):
+    """What the CalculiX executable was built with: {'pardiso': backend name;
+    'pardisoNeedsMkl': PARDISO loads an installed MKL; 'pastix': PaStiX
+    version; 'threadSafeSpooles': whether SPOOLES may run threaded}, each
+    absent when not so. SPOOLES 2.2 as released loses updates between
+    threads and returns wrong answers, often on Apple silicon and
+    occasionally elsewhere, so it is threaded only in builds known to carry
+    the fixes: those that say so in a ccx.json beside the executable
+    (scripts/build-solver.py, bundle-runtime.py), and conda-forge calculix
+    build 5 or later, which requires the fixed spooles."""
     return _capabilities(str(Path(ccx or find_ccx()).resolve()))
+
+
+@functools.lru_cache(maxsize=None)
+def find_mkl():
+    """The runtime library (mkl_rt) of an Intel MKL installed on this
+    computer, which the solver loads for PARDISO on Linux and Windows; None
+    when there is none. SPRUNG_FEA_MKL names the library or its folder;
+    otherwise Intel oneAPI's default folder, the conda and Python prefixes
+    (`pip install mkl`), and the library search path are looked through.
+    MKL is not free software, so it is never bundled."""
+    windows=os.name=='nt'
+    names=(['mkl_rt.3.dll','mkl_rt.2.dll','mkl_rt.1.dll'] if windows else
+           ['libmkl_rt.so.3','libmkl_rt.so.2','libmkl_rt.so.1','libmkl_rt.so'])
+    given=os.environ.get('SPRUNG_FEA_MKL')
+    if given:
+        folders=[Path(given).parent] if Path(given).is_file() else [Path(given)]
+        if Path(given).is_file(): names=[Path(given).name]
+    else:
+        prefixes=[p for p in (os.environ.get('CONDA_PREFIX'),sys.prefix,sys.base_prefix) if p]
+        search=os.environ.get('PATH' if windows else 'LD_LIBRARY_PATH','').split(os.pathsep)
+        if windows:
+            program=Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))
+            folders=[program/'Intel'/'oneAPI'/'mkl'/'latest'/'bin',*(Path(p)/'Library'/'bin' for p in prefixes)]
+        else:
+            folders=[Path('/opt/intel/oneapi/mkl/latest/lib'),Path('/opt/intel/oneapi/mkl/latest/lib/intel64'),
+                     *(Path(p)/'lib' for p in prefixes),Path.home()/'.local'/'lib',
+                     Path('/usr/lib/x86_64-linux-gnu'),Path('/usr/lib64'),Path('/usr/local/lib')]
+        folders+=[Path(p) for p in search if p]
+    for folder in folders:
+        for name in names:
+            library=folder/name
+            if library.is_file() and _has_pardiso(library): return str(library)
+    return None
+
+
+def _has_pardiso(library):
+    try:
+        # LOAD_WITH_ALTERED_SEARCH_PATH: MKL's DLLs load from its folder.
+        loaded=ctypes.CDLL(str(library),**({'winmode':0x8} if os.name=='nt' else {}))
+        return hasattr(loaded,'pardiso_')
+    except OSError:
+        return False
 
 
 @functools.lru_cache(maxsize=None)
@@ -95,15 +170,17 @@ def run(folder, name='analysis'):
     # recovery itself; NUMBER_OF_CPUS caps all three, and at 1 left every
     # stage serial. Assembly and stress recovery give the same answer to
     # round-off at any thread count. SPOOLES is threaded only where it is
-    # safe (capabilities); Accelerate follows VECLIB_MAXIMUM_THREADS, and
-    # CalculiX reports MKL_NUM_THREADS for it. OpenMP stays at one thread.
-    # CalculiX's iterative solvers iterate on one thread regardless.
+    # safe (capabilities). PaStiX threads itself with the equation solver
+    # count, over single-threaded OpenBLAS; Accelerate follows
+    # VECLIB_MAXIMUM_THREADS, and MKL MKL_NUM_THREADS. OpenMP stays at one
+    # thread. CalculiX's iterative solvers iterate on one thread regardless.
     n=str(threads())
     equations=n if capabilities().get('threadSafeSpooles') else '1'
     env={k:v for k,v in os.environ.items() if not k.startswith('CCX_NPROC')}
     env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS=n,OPENBLAS_NUM_THREADS='1',VECLIB_MAXIMUM_THREADS=n,MKL_NUM_THREADS=n,
                GFORTRAN_UNBUFFERED_PRECONNECTED='1',
                CCX_NPROC_RESULTS=n,CCX_NPROC_STIFFNESS=n,CCX_NPROC_EQUATION_SOLVER=equations)
+    if built_capabilities().get('pardisoNeedsMkl') and find_mkl(): env['SPRUNG_FEA_MKL']=find_mkl()
     # No time limit: large models can solve for a long time, and the user can
     # cancel the job.
     log_path=folder/'solver.log'
