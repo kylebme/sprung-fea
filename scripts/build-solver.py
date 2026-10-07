@@ -180,17 +180,42 @@ def build_spooles(tc):
     return source,library
 
 
+def scotch_windows(tc):
+    """Scotch as a MinGW DLL. conda-forge's Windows Scotch is a static
+    library built by Microsoft's compiler, which MinGW links once given the
+    few runtime pieces it expects (native/calculix/msvc_compat.c). Exports
+    Scotch's API only; returns a prefix with include, lib and bin."""
+    out=work/'scotch-mingw'
+    for d in ('include','lib','bin'): (out/d).mkdir(parents=True)
+    tool=lambda name: tc.tool('x86_64-w64-mingw32-'+name)
+    static=[tc.lib/'scotch.lib',tc.lib/'scotcherr.lib']
+    symbols=subprocess.check_output([str(tool('nm')),*map(str,static)],text=True,env={**os.environ,**tc.env},stderr=subprocess.DEVNULL)
+    exports=sorted({l.split()[2] for l in symbols.splitlines() if len(l.split())==3 and l.split()[1]=='T' and l.split()[2].startswith('SCOTCH_')})
+    (out/'scotch.def').write_text('EXPORTS\n'+'\n'.join(exports)+'\n')
+    tc.compile([native/'msvc_compat.c'],[out/'msvc_compat.o'],['-O2'],cwd=out)
+    run(tc.cc,'-shared','-o',out/'bin'/'scotch.dll',out/'scotch.def',f'-Wl,--out-implib,{out/"lib"/"libscotch.dll.a"}',
+        # MSVC's stack probe is MinGW's ___chkstk_ms under another name.
+        '-Wl,--defsym,__chkstk=___chkstk_ms','-Wl,--whole-archive',*static,'-Wl,--no-whole-archive',out/'msvc_compat.o',
+        tc.lib/'zlib.lib',tc.lib/'libbz2.lib',tc.lib/'lzma.lib',cwd=out,env=tc.env)
+    # PaStiX looks for scotcherr beside scotch: it is inside the same DLL.
+    shutil.copy2(out/'lib'/'libscotch.dll.a',out/'lib'/'libscotcherr.dll.a')
+    shutil.copy2(tc.include/'scotch.h',out/'include'/'scotch.h')
+    return out
+
+
 def build_pastix_windows(tc):
     """PaStiX 6.4 with the MinGW compilers, Scotch for ordering, OpenBLAS
     through CBLAS/LAPACKE, and hwloc, all from the environment. Installs into
     the build folder; returns its prefix."""
+    scotch=scotch_windows(tc)
     source=work/'pastix-src';source.mkdir()
     extract(fetch('pastix'),source)
     tree=next(source.iterdir())
     build,install=work/'pastix-build',work/'pastix'
     cmake=tc.tool('cmake')
     run(cmake,'-S',tree,'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
-        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_PREFIX_PATH={tc.prefix/"Library"}',
+        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_PREFIX_PATH={scotch};{tc.prefix/"Library"}',
+        f'-DSCOTCH_DIR={scotch}',
         f'-DCMAKE_C_COMPILER={tc.cc}',f'-DCMAKE_Fortran_COMPILER={tc.fc}',f'-DPython_EXECUTABLE={sys.executable}',
         '-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON','-DPASTIX_ORDERING_METIS=OFF',
         '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
@@ -277,7 +302,7 @@ def build_ccx(tc, spooles, spooles_lib):
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src,env=tc.env)
     else:
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
-    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib',tc.prefix/'Library'/'mingw-w64'/'bin']
+    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib',tc.prefix/'Library'/'mingw-w64'/'bin',work/'scotch-mingw'/'bin']
     return exe,capabilities,folders
 
 

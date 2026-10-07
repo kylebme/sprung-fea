@@ -11,8 +11,12 @@ dependencies:
   - libblas=*=*openblas
   # OpenBLAS's import library and headers, for PaStiX and the link.
   - openblas
-  # 64-bit indices, as PaStiX is built (PASTIX_INT64).
+  # 64-bit indices, as PaStiX is built (PASTIX_INT64), and the compression
+  # libraries Scotch reads graphs with.
   - libscotch=*=int64*
+  - zlib
+  - bzip2
+  - liblzma-devel
   - libhwloc
   - cmake
   - ninja

@@ -1,5 +1,5 @@
 """CalculiX adapter: equation solvers, execution, and reading its output files."""
-import os, re, sys, shutil, subprocess, errno, time, json, functools, ctypes
+import os, re, sys, shutil, subprocess, errno, time, json, functools, ctypes, signal
 import numpy as np
 from collections import deque
 from pathlib import Path
@@ -232,12 +232,24 @@ def run(folder, name='analysis'):
                 process.terminate();process.wait()
     error,tail,iterative=read_log(log_path)
     if process.returncode != 0 or error or not (folder/f'{name}.frd').exists():
-        raise ValueError(failure(tail)+'\n'+tail[-2500:])
+        raise ValueError(failure(tail)+stopped(process.returncode,error)+'\n'+tail[-2500:])
     # CalculiX returns its last iterate without an error when conjugate
     # gradients stop short of the tolerance, so check the final residual.
     if iterative and not iterative['error']<=iterative['limit']:
         raise ValueError(f"The iterative solver did not converge: residual {iterative['error']:.3g} is above the limit {iterative['limit']:.3g} after {iterative['iterations']} iterations. Use the direct solver, or check that the supports hold the part.\n"+tail[-2500:])
     return iterative
+
+
+def stopped(code, error):
+    """How CalculiX ended when it stopped without reporting an error itself:
+    a crash (a signal, or a Windows exception code) rather than a model
+    CalculiX could not solve."""
+    if error or not code: return ''
+    if code<0:
+        try: how='signal '+signal.Signals(-code).name
+        except ValueError: how=f'signal {-code}'
+    else: how=f'exit code {code:#x}' if code>0xffff else f'exit code {code}'
+    return f' CalculiX stopped unexpectedly ({how}).'
 
 
 def failure(tail):
