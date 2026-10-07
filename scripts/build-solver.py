@@ -191,15 +191,16 @@ def scotch_windows(tc):
     """Scotch 7.0.11, static, built with the MinGW compilers: conda-forge's
     Windows Scotch is built by Microsoft's compiler and does not run under
     MinGW code (it corrupted the heap during ordering). 64-bit indices as
-    PaStiX is built, one thread (PaStiX orders on one), no compressed graph
-    files. Returns its install prefix."""
+    PaStiX is built, no compressed graph files. Threads on, as conda-forge
+    builds it: its file handling otherwise forks, which Windows cannot.
+    Returns its install prefix."""
     source=work/'scotch-src';source.mkdir()
     extract(fetch('scotch'),source)
     build,install=work/'scotch-build',work/'scotch'
     cmake=tc.tool('cmake')
     run(cmake,'-S',next(source.iterdir()),'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
         '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_C_COMPILER={tc.cc}',
-        f'-DCMAKE_C_FLAGS={" ".join(LENIENT)}','-DBUILD_SHARED_LIBS=OFF','-DINTSIZE=64','-DTHREADS=OFF',
+        f'-DCMAKE_C_FLAGS={" ".join([*LENIENT,"-DCOMMON_PTHREAD_FILE"])}','-DBUILD_SHARED_LIBS=OFF','-DINTSIZE=64','-DTHREADS=ON',
         '-DMPI_THREAD_MULTIPLE=OFF','-DBUILD_PTSCOTCH=OFF','-DBUILD_LIBESMUMPS=OFF','-DBUILD_LIBSCOTCHMETIS=OFF',
         '-DINSTALL_METIS_HEADERS=OFF','-DBUILD_FORTRAN=OFF','-DUSE_ZLIB=OFF','-DUSE_LZMA=OFF','-DUSE_BZ2=OFF',
         '-DENABLE_TESTS=OFF',env=tc.env)
