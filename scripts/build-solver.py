@@ -247,6 +247,13 @@ def build_pastix(tc):
         '-DBLA_VENDOR=OpenBLAS',f'-DCBLAS_INCDIR={headers}',f'-DLAPACKE_INCDIR={headers}',
         env=tc.env)
     run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
+    if WINDOWS:
+        # SPM's install rules name some headers with Windows separators,
+        # which CMake then reads as escapes ('\s'). CMake writes every other
+        # path in its install scripts with '/'.
+        for script in build.rglob('cmake_install.cmake'):
+            text=script.read_text()
+            if '\\' in text: script.write_text(text.replace('\\','/'))
     run(cmake,'--install',build,env=tc.env)
     return install
 
