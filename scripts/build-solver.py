@@ -100,6 +100,9 @@ class Toolchain:
             base=prefix/'Library'
             self.bin,self.lib,self.include=base/'bin',base/'lib',base/'include'
             self.cc,self.fc,self.ar=(self.tool('x86_64-w64-mingw32-'+t) for t in ('gcc','gfortran','ar'))
+            # The MinGW tools load DLLs from the environment, which is not
+            # activated.
+            self.env={'PATH':os.pathsep.join([str(self.bin),str(prefix),os.environ.get('PATH','')])}
         elif MAC:
             self.bin,self.lib,self.include=prefix/'bin',prefix/'lib',prefix/'include'
             sdk=subprocess.check_output(['xcrun','--show-sdk-path'],text=True).strip()
@@ -130,7 +133,7 @@ class Toolchain:
             for source,result in pool.map(one,list(zip(sources,objects))):
                 if result.returncode:
                     print(result.stdout,result.stderr)
-                    sys.exit(f'Compiling {source} failed.')
+                    sys.exit(f'Compiling {source} failed (exit {result.returncode:#x}).')
 
     def archive(self, library, objects):
         library.unlink(missing_ok=True)
@@ -138,7 +141,7 @@ class Toolchain:
         listing=library.with_suffix('.txt')
         listing.write_text('\n'.join(str(o).replace('\\','/') for o in objects))
         if MAC: run(self.ar,'rcs',library,*objects,env=self.env)
-        else: run(self.ar,'rcs',library,f'@{listing}')
+        else: run(self.ar,'rcs',library,f'@{listing}',env=self.env)
 
 
 def spooles_patches():
@@ -192,9 +195,9 @@ def build_pastix_windows(tc):
         '-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON','-DPASTIX_ORDERING_METIS=OFF',
         '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
         '-DPASTIX_WITH_FORTRAN=OFF','-DSPM_WITH_FORTRAN=OFF','-DSPM_WITH_MPI=OFF','-DBUILD_TESTING=OFF',
-        '-DBLA_VENDOR=OpenBLAS')
-    run(cmake,'--build',build,'--parallel',str(jobs))
-    run(cmake,'--install',build)
+        '-DBLA_VENDOR=OpenBLAS',env=tc.env)
+    run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
+    run(cmake,'--install',build,env=tc.env)
     return install
 
 
@@ -262,9 +265,9 @@ def build_ccx(tc, spooles, spooles_lib):
         # from the environment.
         run(tc.cc,'-o',exe,*common,*libs,'-lgfortran','-lomp',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
     elif WINDOWS:
-        run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src)
+        run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src,env=tc.env)
     else:
-        run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src)
+        run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
     folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib']
     return exe,capabilities,folders
 
