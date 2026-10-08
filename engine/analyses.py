@@ -121,13 +121,10 @@ class Analysis:
     # Whether the study's equation-solver choice applies; other analyses
     # use the direct solver.
     study_solver=False
-    # Eigenvalue analyses take the direct solvers that suit them
-    # (calculix.direct_solver).
-    eigenvalues=False
 
     def solver(self, study):
         """(deck keyword, description) of the equation solver this analysis uses."""
-        return calculix.solver(study) if self.study_solver else calculix.direct_solver(self.eigenvalues)
+        return calculix.solver(study) if self.study_solver else calculix.direct_solver()
 
     def validate(self, study, mesh):
         calculix.solver_of(study)
@@ -472,7 +469,6 @@ class Frequency(Analysis):
     modes include the stiffness of the stress it leaves (a perturbation
     step)."""
     id='frequency'
-    eigenvalues=True
     name='Natural frequencies'
 
     def setup(self, study, mesh):
@@ -563,7 +559,6 @@ class Buckling(Analysis):
     """Linear buckling: the factors by which the applied loads can be
     multiplied before the part buckles, and the buckled shapes."""
     id='buckling'
-    eigenvalues=True
     name='Buckling'
 
     def validate(self, study, mesh):

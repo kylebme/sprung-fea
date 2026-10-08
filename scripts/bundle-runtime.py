@@ -4,7 +4,9 @@ with the shared libraries it needs, beside it in runtime/solver.
 The solver is the one find_ccx finds: the one scripts/build-solver.py
 builds into solver/, else an installed CalculiX (SPRUNG_FEA_CCX).
 solverlibs.relocate copies its libraries. What the solver was built with
-(calculix.built_capabilities) is written beside it as ccx.json."""
+(calculix.built_capabilities) is written beside it as ccx.json. On Linux
+and Windows, sprung-solve, the separate program that runs PARDISO with
+Intel oneMKL, goes into runtime/solver/sprung-solve with its licenses."""
 import os, sys, subprocess, shutil
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
@@ -28,8 +30,14 @@ source=Path(find_ccx())
 # A conda environment's libraries sit apart from its executables on Windows.
 prefix=source.parent.parent.parent if source.parent.parent.name.lower()=='library' else source.parent
 relocate(source,solver,[prefix/'Library'/'bin',prefix/'Library'/'mingw-w64'/'bin',prefix] if sys.platform=='win32' else [])
-# What the solver was built with: an MKL installed later still serves PARDISO.
-(solver/'ccx.json').write_text(json.dumps(built_capabilities(source),indent=1)+'\n')
-if not built_capabilities(source).get('pastix'):
-    print('Warning: this solver has neither PaStiX nor PARDISO. Build it with scripts/build-solver.py.')
-print('Standalone engine:',runtime/'sprung-fea-engine','with solver',sorted(p.name for p in solver.iterdir()))
+built=built_capabilities(source)
+helper=built.get('pardisoHelper')
+if helper:
+    helper=source.parent/helper
+    place=solver/'sprung-solve'
+    relocate(helper,place,[helper.parent],check=('--version','sprung-solve 1: '))
+    for license in helper.parent.glob('*.txt'): shutil.copy2(license,place/license.name)
+(solver/'ccx.json').write_text(json.dumps(built,indent=1)+'\n')
+if not built.get('pardiso'):
+    print('Warning: this solver has no PARDISO, only SPOOLES. Build it with scripts/build-solver.py.')
+print('Standalone engine:',runtime/'sprung-fea-engine','with solver',sorted(str(p.relative_to(solver)) for p in solver.rglob('*') if p.is_file()))

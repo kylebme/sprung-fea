@@ -1,11 +1,11 @@
 """Direct solvers and threads: real CalculiX solves on the beam, on one mesh.
 
 Threads must not change answers beyond round-off, and every direct solver
-the solver build has (PARDISO: Apple Accelerate, or an installed Intel MKL;
-PaStiX; SPOOLES) must agree. SPOOLES 2.2 as released loses updates between
-threads on Apple silicon and returns wrong answers, so a threaded SPOOLES
-solve is compared too."""
-import unittest, sys, os, tempfile, shutil
+the solver build has (PARDISO: Apple Accelerate, or Intel oneMKL's in
+sprung-solve; SPOOLES) must agree. SPOOLES 2.2 as released loses updates
+between threads on Apple silicon and returns wrong answers, so a threaded
+SPOOLES solve is compared too."""
+import unittest, sys, os, tempfile, shutil, subprocess
 from pathlib import Path
 from unittest import mock
 import numpy as np
@@ -90,11 +90,8 @@ class DirectSolvers(unittest.TestCase):
         self.assertIn(calculix.direct_solvers()[fastest],solve(self.folder,study(),8)['solver'])
 
     def test_eigenvalue_analyses_agree_across_direct_solvers(self):
-        # PaStiX is not used for eigenvalues (calculix.direct_solver).
-        names=[n for n in self.faster_solvers() if n!='pastix']
-        if not names: self.skipTest('This CalculiX build has no PARDISO-interface solver.')
         for analysis,key in [('frequency','frequencies'),('buckling','factors')]:
-            for name in names:
+            for name in self.faster_solvers():
                 with self.subTest(analysis=analysis,solver=name):
                     s=study(analysis=analysis,modes=4)
                     if analysis=='frequency': s['loads']=[]
@@ -105,20 +102,59 @@ class DirectSolvers(unittest.TestCase):
                     # vary run to run) move it a few units in the 7th digit.
                     np.testing.assert_allclose(fast,reference,rtol=1e-6)
 
-    def test_eigenvalue_analyses_pass_over_pastix(self):
-        if 'pastix' not in calculix.direct_solvers(): self.skipTest('This CalculiX build has no PaStiX.')
-        s=study(analysis='frequency',modes=4,loads=[])
-        result=solve(self.folder,s,8,'pastix')
-        self.assertNotIn('SOLVER=PASTIX',(self.folder/'analysis.inp').read_text())
-        np.testing.assert_allclose(result['summary']['frequencies'],
-                                   solve(self.folder,s,1,'spooles')['summary']['frequencies'],rtol=1e-6)
+    def test_a_free_part_has_six_rigid_modes_with_every_solver(self):
+        # Unsupported, CalculiX factors K - M: six rigid-body directions far
+        # below the elastic ones. Refined PARDISO solves once turned the
+        # first elastic mode into a seventh rigid one.
+        s=study(analysis='frequency',modes=4,supports=[],loads=[])
+        reference=solve(self.folder,s,1,'spooles')['summary']
+        self.assertEqual(reference['rigidModes'],6)
+        for name in self.faster_solvers():
+            with self.subTest(solver=name):
+                found=solve(self.folder,s,8,name)['summary']
+                self.assertEqual(found['rigidModes'],6)
+                self.assertTrue(all(f<1 for f in found['frequencies'][:6]),found['frequencies'])
+                np.testing.assert_allclose(found['frequencies'][6:],reference['frequencies'][6:],rtol=1e-4)
+
+    def test_without_a_working_sprung_solve_spooles_solves(self):
+        if not calculix.built_capabilities().get('pardisoHelper'):
+            self.skipTest('PARDISO is not in sprung-solve here.')
+        with mock.patch.dict(os.environ,{'SPRUNG_FEA_SOLVE':str(self.folder/'missing')}):
+            self.assertEqual(list(calculix.direct_solvers()),['spooles'])
+            result=solve(self.folder,study(),8)
+        self.assertIn('SPOOLES',result['solver'])
+        self.assertSameAnswer(result,self.serial)
+
+
+class SprungSolve(unittest.TestCase):
+    """sprung-solve on its own, as anyone can run it: Matrix Market systems,
+    symmetric indefinite and unsymmetric, against NumPy's dense solve."""
+
+    def test_it_solves_matrix_market_systems(self):
+        helper=calculix.find_helper()
+        if not helper: self.skipTest('There is no sprung-solve here.')
+        rng=np.random.default_rng(1);n=300
+        sparse=(rng.random((n,n))<0.02)*rng.standard_normal((n,n))
+        symmetric=sparse+sparse.T+0.5*np.eye(n)
+        unsymmetric=symmetric+0.3*np.triu(sparse)
+        b=rng.standard_normal(n)
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)
+            (folder/'b.mtx').write_text(f'%%MatrixMarket matrix array real general\n{n} 1\n'+''.join(f'{v!r}\n' for v in b.tolist()))
+            for name,matrix,kind in [('symmetric',symmetric,'symmetric'),('unsymmetric',unsymmetric,'general')]:
+                with self.subTest(matrix=name):
+                    rows,columns=np.nonzero(np.tril(matrix) if kind=='symmetric' else matrix)
+                    lines=[f'{r+1} {c+1} {float(matrix[r,c])!r}' for r,c in zip(rows.tolist(),columns.tolist())]
+                    (folder/'A.mtx').write_text(f'%%MatrixMarket matrix coordinate real {kind}\n{n} {n} {len(lines)}\n'+'\n'.join(lines)+'\n')
+                    out=subprocess.run([helper,str(folder/'A.mtx'),str(folder/'b.mtx')],capture_output=True,text=True,check=True).stdout
+                    np.testing.assert_allclose(np.array(out.split(),float),np.linalg.solve(matrix,b),rtol=0,atol=1e-9*np.abs(np.linalg.solve(matrix,b)).max())
 
 
 class NonlinearContact(unittest.TestCase):
     """A nonlinear, nonsymmetric system: the bolted lap joint tightened, then
     pulled, with friction. Its increments refactor one matrix structure
-    every iteration, which the PaStiX and PARDISO interfaces keep the
-    ordering of. Every direct solver must reach the same state."""
+    every iteration, which the PARDISO interfaces keep the ordering of.
+    Every direct solver must reach the same state."""
 
     def test_every_direct_solver_reaches_the_same_state(self):
         sys.path.insert(0,str(Path(__file__).resolve().parent))

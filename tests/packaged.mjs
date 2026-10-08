@@ -98,9 +98,9 @@ try {
   const static_ = await solve(study);
   const movement = static_.summary.maxMovement;
   assert.ok(movement > 0.28 && movement < 0.3, `Movement ${movement} mm`);
-  // The bundled solver's own fast direct solver: PaStiX, or Accelerate's
-  // PARDISO on macOS (Intel MKL is never bundled).
-  assert.match(static_.solver, /PaStiX|PARDISO/, static_.solver);
+  // PARDISO, from what ships in the app: Apple Accelerate on macOS, Intel
+  // oneMKL in the bundled sprung-solve elsewhere. Eigenvalue analyses too.
+  assert.match(static_.solver, /PARDISO/, static_.solver);
   console.log(
     `Static solve: ${movement.toFixed(4)} mm tip movement (${static_.solver})`,
   );
@@ -111,6 +111,7 @@ try {
     loads: [],
   });
   assert.equal(modal.analysis, "frequency");
+  assert.match(modal.solver, /PARDISO/, modal.solver);
   console.log(`Frequency solve: ok (${modal.solver})`);
 } finally {
   await service.close();

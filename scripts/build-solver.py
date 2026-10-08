@@ -7,22 +7,22 @@ installed CalculiX, and solver/ccx.json, which tells the engine what the
 build can do. The compilers and libraries come from a conda-forge
 environment, native/calculix/solver-env-<platform>.yml: pass its folder
 with --prefix, or run with it active (CONDA_PREFIX). macOS also needs the
-Xcode command line tools.
+Xcode command line tools, and Windows Visual Studio's C++ build tools.
 
-The build carries three direct solvers, all multithreaded:
+The build carries two direct solvers, both multithreaded:
 - SPOOLES 2.2. Its threaded factor and solve hand work between threads
   through plain loads and stores, which lose updates and return wrong
   answers (often on Apple silicon). The patches in
   native/calculix/spooles-patches, from conda-forge's spooles feedstock
   (build 1006), order those hand-offs.
 - PARDISO: Apple Accelerate's sparse factorizations on macOS, through
-  native/calculix/accelerate_pardiso.c. Elsewhere it is Intel MKL's, which
-  is not free software and is not linked or shipped:
-  native/calculix/mkl_pardiso.c loads an MKL the user has installed, when
-  CalculiX first calls PARDISO.
-- PaStiX 6, through native/calculix/pastix_ccx.c in place of CalculiX's
-  pastix.c, which needs a fork of PaStiX. PaStiX is conda-forge's on
-  Linux, and built here from its release archive on macOS and Windows."""
+  native/calculix/accelerate_pardiso.c. On Linux and Windows it is Intel
+  oneMKL's, which is not free software, so CalculiX does not link it:
+  native/calculix/pardiso_client.c hands CalculiX's PARDISO calls through
+  a pipe to sprung-solve (native/sprung-solve, MIT), a program of its own
+  that links MKL statically, written to solver/sprung-solve/. With
+  --without-mkl, sprung-solve is not built and the solver has SPOOLES
+  only."""
 import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tarfile, urllib.request
 from pathlib import Path
 
@@ -37,11 +37,6 @@ SOURCES={
     'spooles':(['https://www.netlib.org/linalg/spooles/spooles.2.2.tgz',
                 'http://archive.ubuntu.com/ubuntu/pool/universe/s/spooles/spooles_2.2.orig.tar.gz'],
                'a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd'),
-    'pastix':(['https://files.inria.fr/pastix/releases/v6/pastix-6.4.0.tar.gz'],'891d426188eed56c1075fb34d2d80132593a1536ffc05cf333567f68a4811e55'),
-    # Inria's release archive, kept by the Debian/Ubuntu archive.
-    'scotch':(['http://archive.ubuntu.com/ubuntu/pool/universe/s/scotch/scotch_7.0.11.orig.tar.gz',
-               'https://gitlab.inria.fr/scotch/scotch/-/archive/v7.0.11/scotch-v7.0.11.tar.gz'],
-              'd3578b15a8ff5c7924ab0fa4cd166e58d907da4fd95cdaaab37a9034669c64d2'),
 }
 SPOOLES_PATCHES=(
     '0000-transform-ivinit.patch',
@@ -55,8 +50,8 @@ SPOOLES_PATCHES=(
 # Electron's minimum macOS. Accelerate's LU is used where the OS has it.
 DEPLOYMENT_TARGET='12.0'
 MAC,WINDOWS=sys.platform=='darwin',sys.platform=='win32'
-# What GCC 14 and clang 16 made errors, and older C (CalculiX; PaStiX's
-# code without hwloc) still relies on.
+# What GCC 14 and clang 16 made errors, and CalculiX's older C still relies
+# on.
 LENIENT=[f'-Wno-error={w}' for w in ('implicit-function-declaration','implicit-int','int-conversion','incompatible-pointer-types')]
 jobs=os.cpu_count() or 4
 
@@ -187,84 +182,53 @@ def build_spooles(tc):
     return source,library
 
 
-def scotch_windows(tc):
-    """Scotch 7.0.11, static, built with the MinGW compilers: conda-forge's
-    Windows Scotch is built by Microsoft's compiler and does not run under
-    MinGW code (it corrupted the heap during ordering). 64-bit indices as
-    PaStiX is built, no compressed graph files. Threads on, as conda-forge
-    builds it: its file handling otherwise forks, which Windows cannot.
-    Returns its install prefix."""
-    source=work/'scotch-src';source.mkdir()
-    extract(fetch('scotch'),source)
-    build,install=work/'scotch-build',work/'scotch'
-    cmake=tc.tool('cmake')
-    run(cmake,'-S',next(source.iterdir()),'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
-        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',f'-DCMAKE_C_COMPILER={tc.cc}',
-        f'-DCMAKE_C_FLAGS={" ".join([*LENIENT,"-DCOMMON_PTHREAD_FILE"])}','-DBUILD_SHARED_LIBS=OFF','-DINTSIZE=64','-DTHREADS=ON',
-        '-DMPI_THREAD_MULTIPLE=OFF','-DBUILD_PTSCOTCH=OFF','-DBUILD_LIBESMUMPS=OFF','-DBUILD_LIBSCOTCHMETIS=OFF',
-        '-DINSTALL_METIS_HEADERS=OFF','-DBUILD_FORTRAN=OFF','-DUSE_ZLIB=OFF','-DUSE_LZMA=OFF','-DUSE_BZ2=OFF',
-        '-DENABLE_TESTS=OFF',env=tc.env)
-    run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
-    run(cmake,'--install',build,env=tc.env)
-    return install
+def msvc_environment():
+    """Visual Studio's 64-bit C build environment (its vcvars64.bat), for
+    sprung-solve on Windows: Intel oneMKL's static libraries are made for
+    Microsoft's compiler."""
+    vswhere=Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Microsoft Visual Studio'/'Installer'/'vswhere.exe'
+    found=subprocess.run([str(vswhere),'-latest','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                          '-find','VC\\Auxiliary\\Build\\vcvars64.bat'],capture_output=True,text=True).stdout.split('\n')[0].strip() if vswhere.is_file() else ''
+    if not found: sys.exit("Visual Studio's C++ build tools were not found; sprung-solve needs them (or pass --without-mkl).")
+    # A batch file of its own: cmd's quoting of a command line is unreliable.
+    script=work/'msvc-environment.bat'
+    script.write_text(f'@call "{found}" >nul\r\n@set\r\n')
+    listing=subprocess.check_output(['cmd','/d','/c',str(script)],text=True)
+    # Upper case, as os.environ has them on Windows: no name twice.
+    return {k.upper():v for k,v in (line.split('=',1) for line in listing.splitlines() if '=' in line[1:])}
 
 
-def build_pastix(tc):
-    """PaStiX 6.4 from its release archive, for macOS and Windows: Scotch for
-    ordering and OpenBLAS through CBLAS/LAPACKE, from the environment, with
-    64-bit indices as conda-forge builds it for Linux. conda-forge has none
-    for Windows, and its macOS build pairs PaStiX with a Scotch (7.0.5)
-    whose threaded ordering aborts there; Scotch orders on one thread here
-    (ordering takes a fraction of a second; the factorization is what PaStiX
-    threads). No hwloc, as on Linux. Installs into the build folder; returns
-    its prefix."""
-    scotch=scotch_windows(tc) if WINDOWS else tc.prefix
-    # conda's OpenBLAS is BLAS, CBLAS, LAPACK and LAPACKE in one library;
-    # on Windows its headers have their own folder.
-    headers=tc.include/'openblas' if WINDOWS else tc.include
-    source=work/'pastix-src';source.mkdir()
-    extract(fetch('pastix'),source)
-    tree=next(source.iterdir())
-    # PaStiX's code for running without hwloc does not build: it calls a
-    # pastix_warning that 6.4 does not have, and on macOS sysctl without its
-    # header. Its one notice goes to stderr, which pastix_ccx.c silences.
-    isched=tree/'common'/'isched_nohwloc.c'
-    text=isched.read_text()
-    if 'pastix_warning(' not in text: sys.exit(f'{isched}: expected pastix_warning calls to replace')
-    isched.write_text('#include <stdio.h>\n#ifdef __APPLE__\n#include <sys/types.h>\n#include <sys/sysctl.h>\n#endif\n'
-                      +text.replace('pastix_warning(','fprintf(stderr,'))
-    build,install=work/'pastix-build',work/'pastix'
-    cmake=tc.tool('cmake')
-    run(cmake,'-S',tree,'-B',build,'-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={tc.tool("ninja")}',
-        '-DCMAKE_BUILD_TYPE=Release',f'-DCMAKE_INSTALL_PREFIX={install}',
-        f'-DCMAKE_PREFIX_PATH={scotch};{tc.prefix/"Library" if WINDOWS else tc.prefix}',f'-DSCOTCH_DIR={scotch}',
-        f'-DCMAKE_C_COMPILER={tc.cc}',f'-DCMAKE_Fortran_COMPILER={tc.fc}',f'-DPython_EXECUTABLE={sys.executable}',
-        *([f'-DCMAKE_OSX_DEPLOYMENT_TARGET={DEPLOYMENT_TARGET}'] if MAC else []),
-        # PaStiX's test helpers use pthreads without linking them; MinGW does
-        # not add winpthreads by itself.
-        *(['-DCMAKE_C_STANDARD_LIBRARIES=-lpthread'] if WINDOWS else []),
-        f'-DCMAKE_C_FLAGS={" ".join(LENIENT)}','-DBUILD_SHARED_LIBS=ON','-DPASTIX_INT64=ON','-DPASTIX_ORDERING_SCOTCH=ON',
-        '-DPASTIX_ORDERING_SCOTCH_MT=OFF','-DPASTIX_ORDERING_METIS=OFF',
-        '-DPASTIX_WITH_MPI=OFF','-DPASTIX_WITH_CUDA=OFF','-DPASTIX_WITH_STARPU=OFF','-DPASTIX_WITH_PARSEC=OFF',
-        '-DPASTIX_WITH_FORTRAN=OFF','-DSPM_WITH_FORTRAN=OFF','-DSPM_WITH_MPI=OFF','-DBUILD_TESTING=OFF',
-        '-DBLA_VENDOR=OpenBLAS',f'-DCBLAS_INCDIR={headers}',f'-DLAPACKE_INCDIR={headers}',
-        env=tc.env)
-    run(cmake,'--build',build,'--parallel',str(jobs),env=tc.env)
+def build_helper(tc):
+    """sprung-solve (native/sprung-solve), the program CalculiX's PARDISO
+    calls go to on Linux and Windows, with Intel oneMKL's PARDISO linked
+    statically: one file that holds what PARDISO uses, and MKL's threads on
+    the OpenMP runtime beside it (GNU's on Linux, LLVM's libiomp5md on
+    Windows). Returns the executable and the folders of its libraries."""
+    source=root/'native'/'sprung-solve'/'sprung_solve.c'
+    out=work/'sprung-solve';out.mkdir()
+    if not (tc.include/'mkl.h').is_file():
+        sys.exit(f'Intel oneMKL was not found in {tc.prefix}: create the environment from native/calculix/solver-env-*.yml, or pass --without-mkl.')
     if WINDOWS:
-        # SPM's install rules name some headers with Windows separators,
-        # which CMake then reads as escapes ('\s'). CMake writes every other
-        # path in its install scripts with '/'.
-        for script in build.rglob('cmake_install.cmake'):
-            text=script.read_text()
-            if '\\' in text: script.write_text(text.replace('\\','/'))
-    run(cmake,'--install',build,env=tc.env)
-    return install
+        env=msvc_environment()
+        cl=shutil.which('cl',path=env.get('PATH'))
+        if not cl: sys.exit("Visual Studio's C compiler (cl) was not found.")
+        exe=out/'sprung-solve.exe'
+        run(cl,'/nologo','/O2','/MD','/W3',f'/I{tc.include}',source,f'/Fe{exe}',f'/Fo{out}\\','/link',f'/LIBPATH:{tc.lib}',
+            'mkl_intel_lp64.lib','mkl_intel_thread.lib','mkl_core.lib','libiomp5md.lib',cwd=out,env=env)
+        return exe,[tc.bin,tc.prefix]
+    exe=out/'sprung-solve'
+    lib=tc.lib
+    run(tc.cc,'-O2','-Wall',f'-I{tc.include}',source,'-o',exe,
+        '-Wl,--start-group',lib/'libmkl_intel_lp64.a',lib/'libmkl_gnu_thread.a',lib/'libmkl_core.a','-Wl,--end-group',
+        '-fopenmp','-lpthread','-lm','-ldl','-s',f'-Wl,-rpath,{lib}',env=tc.env)
+    return exe,[lib]
 
 
 def ccx_sources(src):
-    """CalculiX's Fortran and C sources (its Makefile.inc), CalculiX's PaStiX
-    interface replaced by ours. The list can name a file the release does
-    not have (2.23: mafillmm.c); the link reports anything really missing."""
+    """CalculiX's Fortran and C sources (its Makefile.inc), without its PaStiX
+    interface (PaStiX is not built in). The list can name a file the release
+    does not have (2.23: mafillmm.c); the link reports anything really
+    missing."""
     text=(src/'Makefile.inc').read_text()
     def listed(name):
         block=re.search(rf'^{name}\s*=(.*?)(?:\n\s*\n|\Z)',text,re.M|re.S).group(1)
@@ -276,9 +240,24 @@ def ccx_sources(src):
     return listed('SCCXF'),c
 
 
+def check_license(src):
+    """CalculiX's own files are GPL version 2 only ("published by the Free
+    Software Foundation(version 2)", without "or any later version"), which
+    THIRD_PARTY_NOTICES.md and the build's design rely on: nothing under an
+    incompatible license (GPL-3, LGPL-3, Intel's) is linked into it. Refuse
+    a release whose notices say otherwise."""
+    notices=[p for p in src.iterdir() if p.suffix in ('.c','.f','.h') and 'General Public License' in p.read_text(errors='replace')]
+    only=[p for p in notices if re.search(r'Foundation\s*\(version 2\)',p.read_text(errors='replace'))]
+    later=[p for p in notices if re.search(r'any later\s+version',p.read_text(errors='replace'))]
+    print(f'CalculiX license notices: {len(notices)} files, {len(only)} GPL version 2 only, {len(later)} version 2 or later')
+    if len(only)<0.9*len(notices):
+        sys.exit("CalculiX's license notices are not the GPL version 2 only ones expected: review THIRD_PARTY_NOTICES.md.")
+
+
 def build_ccx(tc, spooles, spooles_lib):
     extract(fetch('ccx'),work)
     src=work/'CalculiX'/f'ccx_{VERSION}'/'src'
+    check_license(src)
     # A void function that returns a value (as Homebrew's formula fixes).
     replace(src/'readnewmesh.c','*iprfnp=iprfn;*konrfnp=konrfn;*ratiorfnp=ratiorfn;\n  \n  return NULL;',
             '*iprfnp=iprfn;*konrfnp=konrfn;*ratiorfnp=ratiorfn;\n  \n  return;')
@@ -288,24 +267,18 @@ def build_ccx(tc, spooles, spooles_lib):
     for name in (f'ccx_{VERSION}.c',f'ccx_{VERSION}step.c'):
         replace(src/name,'#ifdef __WIN32\n_set_output_format(_TWO_DIGIT_EXPONENT);\n#endif\n','')
     capabilities={'version':VERSION,'threadSafeSpooles':True}
-    defines=['-DARCH=Linux','-DSPOOLES','-DARPACK','-DMATRIXSTORAGE','-DNETWORKOUT','-DUSE_MT=1','-DPARDISO','-DPASTIX']
-    # native/calculix/mkl_service.h stands in for MKL's header: no build
-    # links MKL.
-    includes=[f'-I{spooles}',f'-I{native}',f'-I{tc.include}']
+    defines=['-DARCH=Linux','-DSPOOLES','-DARPACK','-DMATRIXSTORAGE','-DNETWORKOUT','-DUSE_MT=1','-DPARDISO']
+    # native/calculix/mkl_service.h stands in for MKL's header: CalculiX
+    # never links MKL. native/sprung-solve has the protocol's header.
+    includes=[f'-I{spooles}',f'-I{native}',f'-I{root/"native"/"sprung-solve"}',f'-I{tc.include}']
     if MAC:
         extra=[native/'accelerate_pardiso.c']
         capabilities['pardiso']='Apple Accelerate'
         libs=['-framework','Accelerate']
     else:
-        extra=[native/'mkl_pardiso.c']
-        # Present only where the engine finds an installed MKL.
-        capabilities['pardiso']='Intel MKL';capabilities['pardisoNeedsMkl']=True
-        libs=[] if WINDOWS else ['-ldl']
-    # conda-forge's PaStiX on Linux; built here elsewhere (build_pastix).
-    pastix=tc.prefix if not (MAC or WINDOWS) else build_pastix(tc)
-    includes.append(f'-I{pastix/"include"}')
-    capabilities['pastix']='PaStiX 6.4'
-    extra.append(native/'pastix_ccx.c')
+        # PARDISO is offered once sprung-solve is built beside (main).
+        extra=[native/'pardiso_client.c']
+        libs=[]
 
     cflags=['-O2','-w',*LENIENT,*includes,*defines]
     fortran,c=ccx_sources(src)
@@ -328,7 +301,7 @@ def build_ccx(tc, spooles, spooles_lib):
         blas=[f'-L{tc.prefix/"Library"/"mingw-w64"/"lib"}','-larpack',f'-L{tc.lib}','-lopenblas']
     else:
         blas=[f'-L{tc.lib}','-larpack','-llapack','-lblas']
-    common=[objects/'ccx_main.o',library,spooles_lib,f'-L{pastix/"lib"}','-lpastix','-lspm',*blas]
+    common=[objects/'ccx_main.o',library,spooles_lib,*blas]
     if MAC:
         # Link with Xcode's clang, which knows the SDK. gfortran's runtime
         # and OpenMP (LLVM's, which implements gfortran's GOMP calls) come
@@ -338,13 +311,14 @@ def build_ccx(tc, spooles, spooles_lib):
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread',cwd=src,env=tc.env)
     else:
         run(tc.fc,'-o',exe,*common,*libs,'-fopenmp','-lpthread','-lm',f'-Wl,-rpath,{tc.lib}',cwd=src,env=tc.env)
-    folders=[tc.lib,tc.bin,pastix/'bin',pastix/'lib',tc.prefix/'Library'/'mingw-w64'/'bin']
+    folders=[tc.lib,tc.bin,tc.prefix/'Library'/'mingw-w64'/'bin']
     return exe,capabilities,folders
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--prefix',help='the conda-forge build environment (default: CONDA_PREFIX)')
+    parser.add_argument('--without-mkl',action='store_true',help='do not build sprung-solve: no PARDISO on Linux and Windows')
     args=parser.parse_args()
     if not (MAC and os.uname().machine=='arm64' or WINDOWS or sys.platform.startswith('linux')):
         sys.exit('build-solver.py builds for Apple silicon, Linux x64 and Windows x64.')
@@ -360,9 +334,18 @@ def main():
     sys.path.insert(0,str(root/'scripts'))
     from solverlibs import relocate
     exe=relocate(executable,target,folders)
+    if not MAC and not args.without_mkl:
+        helper,helper_folders=build_helper(tc)
+        # A folder of its own, with its licenses: MIT, and Intel's for MKL.
+        place=target/'sprung-solve'
+        relocate(helper,place,helper_folders,check=('--version','sprung-solve 1: '))
+        for name in ('sprung-solve.txt','Intel-oneMKL.txt','Intel-oneMKL-third-party-programs.txt'):
+            shutil.copy2(root/'licenses'/name,place/name)
+        capabilities['pardiso']='Intel oneMKL'
+        capabilities['pardisoHelper']=f'sprung-solve/{helper.name}'
     (target/'ccx.json').write_text(json.dumps(capabilities,indent=1)+'\n')
     print('Solver:',exe,json.dumps(capabilities))
-    print('With:',', '.join(sorted(p.name for p in target.iterdir() if p!=exe)))
+    print('With:',', '.join(sorted(p.name for p in target.rglob('*') if p!=exe and p.is_file())))
 
 
 if __name__=='__main__': main()

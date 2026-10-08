@@ -57,8 +57,9 @@ jobs:
           python-version: "3.10"
 
       # CalculiX 2.23 built from source on every platform, with threaded
-      # SPOOLES, PaStiX, and PARDISO (Apple Accelerate on macOS; an Intel MKL
-      # the user installs elsewhere), from a conda-forge environment.
+      # SPOOLES and PARDISO (Apple Accelerate on macOS; on Windows and Linux,
+      # Intel oneMKL's in sprung-solve, a separate program built beside it),
+      # from a conda-forge environment.
       - name: Set up the solver build environment
         uses: mamba-org/setup-micromamba@v2
         with:
@@ -87,31 +88,18 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
           "$py" -m pip install pyinstaller==6.22.3
 
-      # MKL is not bundled. Install it beside the build, as a user would, so
-      # that PARDISO is compared with the other direct solvers.
-      - name: Install Intel MKL for the solver tests (Windows, Linux)
-        if: runner.os != 'macOS'
-        run: |
-          "$MAMBA_EXE" create -y -q -n usermkl -c conda-forge mkl
-          env="$MAMBA_ROOT_PREFIX/envs/usermkl"
-          if [ "$RUNNER_OS" = Windows ]; then mkl="$env/Library/bin"; else mkl="$env/lib"; fi
-          echo "SPRUNG_FEA_MKL=$mkl" >> "$GITHUB_ENV"
-
       - name: Compare the direct solvers
         run: |
           if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
           "$py" -m unittest -v tests.test_solvers
 
       - name: Package
-        # The packaged app is tested as shipped: without MKL.
-        run: |
-          unset SPRUNG_FEA_MKL
-          npm run ${{ matrix.package }}
+        run: npm run ${{ matrix.package }}
 
+      # The packaged app as shipped: its own sprung-solve and MKL, none
+      # installed on the computer.
       - name: Solve with the packaged engine
-        run: |
-          unset SPRUNG_FEA_MKL
-          npm run test:packaged
+        run: npm run test:packaged
 
       - uses: actions/upload-artifact@v4
         with:

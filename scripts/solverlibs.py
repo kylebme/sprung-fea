@@ -1,34 +1,35 @@
-"""Gathers the CalculiX solver and the shared libraries it needs into one
-folder that it runs from alone. Used by build-solver.py, which leaves a
-self-contained solver/, and bundle-runtime.py, which copies a solver into
-the application.
+"""Gathers the CalculiX solver, or sprung-solve, and the shared libraries it
+needs into one folder that it runs from alone. Used by build-solver.py,
+which leaves a self-contained solver/, and bundle-runtime.py, which copies
+a solver into the application.
 
 Libraries of the operating system stay with it: glibc and the base system
 on Linux, /usr/lib and the system frameworks (Accelerate) on macOS, Windows'
-own DLLs. Everything else (gfortran's runtime, OpenMP, OpenBLAS, ARPACK,
-PaStiX, Scotch, hwloc) is copied beside the executable and found there:
+own DLLs. Everything else (gfortran's runtime, OpenMP, OpenBLAS, ARPACK) is
+copied beside the executable and found there:
 through $ORIGIN on Linux, @loader_path on macOS, and the executable's folder
 on Windows."""
 import os, re, shutil, subprocess, sys
 from pathlib import Path
 
 
-def relocate(source, dest, folders=()):
+def relocate(source, dest, folders=(), check=('-v','This is Version')):
     """Copies the executable `source` into the folder `dest` with the
     libraries it needs, found where the executable finds them or in
-    `folders`, checks that it starts from there, and returns the copy."""
+    `folders`, checks that it starts from there (run with the argument
+    check[0], it prints check[1]), and returns the copy."""
     source,dest=Path(source),Path(dest)
     dest.mkdir(parents=True,exist_ok=True)
     exe=dest/source.name
     shutil.copy2(source,exe);exe.chmod(0o755)
     folders=[Path(f) for f in folders]
     {'darwin':_mac,'win32':_windows}.get(sys.platform,_linux)(source,exe,folders)
-    # A missing library fails here, silently, with no version banner (ccx -v
-    # exits nonzero anyway).
-    check=subprocess.run([str(exe),'-v'],capture_output=True,text=True,
-                         env={k:v for k,v in os.environ.items() if k not in ('PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH')})
-    if 'This is Version' not in check.stdout:
-        sys.exit(f'The solver in {dest} does not start (exit {check.returncode}): {check.stdout}{check.stderr}')
+    # A missing library fails here, silently, with no banner (ccx -v exits
+    # nonzero anyway).
+    started=subprocess.run([str(exe),check[0]],capture_output=True,text=True,
+                           env={k:v for k,v in os.environ.items() if k not in ('PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH')})
+    if check[1] not in started.stdout:
+        sys.exit(f'{exe} does not start (exit {started.returncode}): {started.stdout}{started.stderr}')
     return exe
 
 

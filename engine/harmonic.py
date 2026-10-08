@@ -44,7 +44,6 @@ def stored_frames(peaks):
 
 class Harmonic(Analysis):
     id='harmonic'
-    eigenvalues=True
     name='Harmonic response'
 
     def validate(self, study, mesh):
