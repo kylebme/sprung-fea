@@ -330,7 +330,7 @@ npm run package:win                 # or: npm run package:linux
 npm run test:packaged               # solves with only the packaged engine and solver
 ```
 
-These bundle the CalculiX in `solver/` (`npm run build:solver`), else the one found by `SPRUNG_FEA_CCX` (or on `PATH`), together with its shared libraries (`scripts/solverlibs.py`). On Windows and Linux, `sprung-solve` and the OpenMP runtime it needs go into their own folder, `runtime/solver/sprung-solve`, with its MIT license and Intel's license and third-party notices. Linux packaging needs `patchelf`. Windows produces `release/Sprung-FEA-Setup-<version>.exe`, a one-click installer that installs for the current user without administrator rights. Linux produces `release/Sprung-FEA-<version>-x86_64.AppImage`, which runs without installation. Builds are unsigned.
+These bundle the CalculiX in `solver/` (`npm run build:solver`), else the one found by `SPRUNG_FEA_CCX` (or on `PATH`), together with its shared libraries (`scripts/solverlibs.py`). On Windows and Linux, `sprung-solve` and the OpenMP runtime it needs go into their own folder, `runtime/solver/sprung-solve`, with its MIT license and Intel's license and third-party notices. Linux packaging needs `patchelf`. Windows produces `release/Sprung-FEA-Setup-<version>.exe`, a one-click installer that installs for the current user without administrator rights. Linux produces `release/Sprung-FEA-<version>-x86_64.AppImage`, which runs without installation. `build.toolsets.appimage` pins the static runtime toolset `1.0.3`, supported by electron-builder 26.15.3 and later; the AppImage does not require the host to install the legacy `libfuse.so.2` library (including `libfuse2t64` on Ubuntu 24.04). Builds are unsigned.
 
 ### Continuous integration
 
