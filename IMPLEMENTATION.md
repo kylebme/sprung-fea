@@ -334,7 +334,7 @@ These bundle the CalculiX in `solver/` (`npm run build:solver`), else the one fo
 
 ### Continuous integration
 
-[.github/workflows/build.yml](.github/workflows/build.yml) builds the macOS DMG, Windows installer and Linux AppImage on every push and pull request. Each job builds CalculiX and `sprung-solve` from source and compares the direct solvers (`tests/test_solvers.py`). It then packages the app and runs a static and a frequency solve with the packaged engine. Both must use PARDISO, from what ships in the app, with no MKL installed on the runner. Finally it uploads the installers as workflow artifacts. The README's download instructions point users to these artifacts until tagged releases exist.
+[.github/workflows/build.yml](.github/workflows/build.yml) builds the macOS DMG, Windows installer and Linux AppImage on every push and pull request. Each job builds CalculiX and `sprung-solve` from source and compares the direct solvers (`tests/test_solvers.py`). It then packages the app and runs a static and a frequency solve with the packaged engine. Both must use PARDISO, from what ships in the app, with no MKL installed on the runner. Finally it uploads the installers as workflow artifacts. Tagged releases publish these installers, checksums and a corresponding source bundle on GitHub Releases.
 
 ### README media
 

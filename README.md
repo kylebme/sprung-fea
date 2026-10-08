@@ -43,7 +43,7 @@ Find the latest release here: [Releases](https://github.com/kylebme/sprung-fea/r
 | --- | --- | --- |
 | macOS, Apple Silicon | `Sprung-FEA-x.x.x-arm64.dmg` | Open the DMG and drag Sprung FEA to Applications. |
 | Windows, x64 | `Sprung-FEA-Setup-x.x.x.exe` | Run the installer; it installs for your user without administrator rights. |
-| Linux, x64 | `Sprung-FEA-x.x.x-x86_64.AppImage` | Make it executable with `chmod +x Sprung-FEA-0.1.0-x86_64.AppImage`, then run it. |
+| Linux, x64 | `Sprung-FEA-x.x.x-x86_64.AppImage` | Make it executable with `chmod +x Sprung-FEA-0.2.0-x86_64.AppImage`, then run it. |
 
 These builds are unsigned (macOS is ad-hoc signed, without notarization). On macOS, use **System Settings → Privacy & Security → Open Anyway** after the first launch is blocked. On Windows, use **More info → Run anyway** if SmartScreen appears.
 
@@ -94,7 +94,7 @@ On Windows and Linux, use Ctrl in place of ⌘.
 
 ## Limits
 
-Sprung FEA 0.1 uses ten-node tetrahedral solid elements and assumes:
+Sprung FEA 0.2 uses ten-node tetrahedral solid elements and assumes:
 
 - Isotropic materials. Plasticity, when turned on, follows a straight line from yield to ultimate strength, or the stress–strain points you enter. Heat transfer and thermal stress can use properties that change with temperature.
 - Slowly applied loads.
