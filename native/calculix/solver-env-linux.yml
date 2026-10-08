@@ -1,0 +1,13 @@
+# Toolchain and libraries for scripts/build-solver.py on Linux x64:
+#   micromamba create -n sprung-solver -f native/calculix/solver-env-linux.yml
+# Intel oneMKL's static libraries go into sprung-solve, the separate
+# program that runs CalculiX's PARDISO solves; CalculiX does not link it.
+channels: [conda-forge]
+dependencies:
+  - gcc_linux-64
+  - gfortran_linux-64
+  - arpack 3.9.*
+  - libblas=*=*openblas
+  - patchelf
+  - mkl-static 2026.*
+  - mkl-include 2026.*

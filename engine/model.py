@@ -51,18 +51,26 @@ TET_EDGES=[(0,1),(1,2),(2,0),(0,3),(2,3),(1,3)]
 TET_DLAM=np.array([[-1,-1,-1],[1,0,0],[0,1,0],[0,0,1]])
 
 
+def tetra_shape(lam):
+    """Quadratic tetrahedron shape functions and their derivatives (10 × 3)
+    at barycentric coordinates lam, Gmsh node order."""
+    N=list(lam*(2*lam-1));dN=list((4*lam-1)[:,None]*TET_DLAM)
+    for i,j in TET_EDGES:
+        N.append(4*lam[i]*lam[j]);dN.append(4*(lam[i]*TET_DLAM[j]+lam[j]*TET_DLAM[i]))
+    return np.asarray(N),np.asarray(dN)
+TET_SHAPES=[tetra_shape(lam) for lam in TET_POINTS]
+
+
 def tetra_points(points):
     """(shape functions, position, weight × |J|) at each quadrature point of a
     ten-node tetrahedron in Gmsh node order."""
-    out=[]
-    for lam in TET_POINTS:
-        N=list(lam*(2*lam-1));dN=list((4*lam-1)[:,None]*TET_DLAM)
-        for i,j in TET_EDGES:
-            N.append(4*lam[i]*lam[j]);dN.append(4*(lam[i]*TET_DLAM[j]+lam[j]*TET_DLAM[i]))
-        N=np.asarray(N)
-        jac=np.asarray(dN).T@points
-        out.append((N,N@points,abs(np.linalg.det(jac))/24))
-    return out
+    return [(N,N@points,abs(np.linalg.det(dN.T@points))/24) for N,dN in TET_SHAPES]
+
+
+def tetra_jacobians(points):
+    """Weight × |J| at each quadrature point of many tetrahedra at once:
+    points (elements, 10, 3) to (elements, 4)."""
+    return np.stack([np.abs(np.linalg.det(np.einsum('ni,enj->eij',dN,points)))/24 for _,dN in TET_SHAPES],axis=1)
 
 
 def tetra_weights(points):
@@ -91,10 +99,38 @@ class Model:
         self.nodes=dict(zip(self.ids,coords))
         self.coords=coords
         self._faces=None
+        self._index=None
+
+    def index(self, nodes):
+        """Rows of node ids in coords."""
+        if self._index is None:
+            self._index=np.full(max(self.ids)+1,-1,np.int64)
+            self._index[self.ids]=np.arange(len(self.ids))
+        return self._index[np.asarray(nodes,np.int64)]
+
+    def element_points(self):
+        """Node coordinates of every element: (elements, 10, 3)."""
+        return self.coords[self.index(self.mesh['elements'])]
 
     def volumes(self):
         """Volume of each element in mm³, by the four-point rule."""
-        return np.array([sum(w for _,_,w in tetra_points(np.array([self.nodes[n] for n in c]))) for c in self.mesh['elements']])
+        return tetra_jacobians(self.element_points()).sum(axis=1)
+
+    def integrate_elements(self, load, scale):
+        """Equivalent nodal values of a load per unit volume, by the
+        four-point rule: load(positions (elements, 3)) gives (elements, k)
+        values at each quadrature point, `scale` multiplies each element's.
+        Returns (nodes, k) in coords order."""
+        points=self.element_points();rows=self.index(self.mesh['elements'])
+        weights=tetra_jacobians(points)*np.asarray(scale,float)[:,None]
+        out=None
+        for q,(N,_) in enumerate(TET_SHAPES):
+            values=np.asarray(load(np.einsum('n,enj->ej',N,points)),float)
+            values=values.reshape(len(points),-1)*weights[:,q:q+1]
+            if out is None: out=np.zeros((len(self.coords),values.shape[1]))
+            for k in range(values.shape[1]):
+                out[:,k]+=np.bincount(rows.ravel(),(values[:,k:k+1]*N).ravel(),len(self.coords))
+        return out
 
     def volume(self):
         return float(self.volumes().sum())
@@ -143,10 +179,12 @@ class Model:
         if self._faces is None:
             self._faces={}
             tet_faces=[(0,1,2),(0,3,1),(1,3,2),(2,3,0)]
-            for eid,c in zip(self.mesh['elementIds'],self.mesh['elements']):
-                center=np.mean([self.nodes[int(n)] for n in c[:4]],axis=0)
-                for num,ids in enumerate(tet_faces,1):
-                    self._faces[tuple(sorted(c[i] for i in ids))]=(eid,num,center)
+            elements=np.asarray(self.mesh['elements'],np.int64)
+            centers=self.element_points()[:,:4].mean(axis=1)
+            ids=self.mesh['elementIds']
+            for num,corners in enumerate(tet_faces,1):
+                keys=map(tuple,np.sort(elements[:,corners],axis=1).tolist())
+                self._faces.update(zip(keys,zip(ids,[num]*len(ids),centers)))
         return self._faces
 
     def face_quadrature(self, faces):
@@ -395,17 +433,16 @@ def free_motions(held, model, nodes):
     """Rigid motions (0 to 6) that the blocked directions on `nodes` leave.
     Blocking direction d at offset r removes the motions with
     d·(t + ω × r) = d·t + ω·(r × d) = 0."""
-    coords=np.array([model.nodes[n] for n in nodes])
+    coords=model.coords[model.index(sorted(nodes))]
     center=coords.mean(axis=0);scale=max(np.ptp(coords,axis=0))
-    rows=[]
     blocked=[(n,np.eye(3)[a]) for n,a in held.dofs]+[(n,d) for n,ds in held.directions.items() for d in ds]
-    for node,d in blocked:
-        if node not in nodes: continue
-        r=(model.nodes[node]-center)/scale
-        rows.append([*d,*np.cross(r,d)])
+    blocked=[(n,d) for n,d in blocked if n in nodes]
+    if not blocked: return 6
+    d=np.array([d for _,d in blocked],float)
+    r=(model.coords[model.index([n for n,_ in blocked])]-center)/scale
     # A motion resisted only at round-off (fitted cylinder axes are exact to
     # about 1e-6) is free.
-    return int(6-(np.linalg.matrix_rank(np.asarray(rows),tol=1e-6) if rows else 0))
+    return int(6-np.linalg.matrix_rank(np.hstack([d,np.cross(r,d)]),tol=1e-6))
 
 
 def rigid_motions(fixed, model):
@@ -587,14 +624,16 @@ def build_loads(study, model, density=None):
     for (n,a),v in loading.nodal.items():
         force=np.zeros(3);force[a]=v;loading.add_applied(n,force)
     if np.any(loading.gravity) or loading.rotation:
-        if loading.rotation: omega,origin,axis=loading.rotation
-        for c,density in zip(model.mesh['elements'],densities):
-            for N,x,w in tetra_points(np.array([model.nodes[n] for n in c])):
-                body=loading.gravity.copy()
-                if loading.rotation:
-                    r=x-origin;r-=np.dot(r,axis)*axis
-                    body+=omega**2*r
-                for n,Ni in zip(c,N): loading.add_applied(n,Ni*w*density*body)
+        def body(x):
+            out=np.broadcast_to(loading.gravity,x.shape).copy()
+            if loading.rotation:
+                omega,origin,axis=loading.rotation
+                r=x-origin;r-=np.outer(r@axis,axis)
+                out+=omega**2*r
+            return out
+        forces=model.integrate_elements(body,densities)
+        for n in np.flatnonzero(np.abs(forces).sum(axis=1)):
+            loading.add_applied(model.ids[n],forces[n])
     return loading
 
 

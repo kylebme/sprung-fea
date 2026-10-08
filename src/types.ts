@@ -169,8 +169,9 @@ export type Bolt = {
 /** Conditions applied to faces, edited through drafts. */
 export type ConditionKind = "support" | "load" | "mass" | "thermal" | "bolt";
 export type Condition = Support | Load | PointMass | ThermalCondition | Bolt;
-/** CalculiX equation solver: direct SPOOLES or preconditioned conjugate gradients. */
-export type Solver = "spooles" | "iterative-scaling" | "iterative-cholesky";
+/** CalculiX equation solver: the fastest direct solver the bundled
+ * CalculiX has, or preconditioned conjugate gradients. */
+export type Solver = "direct" | "iterative-scaling" | "iterative-cholesky";
 /**
  * Threads for meshing and solving, a per-machine preference outside the
  * study: Auto uses performance cores, All every logical core.
@@ -424,7 +425,7 @@ export const emptyStudy = (): Study => ({
   thermal: [],
   meshSize: 0,
   detail: "medium",
-  solver: "spooles",
+  solver: "direct",
 });
 export { fmt } from "./logic";
 declare global {

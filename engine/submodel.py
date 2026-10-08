@@ -188,7 +188,7 @@ def submodel(folder, study, region):
     if fixed: lines+=calculix.boundary_lines(fixed)
     lines+=['*NSET, NSET=CUT']+calculix.rows(driven)
     lines+=['*SUBMODEL, TYPE=NODE, INPUT=global.frd','CUT']
-    lines+=['*STEP','*STATIC, SOLVER='+calculix.SOLVERS[calculix.solver_of(study)][0],
+    lines+=['*STEP','*STATIC, SOLVER='+calculix.solver(study)[0],
             '*BOUNDARY, SUBMODEL, STEP=1','CUT, 1, 3']
     lines+=calculix.load_lines(loading)
     lines+=['*NODE FILE','U','*EL FILE','S, E','*END STEP']
@@ -239,7 +239,7 @@ def submodel(folder, study, region):
                       {'label':'Cut-face stress difference (95th percentile), share of peak','values':[difference*100],'unit':'%'},
                       {'label':'Region faces: cut, original','values':[len(cut_faces),len(faces)-len(cut_faces)],'unit':'','digits':0}],
             'keys':[{'id':'maxStress','label':'Peak stress','unit':'MPa','value':peak,'peak':True}],
-            'solver':'CalculiX, '+calculix.SOLVERS[calculix.solver_of(study)][1],
+            'solver':'CalculiX, '+calculix.solver(study)[1],
             'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
             'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount'],
             'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}

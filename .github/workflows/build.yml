@@ -24,15 +24,18 @@ jobs:
         include:
           - name: macOS (Apple Silicon)
             os: macos-14
+            solver: macos
             package: dist:mac
             artifact: release/*.dmg
           - name: Windows (x64)
             os: windows-latest
+            solver: windows
             package: package:win
             artifact: release/*.exe
           - name: Linux (x64)
             # The oldest supported runner, so the app runs on older glibc.
             os: ubuntu-22.04
+            solver: linux
             package: package:linux
             artifact: release/*.AppImage
     env:
@@ -53,30 +56,22 @@ jobs:
         with:
           python-version: "3.10"
 
-      # CalculiX 2.23 on every platform: the Homebrew tap on macOS (as for
-      # local builds), conda-forge on Windows and Linux.
-      - name: Install CalculiX (macOS)
-        if: runner.os == 'macOS'
-        run: brew install costerwi/calculix/calculix-ccx
-
-      - name: Install CalculiX (Windows, Linux)
-        if: runner.os != 'macOS'
+      # CalculiX 2.23 built from source on every platform, with threaded
+      # SPOOLES and PARDISO (Apple Accelerate on macOS; on Windows and Linux,
+      # Intel oneMKL's in sprung-solve, a separate program built beside it),
+      # from a conda-forge environment.
+      - name: Set up the solver build environment
         uses: mamba-org/setup-micromamba@v2
         with:
-          environment-name: calculix
-          # OpenBLAS: MKL, the Windows default, loads its kernels at run
-          # time, so they cannot be found and bundled from the imports.
-          create-args: calculix=2.23 libblas=*=*openblas
+          environment-name: sprung-solver
+          environment-file: native/calculix/solver-env-${{ matrix.solver }}.yml
           init-shell: none
           cache-environment: true
 
-      - name: Locate CalculiX (Windows, Linux)
-        if: runner.os != 'macOS'
+      - name: Build CalculiX
         run: |
-          env="$MAMBA_ROOT_PREFIX/envs/calculix"
-          if [ "$RUNNER_OS" = Windows ]; then ccx="$env/Library/bin/ccx.exe"; else ccx="$env/bin/ccx"; fi
-          test -f "$ccx"
-          echo "SPRUNG_FEA_CCX=$ccx" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Windows ]; then python -m pip install pefile; fi
+          python scripts/build-solver.py --prefix "$MAMBA_ROOT_PREFIX/envs/sprung-solver"
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -93,9 +88,16 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
           "$py" -m pip install pyinstaller==6.22.3
 
+      - name: Compare the direct solvers
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then py=.venv/Scripts/python.exe; else py=.venv/bin/python; fi
+          "$py" -m unittest -v tests.test_solvers
+
       - name: Package
         run: npm run ${{ matrix.package }}
 
+      # The packaged app as shipped: its own sprung-solve and MKL, none
+      # installed on the computer.
       - name: Solve with the packaged engine
         run: npm run test:packaged
 

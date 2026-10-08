@@ -1,22 +1,114 @@
 """CalculiX adapter: equation solvers, execution, and reading its output files."""
-import os, re, shutil, subprocess, errno, time
+import os, re, sys, shutil, subprocess, errno, time, json, functools, signal
 import numpy as np
 from collections import deque
 from pathlib import Path
 from cad import threads, emit
 
-# CalculiX linear equation solvers available in the bundled build. PARDISO
-# and PaStiX need libraries this build does not link.
-SOLVERS={'spooles':('SPOOLES','SPOOLES direct'),
+# Linear equation solvers a study can choose. `direct` is the fastest exact
+# solver of the CalculiX in use (direct_solver); studies saved before there
+# was a choice of direct solver name SPOOLES.
+SOLVERS={'direct':None,
          'iterative-scaling':('ITERATIVE SCALING','iterative, diagonal scaling'),
          'iterative-cholesky':('ITERATIVE CHOLESKY','iterative, incomplete Cholesky')}
+ALIASES={'spooles':'direct'}
 
 
 def solver_of(study):
-    name=study.get('solver') or 'spooles'
+    name=study.get('solver') or 'direct'
+    name=ALIASES.get(name,name)
     if name not in SOLVERS:
         raise ValueError('Choose the direct solver or one of the iterative solvers.')
     return name
+
+
+def solver(study):
+    """(deck keyword, description) of the study's equation solver."""
+    return SOLVERS[solver_of(study)] or direct_solver()
+
+
+# CalculiX's direct solvers by the name SPRUNG_FEA_DIRECT_SOLVER takes,
+# fastest first, with their deck keywords.
+DIRECT={'pardiso':'PARDISO','spooles':'SPOOLES'}
+
+
+def direct_solvers():
+    """{name: description} of the direct solvers this CalculiX can run,
+    fastest first. Both factor exactly. PARDISO is Apple Accelerate on macOS
+    and Intel oneMKL's, in sprung-solve (find_helper), on Linux and Windows;
+    SPOOLES is always there."""
+    c=capabilities();found={}
+    if c.get('pardiso'): found['pardiso']=f"{c['pardiso']} PARDISO"
+    found['spooles']='SPOOLES direct'
+    return found
+
+
+def direct_solver():
+    """(deck keyword, description) of the direct solver: the fastest this
+    CalculiX has, or the one SPRUNG_FEA_DIRECT_SOLVER names."""
+    available=direct_solvers()
+    choice=os.environ.get('SPRUNG_FEA_DIRECT_SOLVER')
+    if choice and choice not in available:
+        raise ValueError(f'SPRUNG_FEA_DIRECT_SOLVER={choice}: this CalculiX has {", ".join(available)}.')
+    name=choice or next(iter(available))
+    return DIRECT[name],available[name]
+
+
+def capabilities(ccx=None):
+    """What the CalculiX executable can do here (built_capabilities), with
+    PARDISO only where it works: on Linux and Windows, where sprung-solve
+    runs it, only when that starts and solves on this computer."""
+    ccx=ccx or find_ccx()
+    found=dict(built_capabilities(ccx))
+    if found.pop('pardisoHelper',None) and not find_helper(ccx): found.pop('pardiso',None)
+    return found
+
+
+def built_capabilities(ccx=None):
+    """What the CalculiX executable was built with: {'pardiso': backend name;
+    'pardisoHelper': sprung-solve, which runs PARDISO, relative to the
+    executable's folder; 'threadSafeSpooles': whether SPOOLES may run
+    threaded}, each absent when not so. SPOOLES 2.2 as released loses
+    updates between threads and returns wrong answers, often on Apple
+    silicon and occasionally elsewhere, so it is threaded only in builds
+    known to carry the fixes: those that say so in a ccx.json beside the
+    executable (scripts/build-solver.py, bundle-runtime.py), and conda-forge
+    calculix build 5 or later, which requires the fixed spooles."""
+    return _capabilities(str(Path(ccx or find_ccx()).resolve()))
+
+
+def find_helper(ccx=None):
+    """sprung-solve, the program that runs CalculiX's PARDISO solves with
+    Intel oneMKL on Linux and Windows (native/sprung-solve), when it starts
+    and solves here; None otherwise (CalculiX then has SPOOLES only).
+    SPRUNG_FEA_SOLVE names another; CalculiX is told which (run)."""
+    path=Path(ccx or find_ccx()).resolve()
+    relative=built_capabilities(path).get('pardisoHelper')
+    given=os.environ.get('SPRUNG_FEA_SOLVE')
+    return _working_helper(given or (str(path.parent/relative) if relative else None))
+
+
+@functools.lru_cache(maxsize=None)
+def _working_helper(path):
+    # --version solves a small system: MKL loads and runs on this processor.
+    if not path or not Path(path).is_file(): return None
+    try:
+        check=subprocess.run([path,'--version'],capture_output=True,text=True,timeout=120)
+    except (OSError,subprocess.TimeoutExpired):
+        return None
+    return path if check.returncode==0 and check.stdout.startswith('sprung-solve 1: ') else None
+
+
+@functools.lru_cache(maxsize=None)
+def _capabilities(path):
+    path=Path(path)
+    sidecar=path.parent/'ccx.json'
+    if sidecar.is_file(): return json.loads(sidecar.read_text())
+    for prefix in (path.parent.parent,path.parent.parent.parent):
+        for record in (prefix/'conda-meta').glob('calculix-*.json'):
+            build=json.loads(record.read_text()).get('build_number',0)
+            return {'threadSafeSpooles':build>=5}
+    return {}
 
 
 def find_ccx():
@@ -49,18 +141,21 @@ def read_log(path):
 def run(folder, name='analysis'):
     """Runs CalculiX on folder/name.inp. Returns the iterative-solver summary,
     or None for direct solves; raises with the log tail on failure."""
-    # Assembly, SPOOLES factorization and stress recovery use CalculiX's own
-    # thread controls, which gave bit-identical results over 20 repeated
-    # solves at 8 threads. OpenMP must stay at one thread: OMP_NUM_THREADS or
-    # NUMBER_OF_CPUS above 1 together with any CCX_NPROC above 1 made stress
-    # and reactions vary between identical runs, sometimes grossly (a 1000 N
-    # reaction reported as 866 N). CalculiX's iterative solvers iterate on
-    # one thread regardless.
+    # CalculiX threads stiffness assembly, the direct solver and stress
+    # recovery itself; NUMBER_OF_CPUS caps all three, and at 1 left every
+    # stage serial. Assembly and stress recovery give the same answer to
+    # round-off at any thread count. SPOOLES is threaded only where it is
+    # safe (capabilities). Accelerate follows VECLIB_MAXIMUM_THREADS, and MKL
+    # (in sprung-solve) MKL_NUM_THREADS. OpenMP stays at one thread.
+    # CalculiX's iterative solvers iterate on one thread regardless.
     n=str(threads())
+    equations=n if capabilities().get('threadSafeSpooles') else '1'
     env={k:v for k,v in os.environ.items() if not k.startswith('CCX_NPROC')}
-    env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS='1',OPENBLAS_NUM_THREADS='1',
+    env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS=n,OPENBLAS_NUM_THREADS='1',VECLIB_MAXIMUM_THREADS=n,MKL_NUM_THREADS=n,
                GFORTRAN_UNBUFFERED_PRECONNECTED='1',
-               CCX_NPROC_RESULTS=n,CCX_NPROC_STIFFNESS=n,CCX_NPROC_EQUATION_SOLVER=n)
+               CCX_NPROC_RESULTS=n,CCX_NPROC_STIFFNESS=n,CCX_NPROC_EQUATION_SOLVER=equations)
+    env.pop('SPRUNG_FEA_SOLVE',None)
+    if find_helper(): env['SPRUNG_FEA_SOLVE']=find_helper()
     # No time limit: large models can solve for a long time, and the user can
     # cancel the job.
     log_path=folder/'solver.log'
@@ -112,12 +207,24 @@ def run(folder, name='analysis'):
                 process.terminate();process.wait()
     error,tail,iterative=read_log(log_path)
     if process.returncode != 0 or error or not (folder/f'{name}.frd').exists():
-        raise ValueError(failure(tail)+'\n'+tail[-2500:])
+        raise ValueError(failure(tail)+stopped(process.returncode,error)+'\n'+tail[-2500:])
     # CalculiX returns its last iterate without an error when conjugate
     # gradients stop short of the tolerance, so check the final residual.
     if iterative and not iterative['error']<=iterative['limit']:
         raise ValueError(f"The iterative solver did not converge: residual {iterative['error']:.3g} is above the limit {iterative['limit']:.3g} after {iterative['iterations']} iterations. Use the direct solver, or check that the supports hold the part.\n"+tail[-2500:])
     return iterative
+
+
+def stopped(code, error):
+    """How CalculiX ended when it stopped without reporting an error itself:
+    a crash (a signal, or a Windows exception code) rather than a model
+    CalculiX could not solve."""
+    if error or not code: return ''
+    if code<0:
+        try: how='signal '+signal.Signals(-code).name
+        except ValueError: how=f'signal {-code}'
+    else: how=f'exit code {code:#x}' if code>0xffff else f'exit code {code}'
+    return f' CalculiX stopped unexpectedly ({how}).'
 
 
 def failure(tail):
@@ -133,33 +240,83 @@ def failure(tail):
 FIELDS={'DISP','DISPI','PDISP','STRESS','STRESSI','TOSTRAIN','FORC','NDTEMP','PE','FLUX','RFL','ERROR','CONTACT'}
 
 
+class NodalField:
+    """One FRD result block: node ids and a row of values per node. It reads
+    like the {node: values} mapping it stands for; `at` gathers many nodes'
+    rows at once."""
+    def __init__(self, ids, values):
+        self.ids=ids;self.values=values
+        self.row=np.full(int(ids.max())+1 if len(ids) else 0,-1,np.int64)
+        self.row[ids]=np.arange(len(ids))
+
+    def index(self, node):
+        return self.row[node] if 0<=node<len(self.row) else -1
+
+    def __len__(self): return len(self.ids)
+    def __contains__(self, node): return self.index(node)>=0
+    def __getitem__(self, node):
+        i=self.index(node)
+        if i<0: raise KeyError(node)
+        return self.values[i]
+    def get(self, node, default=None):
+        i=self.index(node)
+        return self.values[i] if i>=0 else default
+
+    def at(self, nodes):
+        """Rows of the given nodes, or None if any is missing."""
+        nodes=np.asarray(nodes,np.int64)
+        if len(nodes) and (nodes.min()<0 or nodes.max()>=len(self.row)): return None
+        rows=self.row[nodes]
+        return None if (rows<0).any() else self.values[rows]
+
+
+def read_block(lines):
+    """A result block's ' -1' lines: an 11-character node field (after the
+    record key), then 12-character values. Continuation lines (' -2') of
+    fields with more than six values are not read."""
+    rows=[l for l in lines if l.startswith(b' -1')]
+    if not rows: return NodalField(np.zeros(0,np.int64),np.zeros((0,0)))
+    width=len(rows[0])
+    count=(width-13)//12
+    if all(len(r)==width for r in rows):
+        table=np.frombuffer(b''.join(rows),np.uint8).reshape(len(rows),width)
+        ids=table[:,3:13].copy().view('S10').ravel().astype(np.int64)
+        values=table[:,13:13+12*count].copy().view('S12').reshape(len(rows),count).astype(float)
+    else:
+        ids=np.array([int(r[3:13]) for r in rows],np.int64)
+        count=min((len(r.rstrip(b'\r'))-13)//12 for r in rows)
+        values=np.array([[float(r[13+12*i:25+12*i]) for i in range(count)] for r in rows]).reshape(len(rows),count)
+    return NodalField(ids,values)
+
+
 def parse_frd(path, keep=FIELDS):
     """Result frames of a CalculiX .frd file, in order. A frame is one
     increment, mode, or frequency: consecutive blocks with the same step
     number and value. Each frame holds {'step', 'value', 'meta', 'fields'};
-    fields map an FRD label to {node: [values]}. Fixed-width parsing: an
-    11-character node field, then 12-character values."""
-    frames=[];meta={};active=None;key=None;width=0
-    with open(path) as frd:
-        for line in frd:
-            if line.startswith('    1P'):
-                parts=line[6:].split()
-                if parts: meta[parts[0]]=parts[1:]
-            elif line.startswith('  100C'):
-                value=float(line[12:24]);step=int(line[58:63] or 0)
-                if not frames or (frames[-1]['step'],frames[-1]['value'])!=(step,value):
-                    frames.append({'step':step,'value':value,'meta':meta,'fields':{}})
-                meta={}
-            elif line.startswith(' -4'):
-                label=line[5:13].strip()
-                active=frames[-1]['fields'].setdefault(label,{}) if label in keep and frames else None
-                width=int(line[13:18])
-            elif line.startswith(' -3'):
-                active=None
-            elif active is not None and line.startswith(' -1'):
-                node=int(line[3:13])
-                n=(len(line.rstrip('\n'))-13)//12
-                active[node]=[float(line[13+12*i:25+12*i]) for i in range(n)]
+    fields map an FRD label to a NodalField, which reads like {node:
+    values}. Result blocks are converted whole, not line by line."""
+    data=Path(path).read_bytes()
+    frames=[];meta={};pos=0;size=len(data)
+    while pos<size:
+        end=data.find(b'\n',pos)
+        if end<0: end=size
+        line=data[pos:end].rstrip(b'\r');pos=end+1
+        if line.startswith(b'    1P'):
+            parts=line[6:].decode(errors='replace').split()
+            if parts: meta[parts[0]]=parts[1:]
+        elif line.startswith(b'  100C'):
+            value=float(line[12:24]);step=int(line[58:63] or 0)
+            if not frames or (frames[-1]['step'],frames[-1]['value'])!=(step,value):
+                frames.append({'step':step,'value':value,'meta':meta,'fields':{}})
+            meta={}
+        elif line.startswith(b' -4'):
+            label=line[5:13].decode().strip()
+            # The block runs to its ' -3' end record.
+            stop=data.find(b'\n -3',end)
+            if stop<0: stop=size
+            if label in keep and frames:
+                frames[-1]['fields'][label]=read_block(data[pos:stop].split(b'\n'))
+            pos=stop+1
     return frames
 
 

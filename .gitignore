@@ -9,6 +9,7 @@ output/
 .DS_Store
 
 runtime/
+/solver/
 *.tsbuildinfo
 
 .cad-venv/

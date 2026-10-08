@@ -4,7 +4,7 @@ Stress, vibration and heat analysis for mechanical parts, on your own computer.
 
 Open a STEP file, pick a material, click the faces that hold the part and the faces that carry load, and solve. Sprung FEA meshes the geometry, runs the open-source CalculiX solver locally, and shows you where the part is stressed, how far it moves, how it vibrates and how hot it gets.
 
-It is free software (GPL-3.0) for macOS, Windows and Linux.
+It runs on macOS, Windows and Linux. Its source code is free software (GPL-3.0-or-later). The downloadable builds also include separately licensed components (see [License](#license)).
 
 ![Setting up a study: open the bracket, choose aluminum, click the two bolt holes as fixed supports, put 500 N on the base, and solve](docs/media/setup.gif)
 
@@ -109,4 +109,10 @@ Development setup, packaging, tests and the internals are in [IMPLEMENTATION.md]
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The Sprung FEA source code is GPL-3.0-or-later (see [LICENSE](LICENSE)), except the small `sprung-solve` program in `native/sprung-solve`, which is MIT.
+
+The prebuilt downloads include separately licensed third-party components, each under its own license:
+- CalculiX, the solver, is GPL-2.0-only and runs as a separate program.
+- The Windows and Linux builds include Intel oneMKL, a proprietary library under the Intel Simplified Software License. It sits inside `sprung-solve`, a separate program that runs the fast PARDISO solver for CalculiX.
+
+All components, their licenses and how they fit together are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the license texts ship with the app.

@@ -66,8 +66,9 @@ class Harmonic(Analysis):
         lines+=calculix.mass_lines(model,masses,[rbe3(model,m['faces'],m['point']) for m in masses],fixed)
         # Points between natural frequencies: fewer when there are many modes.
         points=max(3,min(12,160//(count+1)))
-        lines+=['*STEP','*FREQUENCY, SOLVER=SPOOLES, STORAGE=YES',str(count),'*END STEP',
-                '*STEP','*STEADY STATE DYNAMICS, SOLVER=SPOOLES',f'{calculix.number(low)}, {calculix.number(high)}, {points}, 2.',
+        direct=self.solver(study)[0]
+        lines+=['*STEP',f'*FREQUENCY, SOLVER={direct}, STORAGE=YES',str(count),'*END STEP',
+                '*STEP',f'*STEADY STATE DYNAMICS, SOLVER={direct}',f'{calculix.number(low)}, {calculix.number(high)}, {points}, 2.',
                 '*MODAL DAMPING',f'1, {count}, {calculix.number(damping)}']
         if base is None:
             lines+=calculix.load_lines(build_loads(study,model))
@@ -93,7 +94,7 @@ class Harmonic(Analysis):
             S=nodal(f,'STRESS',ids,6,'response')+1j*nodal(f,'STRESSI',ids,6,'response')
             amplitude=np.sqrt((np.abs(U)**2).sum(1))
             # Peak von Mises over a cycle: the largest over sampled phases.
-            stress=np.max([[von_mises(s) for s in (S*np.exp(1j*p)).real] for p in PHASES],axis=0)
+            stress=np.max([von_mises((S*np.exp(1j*p)).real) for p in PHASES],axis=0)
             p=int(np.argmax(amplitude));k=int(np.argmax(np.abs(U[p])))
             # The shape at the instant the most-moving node is at its peak.
             shape=(U*np.exp(-1j*np.angle(U[p,k]))).real

@@ -1,0 +1,18 @@
+# Toolchain and libraries for scripts/build-solver.py on Windows x64:
+#   micromamba create -n sprung-solver -f native/calculix/solver-env-windows.yml
+# CalculiX is built by MinGW. sprung-solve, the separate program that runs
+# CalculiX's PARDISO solves, is built by Microsoft's compiler (Visual
+# Studio's C++ tools), which Intel oneMKL's static libraries are made for.
+channels: [conda-forge]
+dependencies:
+  - gcc_win-64
+  - gfortran_win-64
+  - arpack 3.9.*
+  - libblas=*=*openblas
+  # OpenBLAS's import library, for the link.
+  - openblas
+  - mkl-static 2026.*
+  - mkl-include 2026.*
+  # LLVM's OpenMP, as libiomp5md: MKL's threads in sprung-solve (what
+  # conda-forge's Windows MKL runs on).
+  - llvm-openmp

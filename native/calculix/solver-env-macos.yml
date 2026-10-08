@@ -1,0 +1,11 @@
+# Toolchain and libraries for scripts/build-solver.py on Apple silicon:
+#   micromamba create -n sprung-solver -f native/calculix/solver-env-macos.yml
+# C is compiled by the Xcode command line tools' clang, for Accelerate;
+# PARDISO is Apple Accelerate (native/calculix/accelerate_pardiso.c).
+channels: [conda-forge]
+dependencies:
+  - gfortran_osx-arm64
+  - clang
+  - arpack 3.9.*
+  - libblas=*=*openblas
+  - llvm-openmp

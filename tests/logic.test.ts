@@ -71,7 +71,7 @@ test("projects from before analysis types restore as linear static", () => {
   const current = {
     ...study(2),
     analysis: "static" as const,
-    solver: "spooles" as const,
+    solver: "direct" as const,
   };
   const restored = restoreResults(saved, "abc", current)!;
   assert.equal(restored.result.analysis, "static");

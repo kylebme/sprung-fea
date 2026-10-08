@@ -35,9 +35,9 @@ export const DETAIL_NAMES: Record<Study["detail"], string> = {
 };
 export const SOLVERS: { id: Solver; name: string; note: string }[] = [
   {
-    id: "spooles",
-    name: "Direct (SPOOLES)",
-    note: "Exact factorization. Most robust; memory grows quickly with mesh size.",
+    id: "direct",
+    name: "Direct",
+    note: "Exact factorization on all threads. Most robust; memory grows quickly with mesh size.",
   },
   {
     id: "iterative-cholesky",

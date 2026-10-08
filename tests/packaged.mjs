@@ -86,7 +86,7 @@ try {
     thermal: [],
     meshSize: 4,
     detail: "medium",
-    solver: "spooles",
+    solver: "direct",
   };
   const solve = async (s) =>
     (
@@ -98,7 +98,12 @@ try {
   const static_ = await solve(study);
   const movement = static_.summary.maxMovement;
   assert.ok(movement > 0.28 && movement < 0.3, `Movement ${movement} mm`);
-  console.log(`Static solve: ${movement.toFixed(4)} mm tip movement`);
+  // PARDISO, from what ships in the app: Apple Accelerate on macOS, Intel
+  // oneMKL in the bundled sprung-solve elsewhere. Eigenvalue analyses too.
+  assert.match(static_.solver, /PARDISO/, static_.solver);
+  console.log(
+    `Static solve: ${movement.toFixed(4)} mm tip movement (${static_.solver})`,
+  );
   const modal = await solve({
     ...study,
     analysis: "frequency",
@@ -106,7 +111,8 @@ try {
     loads: [],
   });
   assert.equal(modal.analysis, "frequency");
-  console.log("Frequency solve: ok");
+  assert.match(modal.solver, /PARDISO/, modal.solver);
+  console.log(`Frequency solve: ok (${modal.solver})`);
 } finally {
   await service.close();
   await fs.rm(dir, { recursive: true, force: true });
