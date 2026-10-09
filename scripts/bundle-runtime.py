@@ -22,7 +22,7 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--one
                 env={**os.environ,'PYINSTALLER_CONFIG_DIR':str(root/'.sprung-fea/pyinstaller-cache')})
 sys.path.insert(0,str(root/'engine'));from worker import find_ccx
 sys.path.insert(0,str(root/'scripts'));from solverlibs import relocate
-from calculix import built_capabilities
+from calculix import built_capabilities, HELPER_BANNER
 import json
 solver=runtime/'solver'
 shutil.rmtree(solver,ignore_errors=True);solver.mkdir()
@@ -35,7 +35,7 @@ helper=built.get('pardisoHelper')
 if helper:
     helper=source.parent/helper
     place=solver/'sprung-solve'
-    relocate(helper,place,[helper.parent],check=('--version','sprung-solve 1: '))
+    relocate(helper,place,[helper.parent],check=('--version',HELPER_BANNER))
     for license in helper.parent.glob('*.txt'): shutil.copy2(license,place/license.name)
 (solver/'ccx.json').write_text(json.dumps(built,indent=1)+'\n')
 if not built.get('pardiso'):

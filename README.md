@@ -113,6 +113,6 @@ The Sprung FEA source code is GPL-3.0-or-later (see [LICENSE](LICENSE)), except 
 
 The prebuilt downloads include separately licensed third-party components, each under its own license:
 - CalculiX, the solver, is GPL-2.0-only and runs as a separate program.
-- The Windows and Linux builds include Intel oneMKL, a proprietary library under the Intel Simplified Software License. It sits inside `sprung-solve`, a separate program that runs the fast PARDISO solver for CalculiX.
+- The Windows and Linux builds include Intel oneMKL, a proprietary library under the Intel Simplified Software License. It sits inside `sprung-solve`, a separate program that runs the fast PARDISO solver for CalculiX. `sprung-solve` also contains hypre (MIT), for its algebraic multigrid solver.
 
 All components, their licenses and how they fit together are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the license texts ship with the app.

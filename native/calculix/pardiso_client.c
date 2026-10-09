@@ -12,6 +12,14 @@
    is found in SPRUNG_FEA_SOLVE, else at sprung-solve/sprung-solve beside
    this executable. It ends when this program ends.
 
+   SPRUNG_FEA_SOLVE_METHOD=amg has sprung-solve solve the symmetric systems
+   with hypre's conjugate gradients and BoomerAMG instead, to the relative
+   residual in SPRUNG_FEA_SOLVE_TOLERANCE (default 1e-8). BoomerAMG treats
+   each displacement direction as an unknown of its own (systems AMG): this
+   file is told which equation is which direction when CalculiX numbers its
+   equations (sprung_solve_numbering, which build-solver.py has mastruct.c
+   call).
+
    MKL threads with the count in MKL_NUM_THREADS, which CalculiX's
    pardiso.c sets before its first call; it is passed on with each system.
 
@@ -41,6 +49,32 @@ static int to_helper = -1, from_helper = -1;
 #endif
 
 static int started;
+
+/* The direction (0, 1, 2; more for nodes with rotations) of each of the
+   `numbered` mechanical equations, and how many directions there are. */
+static uint8_t *directions;
+static long long numbered;
+static uint32_t components = 1;
+
+/* CalculiX numbers the active degrees of freedom node by node, skipping the
+   constrained ones: nactdof[mt*node + j] is the equation of the node's
+   degree of freedom j (1..mt-1 are mechanical; 0 is temperature), when
+   positive. neq[0] equations are mechanical. */
+void sprung_solve_numbering(ITG *nactdof, ITG *nk, ITG *mt, ITG *neq) {
+  long long i, j;
+  numbered = 0;
+  if (*mt < 2 || *mt > 256 || neq[0] < 1) return;
+  free(directions);
+  directions = calloc((size_t)neq[0], 1);
+  if (!directions) return;
+  for (i = 0; i < *nk; i++)
+    for (j = 1; j < *mt; j++) {
+      ITG equation = nactdof[*mt * i + j];
+      if (equation > 0 && equation <= neq[0]) directions[equation - 1] = (uint8_t)(j - 1);
+    }
+  numbered = neq[0];
+  components = (uint32_t)(*mt - 1);
+}
 
 static void fail(const char *what) {
   printf(" *ERROR in pardiso: %s\n", what);
@@ -235,15 +269,31 @@ static void request(uint32_t op, long long *pt) {
   put(&header, sizeof header);
 }
 
+static uint32_t method = SPRUNG_SOLVE_PARDISO;
+static double tolerance = 1e-8;
+
 static void start(void) {
   uint32_t version = SPRUNG_SOLVE_VERSION;
+  const char *chosen = getenv("SPRUNG_FEA_SOLVE_METHOD"),
+             *limit = getenv("SPRUNG_FEA_SOLVE_TOLERANCE");
   char name[512];
+  if (chosen && !strcmp(chosen, "amg")) method = SPRUNG_SOLVE_CG_AMG;
+  else if (chosen && *chosen && strcmp(chosen, "pardiso"))
+    fail("SPRUNG_FEA_SOLVE_METHOD is neither pardiso nor amg");
+  if (limit && *limit) {
+    tolerance = atof(limit);
+    if (!(tolerance > 0 && tolerance < 1))
+      fail("SPRUNG_FEA_SOLVE_TOLERANCE is not between 0 and 1");
+  }
   start_helper();
   started = 1;
   request(SPRUNG_SOLVE_HELLO, NULL);
   put(&version, sizeof version);
   if (answer(name, sizeof name)) fail(name);
-  printf(" PARDISO: %s, in sprung-solve\n", name);
+  printf(" sprung-solve: %s\n", name);
+  if (method == SPRUNG_SOLVE_CG_AMG)
+    printf(" sprung-solve: symmetric systems by CG with BoomerAMG, to a "
+           "relative residual of %.3g\n", tolerance);
   fflush(stdout);
 }
 
@@ -257,9 +307,14 @@ static void put_indices(const ITG *index, long long count) {
   }
 }
 
+/* A reply that must succeed. Its text, if any, goes to the log. */
 static void check(void) {
   char text[512];
   if (answer(text, sizeof text)) fail(text);
+  if (text[0]) {
+    printf(" sprung-solve: %s\n", text);
+    fflush(stdout);
+  }
 }
 
 void pardiso_(long long *pt, ITG *maxfct, ITG *mnum, ITG *mtype, ITG *phase,
@@ -277,7 +332,7 @@ void pardiso_(long long *pt, ITG *maxfct, ITG *mnum, ITG *mtype, ITG *phase,
   }
   if (!started) start();
   if (*phase == 12) {
-    uint32_t kind, threads;
+    uint32_t kind, threads, functions;
     const char *env = getenv("MKL_NUM_THREADS");
     int64_t nnz = (int64_t)ia[n] - 1;
     if (*mtype == -2) kind = SPRUNG_SOLVE_SYMMETRIC;
@@ -285,14 +340,21 @@ void pardiso_(long long *pt, ITG *maxfct, ITG *mnum, ITG *mtype, ITG *phase,
     else if (*mtype == 11) kind = SPRUNG_SOLVE_UNSYMMETRIC;
     else fail("this matrix type is not supported");
     threads = env && atoi(env) > 0 ? (uint32_t)atoi(env) : 0;
+    /* The mechanical equations by direction; any other system (the
+       temperatures of a thermal analysis) as one unknown a node. */
+    functions = n == numbered && components > 1 ? components : 1;
     request(SPRUNG_SOLVE_FACTOR, pt);
     put(&kind, sizeof kind);
     put(&threads, sizeof threads);
+    put(&method, sizeof method);
+    put(&functions, sizeof functions);
+    put(&tolerance, sizeof tolerance);
     put(&n, sizeof n);
     put(&nnz, sizeof nnz);
     put_indices(ia, n + 1);
     put_indices(ja, nnz);
     put(a, sizeof *a * (size_t)nnz);
+    if (functions > 1) put(directions, (size_t)n);
     check();
   } else if (*phase == 33) {
     int64_t count = *nrhs;

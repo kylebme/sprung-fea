@@ -185,6 +185,7 @@ The study chooses the linear equation solver, written to the deck as `*STATIC, S
 | Study value | CalculiX solver | Use |
 |---|---|---|
 | `direct` (default) | `PARDISO` (Apple Accelerate, or Intel oneMKL in `sprung-solve`) or `SPOOLES` | Direct sparse factorization. Most robust, equilibrium to round-off; memory grows quickly with model size |
+| `iterative-amg` (Linux and Windows) | `PARDISO`, answered by hypre's CG with BoomerAMG in `sprung-solve` | Conjugate gradients with algebraic multigrid, to a relative residual of 10⁻⁸: the direct answer to the digits the results keep. A fraction of the direct solver's memory; faster on large, compact parts |
 | `iterative-cholesky` | `ITERATIVE CHOLESKY` | Conjugate gradients with incomplete-Cholesky preconditioning. Much less memory |
 | `iterative-scaling` | `ITERATIVE SCALING` | Conjugate gradients with diagonal scaling. Least memory; most iterations |
 
@@ -202,6 +203,16 @@ The direct solver is the fastest exact one the bundled CalculiX has (`calculix.d
   - **Without MKL.** `build-solver.py --without-mkl` builds no helper, and the solver then has SPOOLES only.
 - **SPOOLES**, threaded with the patches below, is always there.
 
+**Algebraic multigrid** (`iterative-amg`) is a second method in `sprung-solve`: hypre 3.2.0's conjugate gradients, preconditioned by one BoomerAMG V-cycle. hypre (Apache-2.0 or MIT) is built from source by `build-solver.py` without MPI (`cmake` comes with the build environment) and linked statically into `sprung-solve`, beside MKL. The engine writes `SOLVER=PARDISO` and runs CalculiX with `SPRUNG_FEA_SOLVE_METHOD=amg`, so CalculiX's PARDISO calls reach `sprung-solve` asking for CG instead (protocol version 2, `docs/solver-protocol.md`).
+  - **Directions.** Elasticity needs systems AMG: each displacement direction coarsened and interpolated on its own. CalculiX numbers its equations node by node, skipping constrained directions, so an equation's index does not give its direction. `build-solver.py` adds one call to CalculiX's `mastruct.c`, where the equations are numbered, which tells `pardiso_client.c` each mechanical equation's direction. The client sends it with the matrix, and other systems (temperatures) go as one unknown a node. A wrong label would cost iterations, not accuracy.
+  - **Settings.** HMIS coarsening at a strength threshold of 0.25, extended+i interpolation with at most four entries a row, and one l1-Jacobi sweep before and after each coarse-grid correction. They were chosen on the beam and on five less tidy parts: a thin-walled pocketed housing, a curved tube elbow, a bracket on pinned holes (`*EQUATION` constraints, so nodes keep one or two directions), a tube turned off every axis on frictionless and cylindrical supports, and a bonded aluminium–nylon beam (35 times the stiffness across the interface). Each was replayed from CalculiX's own systems. Hybrid Gauss–Seidel took a third fewer iterations, but each cost nearly three times as much, because it threads poorly. Chebyshev smoothing ran level with l1 Jacobi, and l1 Jacobi needs no eigenvalue estimate. Aggressive coarsening doubled the iterations. Rigid-body rotations as interpolation vectors (GM-AMG, with nodal coarsening) doubled the operator complexity and the time. Every setting converged on every part.
+  - **Tolerance.** CG stops when the true residual satisfies ‖b − Ax‖ ≤ 10⁻⁸ ‖b‖ (`SPRUNG_FEA_SOLVE_TOLERANCE` overrides it). `sprung-solve` recomputes b − Ax after every solve, because CG's own recurrence for the residual drifts: on the beam it reported 10⁻³¹. On slender parts most iterations go to the first few decades, so 10⁻⁸ costs only about 10% more than 10⁻⁶. The solution then matches PARDISO's to between 2·10⁻¹¹ and 7·10⁻⁹ of its largest value on the six parts above. In full solves, results agree to the six digits the results file keeps, or within a digit flip of them. 10⁻¹⁰ is not reachable on four of the six parts: their true residual stops between 10⁻⁹ and 10⁻¹⁰ in double precision.
+  - **When CG does not apply.** CG needs a symmetric positive definite matrix. `sprung-solve` factors any other kind (frictional contact, coupled temperature–displacement) with PARDISO, and the log says so. Frequency, buckling and harmonic analyses factor shifted, indefinite matrices, so they always use the direct solver.
+  - **When CG stalls.** Stiff contact springs defeat BoomerAMG. On the bolted joint with frictionless contact, CG first stopped at a relative residual of 5·10⁻⁸ after 2000 iterations; with the fallback, it converged on that joint's first nine systems (in 134 to 353 iterations) and stalled on the tenth. CG now gets at most 500 iterations; the worst well-behaved part took 150. A system on which CG stalls is factored and solved by PARDISO instead, from the upper triangle rebuilt from hypre's copy (so ordinary solves keep no second copy of the matrix). Every later system of the run goes to PARDISO too, whatever its handle: CalculiX releases and remakes its PARDISO handle between increments, and an earlier per-handle rule let CG stall at each one (4 times in 18 solves on the bolted joint). The log says so, and the result's solver reads "… with PARDISO where CG stalled".
+  - **Threads.** On Linux hypre threads with GNU OpenMP, as MKL does, on `MKL_NUM_THREADS` threads. On Windows, MKL threads on LLVM's OpenMP runtime, which code compiled with Microsoft's `/openmp` does not call, so hypre is built without threads there.
+  - **On an NVIDIA GPU (experimental).** `build-solver.py --cuda` builds hypre for CUDA (from `native/calculix/solver-env-linux-cuda.yml`, CUDA 12.9), with LLNL's Umpire memory pool, which hypre's build downloads. The same `sprung_solve.c` then builds the matrix on the host, moves it to the GPU, and runs setup and CG there. It uses PMIS coarsening, because HMIS's second pass runs on the host, and keeps the transposed interpolation. It also uses hypre's own sparse matrix products: cuSPARSE's needed up to 6.5 GB at 546,000 equations, against 2 GB, and aborted on an 8 GB card. The device pool starts at 256 MB rather than 4 GiB. Setup needs about 40 to 55 bytes of GPU memory for each entry of the whole matrix. Before setup, `sprung-solve` checks the estimate (64 bytes an entry and 512 MB) against the GPU's free memory, and gives PARDISO any system that does not fit, saying why. It is for development only: such a `sprung-solve` needs NVIDIA's driver and a GPU even to start, and about a gigabyte of CUDA libraries beside it.
+  - **Offered only when it works.** `sprung-solve --version` also solves a small positive definite system with CG and BoomerAMG, and prints `amg: …` when that works. Only then does the engine offer `iterative-amg` (`calculix.capabilities()['amg']`). macOS has no `sprung-solve`, so it has no AMG.
+
 Every analysis uses the direct solver except a static study that chooses an iterative one. Eigenvalue analyses (frequency, buckling, harmonic) factor shifted, often indefinite matrices, which both PARDISOs pivot for. `SPRUNG_FEA_DIRECT_SOLVER=pardiso` or `spooles` forces one solver for comparisons. Studies saved with `spooles`, the direct solver's name before it had backends, read as `direct`. CalculiX's PaStiX interface is not built: it needs a fork of PaStiX, and PaStiX is LGPL-3.0, which cannot be combined with GPL-2.0-only CalculiX.
 
 All direct solvers agree with a single-threaded SPOOLES solve to the six digits the results file keeps, and in eigenvalues to 10⁻⁶. ARPACK iterates each eigenvalue to its own tolerance; Accelerate typically agrees to 10⁻⁷. `tests/test_solvers.py` checks this on every platform in CI, along with the fallback to SPOOLES and `sprung-solve` on its own.
@@ -214,6 +225,43 @@ Static beam solves on a 4-core Linux machine (Xeon, 2.8 GHz):
 | 417,000 | 94 s | 27 s |
 
 An earlier build that loaded MKL inside CalculiX took 6.0 s on the 136,000-equation model, so the pipe adds no measurable time.
+
+PARDISO against CG with BoomerAMG on an 8-core Ryzen 7 3700X (64 GB, 8 threads): complete static solves through the worker (assembly, solve, stress recovery, reading results), best of two runs (one for the four largest), and the peak memory of `sprung-solve`:
+
+| Part | Equations | PARDISO | CG + BoomerAMG | PARDISO memory | AMG memory | AMG iterations |
+|---|---|---|---|---|---|---|
+| Beam | 22,000 | 0.7 s | 0.8 s | 0.13 GB | 0.04 GB | 119 |
+| Beam | 135,000 | 5.5 s | 6.9 s | 1.1 GB | 0.25 GB | 121 |
+| Bearing block | 220,000 | 10.4 s | 8.9 s | 2.0 GB | 0.40 GB | 46 |
+| Bracket on pinned holes | 266,000 | 12.2 s | 15.5 s | 2.4 GB | 0.49 GB | 145 |
+| Ribbed bracket | 277,000 | 12.2 s | 14.3 s | 2.3 GB | 0.49 GB | 112 |
+| Steel post on aluminium plate | 279,000 | 14.8 s | 12.0 s | 2.7 GB | 0.50 GB | 64 |
+| Pocketed housing (thin walls) | 283,000 | 12.0 s | 12.9 s | 2.4 GB | 0.51 GB | 82 |
+| Beam | 366,000 | 21.0 s | 20.4 s | 4.1 GB | 0.69 GB | 122 |
+| Tube elbow | 406,000 | 17.8 s | 21.2 s | 3.6 GB | 0.73 GB | 130 |
+| Aluminium–nylon beam | 413,000 | 23.6 s | 22.5 s | 4.9 GB | 0.79 GB | 133 |
+| Turned tube, oblique supports | 545,000 | 67.4 s | 35.7 s | 7.5 GB | 1.0 GB | 51 |
+| Bearing block | 643,000 | 57.4 s | 27.7 s | 8.5 GB | 1.2 GB | 46 |
+| Pocketed housing | 668,000 | 39.9 s | 32.9 s | 7.1 GB | 1.2 GB | 87 |
+
+On the same machine's GeForce RTX 3070 (8 GB, `--cuda`), BoomerAMG's setup and CG together took 0.6 to 2.3 s on every part above, 8 to 12 times less than on the CPU, in about as many iterations, with the same answers:
+
+| Part | Equations | PARDISO | CG + BoomerAMG, CPU | CG + BoomerAMG, GPU |
+|---|---|---|---|---|
+| Beam | 135,000 | 5.9 s | 6.9 s | 4.7 s |
+| Bearing block | 220,000 | 10.6 s | 8.9 s | 7.7 s |
+| Bracket on pinned holes | 266,000 | 12.6 s | 15.5 s | 9.6 s |
+| Pocketed housing | 283,000 | 12.3 s | 12.9 s | 9.3 s |
+| Beam | 366,000 | 21.1 s | 20.4 s | 12.2 s |
+| Tube elbow | 406,000 | 18.1 s | 21.2 s | 12.4 s |
+| Aluminium–nylon beam | 413,000 | 24.2 s | 22.5 s | 12.6 s |
+| Turned tube | 545,000 | 66.7 s | 35.7 s | 30.6 s |
+| Bearing block | 643,000 | 57.6 s | 27.7 s | 20.5 s |
+| Pocketed housing | 668,000 | 40.1 s | 32.9 s | 21.8 s |
+
+With the equations solved on the GPU, what remains of these times is CalculiX's own assembly and stress recovery (28 of the turned tube's 30.6 s). Starting CUDA costs about 0.7 s, so below about 50,000 equations the CPU is faster.
+
+AMG takes a fifth to a seventh of PARDISO's memory everywhere. It is faster on compact parts and on large ones (twice as fast past half a million equations), where PARDISO's fill grows, and up to 25% slower on slender or thin-walled parts below about 400,000 equations, where BoomerAMG needs 110 to 150 iterations. CalculiX's own assembly and stress recovery, about the same for both, take 3 to 30 s of each time. The bolted joint with friction (105,000 equations) took 142 s either way, all of it in PARDISO, because its systems are nonsymmetric. Pulled with frictionless contact, the same joint is a mechanism: the plate slides away, 2.7 to 2.8 m in two identical PARDISO runs, which took 131 and 138 s and different increments, and the bolt loses its preload. Those two runs differ by 4% of peak displacement, and SPOOLES did not finish it at all. No two runs agree on it, whatever the solver, so it tests the fallback (it reached PARDISO after one stall and finished in 198 s), not accuracy.
 
 CalculiX returns the last conjugate-gradient iterate without an error when it stops short of its tolerance, so the worker reads the final residual and limit from the log and rejects an unconverged solve. Iterative results match the direct solver within about 10⁻⁴ of peak displacement with diagonal scaling, and within 10⁻³ with incomplete Cholesky (which on some meshes stops about 10% earlier), and 0.1% of peak stress on the test beam, and equilibrium closes to about 0.1% (with incomplete Cholesky, which uses a looser CalculiX tolerance and sometimes stops early, up to about 1%; a result above 0.5% warns and suggests the direct solver). The result records the solver and iteration count, shown in the console's Checks tab.
 

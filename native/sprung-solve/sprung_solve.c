@@ -1,5 +1,7 @@
-/* sprung-solve: solves sparse linear systems with Intel oneMKL's PARDISO,
-   in a process of its own.
+/* sprung-solve: solves sparse linear systems in a process of its own, with
+   Intel oneMKL's PARDISO (a direct factorization) or, for symmetric
+   positive definite systems, hypre's conjugate gradients preconditioned by
+   BoomerAMG algebraic multigrid.
 
    sprung-solve --serve
        Takes systems through standard input and answers through standard
@@ -7,11 +9,13 @@
        CalculiX, as built for Sprung FEA, starts it this way for its PARDISO
        solves. Ends when its input closes.
    sprung-solve --version
-       Checks that PARDISO solves on this computer, and names it.
-   sprung-solve A.mtx [b.mtx]
+       Checks that PARDISO, and CG with BoomerAMG, solve on this computer,
+       and names them.
+   sprung-solve [--amg] A.mtx [b.mtx]
        Solves A x = b for a Matrix Market matrix A (coordinate; real or
        integer; general or symmetric) and right-hand side b (array; all ones
-       when not given), and prints x, one value per line.
+       when not given), and prints x, one value per line. --amg solves a
+       symmetric positive definite A with CG and BoomerAMG.
 
    Each factorization keeps PARDISO's analysis (ordering and symbolic
    factorization) while the matrix's structure stays the same, so the
@@ -21,22 +25,39 @@
    Copyright (c) 2026 Sprung FEA contributors */
 
 #include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <mkl.h>
+#ifdef SPRUNG_SOLVE_HYPRE
+#include <HYPRE.h>
+#include <HYPRE_krylov.h>
+#include <HYPRE_parcsr_ls.h>
+#include <_hypre_parcsr_ls.h>
+#endif
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#ifdef HYPRE_USING_CUDA
+#include <cuda_runtime_api.h>
+#endif
 
 #include "protocol.h"
 
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
+#else
+#include <time.h>
+#include <unistd.h>
 #endif
 #ifdef __linux__
 #include <signal.h>
 #include <sys/prctl.h>
-#include <unistd.h>
 #endif
 
 /* ---------------------------------------------------------------- PARDISO */
@@ -50,6 +71,14 @@ struct system {
   double *values;
   void *pt[64];
   long long iparm[64];
+  /* Solved with CG and BoomerAMG (hypre) rather than PARDISO. */
+  int amg;
+  double tolerance;
+#ifdef SPRUNG_SOLVE_HYPRE
+  HYPRE_IJMatrix A;
+  HYPRE_IJVector b, x, r; /* right-hand side, solution, residual */
+  HYPRE_Solver precond, cg;
+#endif
 };
 
 static void *allocate(size_t bytes) {
@@ -96,9 +125,13 @@ static long long call(struct system *s, long long phase, long long nrhs,
   return error;
 }
 
+static void release_amg(struct system *s);
+
 static void release(struct system *s) {
-  if (s->factored) call(s, -1, 1, NULL, NULL);
+  if (s->factored && s->amg) release_amg(s);
+  else if (s->factored) call(s, -1, 1, NULL, NULL);
   s->factored = 0;
+  s->amg = 0;
   free(s->rows);
   free(s->columns);
   free(s->values);
@@ -129,7 +162,8 @@ static void defaults(struct system *s) {
 static long long factor(struct system *s, uint32_t kind, long long n,
                         long long nnz, long long *rows, long long *columns,
                         double *values) {
-  int same = s->factored && s->kind == kind && s->n == n && s->nnz == nnz &&
+  int same = s->factored && !s->amg && s->kind == kind && s->n == n &&
+             s->nnz == nnz &&
              !memcmp(s->rows, rows, sizeof *rows * (n + 1)) &&
              !memcmp(s->columns, columns, sizeof *columns * nnz);
   long long error;
@@ -166,7 +200,465 @@ static const char *describe(void) {
   return name;
 }
 
+/* ------------------------------------------------------- CG and BoomerAMG */
+
+static double now(void) {
+#ifdef _WIN32
+  LARGE_INTEGER count, frequency;
+  QueryPerformanceCounter(&count);
+  QueryPerformanceFrequency(&frequency);
+  return (double)count.QuadPart / (double)frequency.QuadPart;
+#else
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (double)t.tv_sec + 1e-9 * (double)t.tv_nsec;
+#endif
+}
+
+#ifdef SPRUNG_SOLVE_HYPRE
+
+/* Iterations at most: a V-cycle each. Elasticity took 40 to 150 on
+   Sprung FEA's parts; more means BoomerAMG does not suit the system (stiff
+   contact springs), and PARDISO takes over (solve). */
+#define CG_MAX_ITERATIONS 500
+/* Once CG has stalled, PARDISO takes every later system of this run:
+   CalculiX's increments release and remake their handle, and their systems
+   are alike. */
+static int stalled;
+/* solve_amg: CG did not reach the tolerance. */
+#define STALLED 1
+
+static void release_amg(struct system *s) {
+  HYPRE_ParCSRPCGDestroy(s->cg);
+  HYPRE_BoomerAMGDestroy(s->precond);
+  HYPRE_IJVectorDestroy(s->b);
+  HYPRE_IJVectorDestroy(s->x);
+  HYPRE_IJVectorDestroy(s->r);
+  HYPRE_IJMatrixDestroy(s->A);
+}
+
+static HYPRE_IJVector vector(HYPRE_Int n) {
+  HYPRE_IJVector v;
+  HYPRE_IJVectorCreate(MPI_COMM_WORLD, 0, n - 1, &v);
+  HYPRE_IJVectorSetObjectType(v, HYPRE_PARCSR);
+  HYPRE_IJVectorInitialize(v);
+  HYPRE_IJVectorAssemble(v);
+  return v;
+}
+
+/* BoomerAMG as a preconditioner for 3D elasticity with quadratic
+   tetrahedra: one V-cycle, HMIS coarsening at a strength threshold of 0.25,
+   extended+i interpolation with at most four entries a row, and one l1
+   Jacobi sweep before and after each coarse-grid correction. l1 Jacobi is
+   symmetric, as conjugate gradients need, converges for any symmetric
+   positive definite matrix, and threads perfectly. Hybrid Gauss-Seidel took
+   a third fewer iterations, but each cost nearly three times as much;
+   aggressive coarsening, other interpolations, and rigid-body modes as
+   interpolation vectors (GM-AMG) were slower on Sprung FEA's parts
+   (IMPLEMENTATION.md). `functions` > 1 coarsens and interpolates each
+   displacement direction apart from the others (systems AMG, the "unknown"
+   approach), `function` saying which unknown is which. */
+static void amg_options(HYPRE_Solver amg, HYPRE_Int functions,
+                        HYPRE_Int *function) {
+  HYPRE_BoomerAMGSetMaxIter(amg, 1);
+  HYPRE_BoomerAMGSetTol(amg, 0);
+  HYPRE_BoomerAMGSetPrintLevel(amg, 0);
+#ifdef HYPRE_USING_GPU
+  /* HMIS's second pass runs on the host; PMIS stays on the GPU. Restriction
+     by a kept transpose rather than a transposed product, which is slow
+     there. */
+  HYPRE_BoomerAMGSetCoarsenType(amg, 8);
+  HYPRE_BoomerAMGSetKeepTranspose(amg, 1);
+#else
+  HYPRE_BoomerAMGSetCoarsenType(amg, 10);
+#endif
+  HYPRE_BoomerAMGSetStrongThreshold(amg, 0.25);
+  HYPRE_BoomerAMGSetAggNumLevels(amg, 0);
+  HYPRE_BoomerAMGSetInterpType(amg, 6);
+  HYPRE_BoomerAMGSetPMaxElmts(amg, 4);
+  HYPRE_BoomerAMGSetRelaxType(amg, 18);
+  HYPRE_BoomerAMGSetNumSweeps(amg, 1);
+  HYPRE_BoomerAMGSetRelaxOrder(amg, 0);
+  HYPRE_BoomerAMGSetMaxLevels(amg, 25);
+  if (functions > 1) {
+    HYPRE_BoomerAMGSetNumFunctions(amg, functions);
+    /* BoomerAMG takes ownership of the array. */
+    HYPRE_BoomerAMGSetDofFunc(amg, function);
+  }
+}
+
+/* The hierarchy's levels and operator complexity (all levels' entries over
+   the matrix's), for the log. */
+static void hierarchy(HYPRE_Solver amg, int *levels, double *complexity) {
+  hypre_ParAMGData *data = (hypre_ParAMGData *)amg;
+  hypre_ParCSRMatrix **A = hypre_ParAMGDataAArray(data);
+  double total = 0;
+  int i;
+  *levels = hypre_ParAMGDataNumLevels(data);
+  for (i = 0; i < *levels; i++) {
+    hypre_ParCSRMatrixSetNumNonzeros(A[i]);
+    total += (double)hypre_ParCSRMatrixNumNonzeros(A[i]);
+  }
+  *complexity = total / (double)hypre_ParCSRMatrixNumNonzeros(A[0]);
+}
+
+/* Whether hypre can take a system with nnz entries in its upper triangle;
+   if not, why, in `text`. Its indices are 32-bit, and on the GPU it needs
+   about 40 to 55 bytes for each entry of the whole matrix (measured on
+   Sprung FEA's parts, the CUDA context included), which must fit in the
+   GPU's free memory. */
+static int amg_fits(long long n, long long nnz, char *text, size_t size) {
+  long long full = 2 * nnz - n;
+  if (n >= INT_MAX || full >= INT_MAX) {
+    snprintf(text, size, "the system is too large for hypre's 32-bit indices");
+    return 0;
+  }
+#ifdef HYPRE_USING_CUDA
+  {
+    size_t available = 0, total = 0;
+    double need = 64.0 * (double)full + (double)(512 << 20);
+    if (cudaMemGetInfo(&available, &total) != cudaSuccess || need > (double)available) {
+      snprintf(text, size, "the system needs about %.1f GB on the GPU, which "
+               "has %.1f GB free", need / 1e9, (double)available / 1e9);
+      return 0;
+    }
+  }
+#endif
+  return 1;
+}
+
+/* Sets up CG and BoomerAMG for a symmetric matrix given by its upper
+   triangle (rows, columns, values, as FACTOR takes it), which hypre takes
+   whole (amg_fits). Takes ownership of the arrays and of `function` (each
+   unknown's component, below `functions`; NULL when functions is 1).
+   Returns 0, with what was built in `text`. */
+static int setup_amg(struct system *s, long long n, long long nnz,
+                     long long *rows, long long *columns, double *values,
+                     uint32_t functions, uint8_t *function, double tolerance,
+                     char *text, size_t size) {
+  HYPRE_Int *count, *row, *column, *component = NULL;
+  HYPRE_BigInt *index;
+  double *value, start = now(), complexity;
+  HYPRE_ParCSRMatrix A;
+  HYPRE_ParVector b, x;
+  long long i, k, full = 2 * nnz - n, *next;
+  int levels;
+  /* Both triangles: row i holds the entries above it in column i (rows
+     j < i, ascending), then its own upper triangle. */
+  count = allocate(sizeof *count * (size_t)n);
+  memset(count, 0, sizeof *count * (size_t)n);
+  for (i = 0; i < n; i++)
+    for (k = rows[i]; k < rows[i + 1]; k++) {
+      count[i]++;
+      if (columns[k] != i) count[columns[k]]++;
+    }
+  next = allocate(sizeof *next * (size_t)n);
+  for (i = 0, k = 0; i < n; k += count[i++]) next[i] = k;
+  column = allocate(sizeof *column * (size_t)full);
+  value = allocate(sizeof *value * (size_t)full);
+  for (i = 0; i < n; i++)
+    for (k = rows[i]; k < rows[i + 1]; k++)
+      if (columns[k] != i) {
+        long long j = columns[k], at = next[j]++;
+        column[at] = (HYPRE_Int)i;
+        value[at] = values[k];
+      }
+  for (i = 0; i < n; i++)
+    for (k = rows[i]; k < rows[i + 1]; k++) {
+      long long at = next[i]++;
+      column[at] = (HYPRE_Int)columns[k];
+      value[at] = values[k];
+    }
+  free(next);
+  free(rows);
+  free(columns);
+  free(values);
+  row = allocate(sizeof *row * (size_t)n);
+  for (i = 0; i < n; i++) row[i] = (HYPRE_Int)i;
+  index = (HYPRE_BigInt *)column;
+  if (sizeof *index != sizeof *column) {
+    index = allocate(sizeof *index * (size_t)full);
+    for (k = 0; k < full; k++) index[k] = column[k];
+  }
+  HYPRE_IJMatrixCreate(MPI_COMM_WORLD, 0, (HYPRE_BigInt)n - 1, 0,
+                       (HYPRE_BigInt)n - 1, &s->A);
+  HYPRE_IJMatrixSetObjectType(s->A, HYPRE_PARCSR);
+  {
+    HYPRE_Int *none = allocate(sizeof *none * (size_t)n);
+    memset(none, 0, sizeof *none * (size_t)n);
+    HYPRE_IJMatrixSetDiagOffdSizes(s->A, count, none);
+    free(none);
+  }
+  /* Assembled from these host arrays, then moved to the GPU in a GPU build
+     of hypre. */
+  HYPRE_IJMatrixInitialize_v2(s->A, HYPRE_MEMORY_HOST);
+  HYPRE_IJMatrixSetValues(s->A, (HYPRE_Int)n, count, (HYPRE_BigInt *)row,
+                          index, value);
+  HYPRE_IJMatrixAssemble(s->A);
+#ifdef HYPRE_USING_GPU
+  HYPRE_IJMatrixMigrate(s->A, HYPRE_MEMORY_DEVICE);
+#endif
+  HYPRE_IJMatrixGetObject(s->A, (void **)&A);
+  if (index != (HYPRE_BigInt *)column) free(index);
+  free(column);
+  free(value);
+  free(row);
+  free(count);
+
+  if (functions > 1) {
+    /* BoomerAMG frees it, with its own allocator, and takes it where the
+       matrix is. */
+    HYPRE_MemoryLocation where = hypre_ParCSRMatrixMemoryLocation(A);
+    HYPRE_Int *host = allocate(sizeof *host * (size_t)n);
+    for (i = 0; i < n; i++) host[i] = function[i];
+    component = hypre_TAlloc(HYPRE_Int, (size_t)n, where);
+    hypre_TMemcpy(component, host, HYPRE_Int, (size_t)n, where, HYPRE_MEMORY_HOST);
+    free(host);
+  }
+  free(function);
+  s->b = vector((HYPRE_Int)n);
+  s->x = vector((HYPRE_Int)n);
+  s->r = vector((HYPRE_Int)n);
+  HYPRE_IJVectorGetObject(s->b, (void **)&b);
+  HYPRE_IJVectorGetObject(s->x, (void **)&x);
+  HYPRE_BoomerAMGCreate(&s->precond);
+  amg_options(s->precond, (HYPRE_Int)functions, component);
+  HYPRE_ParCSRPCGCreate(MPI_COMM_WORLD, &s->cg);
+  HYPRE_PCGSetTol(s->cg, tolerance);
+  HYPRE_PCGSetAbsoluteTol(s->cg, 0);
+  HYPRE_PCGSetMaxIter(s->cg, CG_MAX_ITERATIONS);
+  HYPRE_PCGSetTwoNorm(s->cg, 1);
+  /* CG's recurrence for the residual drifts from b - Ax, below the
+     round-off a true residual can reach: check the true one before
+     stopping. */
+  HYPRE_PCGSetRecomputeResidual(s->cg, 1);
+  HYPRE_PCGSetPrintLevel(s->cg, 0);
+  HYPRE_PCGSetPrecond(s->cg, (HYPRE_PtrToSolverFcn)HYPRE_BoomerAMGSolve,
+                      (HYPRE_PtrToSolverFcn)HYPRE_BoomerAMGSetup, s->precond);
+  HYPRE_ParCSRPCGSetup(s->cg, A, b, x);
+  hierarchy(s->precond, &levels, &complexity);
+  s->amg = 1;
+  s->tolerance = tolerance;
+  snprintf(text, size,
+           "BoomerAMG: %d levels, operator complexity %.2f, %u unknown%s a "
+           "node, set up in %.2f s",
+           levels, complexity, functions, functions == 1 ? "" : "s",
+           now() - start);
+  return 0;
+}
+
+/* Solves each right-hand side with CG from zero. Returns 0 when every one
+   reached the tolerance, else STALLED; `text` says how it went. The
+   verdict and the residual reported are those of the true residual,
+   b - Ax, worked out afresh. */
+static int solve_amg(struct system *s, long long nrhs, const double *b,
+                     double *x, char *text, size_t size) {
+  HYPRE_ParCSRMatrix A;
+  HYPRE_ParVector pb, px, pr;
+  HYPRE_Int iterations, most = 0;
+  double worst = 0, start = now();
+  long long k, n = s->n;
+  HYPRE_IJMatrixGetObject(s->A, (void **)&A);
+  HYPRE_IJVectorGetObject(s->b, (void **)&pb);
+  HYPRE_IJVectorGetObject(s->x, (void **)&px);
+  HYPRE_IJVectorGetObject(s->r, (void **)&pr);
+  for (k = 0; k < nrhs; k++) {
+    const double *bk = b + k * n;
+    double *xk = x + k * n, bb, rr, residual;
+    hypre_TMemcpy(hypre_VectorData(hypre_ParVectorLocalVector(pb)), bk,
+                  HYPRE_Real, (size_t)n, hypre_ParVectorMemoryLocation(pb),
+                  HYPRE_MEMORY_HOST);
+    HYPRE_ParVectorInnerProd(pb, pb, &bb);
+    if (bb == 0) {
+      memset(xk, 0, sizeof *xk * (size_t)n);
+      continue;
+    }
+    HYPRE_ParVectorSetConstantValues(px, 0);
+    HYPRE_ParCSRPCGSolve(s->cg, A, pb, px);
+    /* Stopping short is judged below, not as an error. */
+    HYPRE_ClearAllErrors();
+    HYPRE_PCGGetNumIterations(s->cg, &iterations);
+    HYPRE_ParVectorCopy(pb, pr);
+    HYPRE_ParCSRMatrixMatvec(-1.0, A, px, 1.0, pr);
+    HYPRE_ParVectorInnerProd(pr, pr, &rr);
+    residual = sqrt(rr / bb);
+    hypre_TMemcpy(xk, hypre_VectorData(hypre_ParVectorLocalVector(px)),
+                  HYPRE_Real, (size_t)n, HYPRE_MEMORY_HOST,
+                  hypre_ParVectorMemoryLocation(px));
+    if (iterations > most) most = iterations;
+    /* A NaN counts as the worst. */
+    if (!(residual <= worst)) worst = residual;
+  }
+  snprintf(text, size,
+           "CG with BoomerAMG%s: %d iterations, relative residual %.3g, "
+           "limit %.3g, in %.2f s",
+           worst <= s->tolerance ? "" : " stalled", (int)most, worst,
+           s->tolerance, now() - start);
+  return worst <= s->tolerance ? 0 : STALLED;
+}
+
+static int ascending(const void *a, const void *b) {
+  const long long *p = a, *q = b;
+  return *p < *q ? -1 : *p > *q;
+}
+
+/* The upper triangle of the system's matrix by rows, as FACTOR takes it,
+   from hypre's copy (wherever it is), for PARDISO when CG stalls. hypre
+   keeps each row's diagonal first and the rest unsorted. */
+static long long upper_triangle(struct system *s, long long **rows_out,
+                                long long **columns_out, double **values_out) {
+  HYPRE_ParCSRMatrix A;
+  hypre_CSRMatrix *diag;
+  HYPRE_Int *ia, *ja;
+  HYPRE_Real *a;
+  long long i, k, kept = 0, *rows, *pairs;
+  double *values;
+  HYPRE_IJMatrixGetObject(s->A, (void **)&A);
+  diag = hypre_CSRMatrixClone_v2(hypre_ParCSRMatrixDiag(A), 1, HYPRE_MEMORY_HOST);
+  ia = hypre_CSRMatrixI(diag);
+  ja = hypre_CSRMatrixJ(diag);
+  a = hypre_CSRMatrixData(diag);
+  rows = allocate(sizeof *rows * (size_t)(s->n + 1));
+  /* Pairs of (column, position) per row, sorted by column. */
+  pairs = allocate(sizeof *pairs * 2 * (size_t)ia[s->n]);
+  values = allocate(sizeof *values * (size_t)ia[s->n]);
+  for (i = 0; i < s->n; i++) {
+    long long start = kept;
+    rows[i] = kept;
+    for (k = ia[i]; k < ia[i + 1]; k++)
+      if (ja[k] >= i) {
+        pairs[2 * kept] = ja[k];
+        pairs[2 * kept + 1] = k;
+        kept++;
+      }
+    qsort(pairs + 2 * start, (size_t)(kept - start), 2 * sizeof *pairs, ascending);
+  }
+  rows[s->n] = kept;
+  for (k = 0; k < kept; k++) values[k] = a[pairs[2 * k + 1]];
+  /* The columns, packed. */
+  for (k = 0; k < kept; k++) pairs[k] = pairs[2 * k];
+  hypre_CSRMatrixDestroy(diag);
+  *rows_out = rows;
+  *columns_out = realloc(pairs, sizeof *pairs * (size_t)(kept ? kept : 1));
+  *values_out = values;
+  return kept;
+}
+
+static const char *describe_amg(void) {
+#ifdef HYPRE_USING_GPU
+  return "hypre " HYPRE_RELEASE_VERSION " CG with BoomerAMG, on the GPU";
+#else
+  return "hypre " HYPRE_RELEASE_VERSION " CG with BoomerAMG";
+#endif
+}
+
+#else
+
+static void release_amg(struct system *s) { (void)s; }
+
+#endif
+
+/* ---------------------------------------------------------------- methods */
+
+/* Factors (PARDISO) or sets up (CG and BoomerAMG) the system for the
+   method asked for. CG needs a symmetric positive definite matrix, so other
+   kinds go to PARDISO, as does every system once CG has stalled, and any
+   system too large for hypre (amg_fits). Takes ownership of the arrays.
+   Returns 0 or PARDISO's error code, with a note on what was done, or what
+   went wrong, in `text`. */
+static long long prepare(struct system *s, uint32_t kind, uint32_t method,
+                         long long n, long long nnz, long long *rows,
+                         long long *columns, double *values,
+                         uint32_t functions, uint8_t *function,
+                         double tolerance, char *text, size_t size) {
+  long long error;
+  char unfit[160] = "";
+  text[0] = 0;
+#ifdef SPRUNG_SOLVE_HYPRE
+  if (method == SPRUNG_SOLVE_CG_AMG && kind == SPRUNG_SOLVE_SYMMETRIC &&
+      !stalled && amg_fits(n, nnz, unfit, sizeof unfit)) {
+    release(s);
+    s->kind = kind;
+    s->n = n;
+    s->nnz = nnz;
+    error = setup_amg(s, n, nnz, rows, columns, values, functions, function,
+                      tolerance, text, size);
+    s->factored = !error;
+    if (error) release(s);
+    return error;
+  }
+#endif
+  free(function);
+  {
+    double start = now();
+    int again = s->factored && !s->amg && s->kind == kind && s->n == n;
+    /* Why PARDISO, when CG was asked for; unfit says more. */
+    const char *note = method != SPRUNG_SOLVE_CG_AMG ? ""
+#ifdef SPRUNG_SOLVE_HYPRE
+                       : stalled ? "; CG stalled on an earlier system"
+                       : unfit[0] ? "; CG was not used: "
+                       : "; CG needs a symmetric matrix";
+#else
+                       : "; this sprung-solve has no CG (hypre)";
+#endif
+    error = factor(s, kind, n, nnz, rows, columns, values);
+    if (error)
+      snprintf(text, size, "The factorization failed: %s (PARDISO error %lld)",
+               pardiso_error(error), error);
+    else
+      snprintf(text, size, "PARDISO factored %lld equations in %.2f s%s%s%s", n,
+               now() - start, again ? " (refactored)" : "", note, unfit);
+  }
+  return error;
+}
+
+/* Solves with the system's factorization or CG. Should CG stall, PARDISO
+   factors the system and solves it instead, and takes every later system
+   too. Returns 0 or PARDISO's error code, with what happened in
+   `text`. */
+static long long solve(struct system *s, long long nrhs, double *b, double *x,
+                       char *text, size_t size) {
+  long long error;
+  text[0] = 0;
+#ifdef SPRUNG_SOLVE_HYPRE
+  if (s->amg) {
+    long long *rows, *columns, nnz;
+    double *values, start;
+    size_t used;
+    if (solve_amg(s, nrhs, b, x, text, size) != STALLED) return 0;
+    nnz = upper_triangle(s, &rows, &columns, &values);
+    release(s);
+    stalled = 1;
+    start = now();
+    error = factor(s, s->kind, s->n, nnz, rows, columns, values);
+    if (!error) error = call(s, 33, nrhs, b, x);
+    used = strlen(text);
+    if (error)
+      snprintf(text + used, size - used,
+               "; PARDISO, taking over, failed: %s (PARDISO error %lld)",
+               pardiso_error(error), error);
+    else
+      snprintf(text + used, size - used,
+               "; PARDISO factored and solved instead, in %.2f s", now() - start);
+    return error;
+  }
+#endif
+  {
+    double start = now();
+    error = call(s, 33, nrhs, b, x);
+    if (error)
+      snprintf(text, size, "The solve failed: %s (PARDISO error %lld)",
+               pardiso_error(error), error);
+    else
+      snprintf(text, size, "PARDISO solved in %.2f s", now() - start);
+  }
+  return error;
+}
+
 /* --------------------------------------------------------------- protocol */
+
+/* The protocol's own copy of standard output (serve). */
+static FILE *replies;
 
 static void receive(void *data, size_t bytes, int may_end) {
   size_t got = fread(data, 1, bytes, stdin);
@@ -184,7 +676,7 @@ static void *receive_array(size_t count, size_t size) {
 }
 
 static void put(const void *data, size_t bytes) {
-  if (fwrite(data, 1, bytes, stdout) != bytes) exit(2);
+  if (fwrite(data, 1, bytes, replies) != bytes) exit(2);
 }
 
 static void reply(int32_t status, const char *text) {
@@ -192,13 +684,6 @@ static void reply(int32_t status, const char *text) {
   put(&status, sizeof status);
   put(&length, sizeof length);
   put(text, length);
-}
-
-static void reply_error(const char *what, long long error) {
-  char text[256];
-  snprintf(text, sizeof text, "%s: %s (PARDISO error %lld)", what,
-           pardiso_error(error), error);
-  reply(error ? (int32_t)error : -1, text);
 }
 
 static struct system *systems;
@@ -240,13 +725,43 @@ static int valid(uint32_t kind, long long n, long long nnz,
   return 1;
 }
 
+static void set_threads(uint32_t threads) {
+  if (!threads) return;
+  mkl_set_num_threads((int)threads);
+#ifdef _OPENMP
+  omp_set_num_threads((int)threads);
+#endif
+}
+
+/* Standard output carries replies alone: the libraries' own messages
+   (hypre prints some warnings) go to standard error instead. */
+static void keep_output(void) {
+#ifdef _WIN32
+  int out = _dup(1);
+  _dup2(2, 1);
+  replies = _fdopen(out, "wb");
+  _setmode(_fileno(stdin), _O_BINARY);
+  _setmode(out, _O_BINARY);
+#else
+  int out = dup(1);
+  dup2(2, 1);
+  replies = fdopen(out, "wb");
+#endif
+  if (!replies) exit(2);
+  setvbuf(stdin, NULL, _IOFBF, 1 << 20);
+  setvbuf(replies, NULL, _IOFBF, 1 << 20);
+}
+
 static void serve(void) {
   struct sprung_solve_request request;
+  uint32_t version = 0;
+  char text[512];
 #ifdef __linux__
   /* Ends with CalculiX, even mid-factorization. */
   prctl(PR_SET_PDEATHSIG, SIGKILL);
   if (getppid() == 1) exit(0);
 #endif
+  keep_output();
   for (;;) {
     struct system *s;
     receive(&request, sizeof request, 1);
@@ -254,45 +769,80 @@ static void serve(void) {
       fprintf(stderr, "sprung-solve: not a request\n");
       exit(2);
     }
+    if (request.op != SPRUNG_SOLVE_HELLO && !version) {
+      fprintf(stderr, "sprung-solve: HELLO must come first\n");
+      exit(2);
+    }
     switch (request.op) {
     case SPRUNG_SOLVE_HELLO: {
-      uint32_t version;
-      receive(&version, sizeof version, 0);
-      if (version != SPRUNG_SOLVE_VERSION)
-        reply(-1, "this sprung-solve speaks protocol version 1");
-      else
-        reply(0, describe());
+      uint32_t asked;
+      receive(&asked, sizeof asked, 0);
+      if (asked != 1 && asked != 2) {
+        reply(-1, "this sprung-solve speaks protocol versions 1 and 2");
+        break;
+      }
+      version = asked;
+#ifdef SPRUNG_SOLVE_HYPRE
+      if (version >= 2) {
+        snprintf(text, sizeof text, "%s; %s", describe(), describe_amg());
+        reply(0, text);
+        break;
+      }
+#endif
+      reply(0, describe());
       break;
     }
     case SPRUNG_SOLVE_FACTOR: {
-      uint32_t kind, threads;
+      uint32_t kind, threads, method = SPRUNG_SOLVE_PARDISO, functions = 1;
+      double tolerance = 0;
       long long n, nnz, *rows, *columns, error;
       double *values;
+      uint8_t *function = NULL;
       receive(&kind, sizeof kind, 0);
       receive(&threads, sizeof threads, 0);
+      if (version >= 2) {
+        receive(&method, sizeof method, 0);
+        receive(&functions, sizeof functions, 0);
+        receive(&tolerance, sizeof tolerance, 0);
+      }
       receive(&n, sizeof n, 0);
       receive(&nnz, sizeof nnz, 0);
-      if (n < 1 || nnz < 1) {
-        fprintf(stderr, "sprung-solve: a matrix of order %lld with %lld entries\n", n, nnz);
+      if (n < 1 || nnz < 1 || functions < 1 || functions > 255) {
+        fprintf(stderr, "sprung-solve: a matrix of order %lld with %lld "
+                        "entries and %u unknowns a node\n", n, nnz, functions);
         exit(2);
       }
       rows = receive_array((size_t)n + 1, sizeof *rows);
       columns = receive_array((size_t)nnz, sizeof *columns);
       values = receive_array((size_t)nnz, sizeof *values);
-      if (!valid(kind, n, nnz, rows, columns)) {
+      if (functions > 1) function = receive_array((size_t)n, 1);
+      if (!valid(kind, n, nnz, rows, columns) || method > SPRUNG_SOLVE_CG_AMG ||
+          (method == SPRUNG_SOLVE_CG_AMG && !(tolerance > 0 && tolerance < 1))) {
         free(rows);
         free(columns);
         free(values);
+        free(function);
         reply(-1, "the matrix is not 0-based compressed rows with ascending "
                   "columns (when symmetric, the upper triangle with every "
-                  "diagonal entry)");
+                  "diagonal entry), or the method or tolerance is not valid");
         break;
       }
-      if (threads) mkl_set_num_threads((int)threads);
+      if (function) {
+        long long i;
+        for (i = 0; i < n && function[i] < functions; i++) {}
+        if (i < n) {
+          free(rows); free(columns); free(values); free(function);
+          reply(-1, "an unknown's component is not below the number of "
+                    "unknowns a node");
+          break;
+        }
+      }
+      set_threads(threads);
       s = find(request.handle, 1);
-      error = factor(s, kind, n, nnz, rows, columns, values);
-      if (error) reply_error("The factorization failed", error);
-      else reply(0, "");
+      error = prepare(s, kind, method, n, nnz, rows, columns, values,
+                      functions, function, tolerance, text, sizeof text);
+      /* Version 1 replies to a factorization with no text. */
+      reply(error ? (int32_t)error : 0, error || version >= 2 ? text : "");
       break;
     }
     case SPRUNG_SOLVE_SOLVE: {
@@ -307,11 +857,11 @@ static void serve(void) {
         reply(-1, "there is no factorization of this order to solve with");
       } else {
         x = allocate(sizeof *x * (size_t)(n * nrhs));
-        error = call(s, 33, nrhs, b, x);
+        error = solve(s, nrhs, b, x, text, sizeof text);
         if (error) {
-          reply_error("The solve failed", error);
+          reply((int32_t)error, text);
         } else {
-          reply(0, "");
+          reply(0, version >= 2 ? text : "");
           put(x, sizeof *x * (size_t)(n * nrhs));
         }
         free(x);
@@ -331,7 +881,7 @@ static void serve(void) {
       fprintf(stderr, "sprung-solve: unknown request %u\n", request.op);
       exit(2);
     }
-    fflush(stdout);
+    fflush(replies);
   }
 }
 
@@ -373,8 +923,11 @@ static char *line(FILE *file, char *buffer, int size) {
   return NULL;
 }
 
-static void solve_files(const char *matrix, const char *rhs) {
-  char header[256], buffer[512];
+/* CG's tolerance from the command line (--amg). */
+#define FILE_TOLERANCE 1e-12
+
+static void solve_files(const char *matrix, const char *rhs, uint32_t method) {
+  char header[256], buffer[512], text[512];
   FILE *file = open_market(matrix, header, sizeof header);
   int symmetric = strstr(header, "symmetric") != NULL;
   long long m, n, nz, i, k, kept;
@@ -454,70 +1007,96 @@ static void solve_files(const char *matrix, const char *rhs) {
     fclose(file);
   }
   memset(&s, 0, sizeof s);
-  error = factor(&s, symmetric ? SPRUNG_SOLVE_SYMMETRIC : SPRUNG_SOLVE_UNSYMMETRIC,
-                 n, kept, rows, columns, values);
+  error = prepare(&s, symmetric ? SPRUNG_SOLVE_SYMMETRIC : SPRUNG_SOLVE_UNSYMMETRIC,
+                  method, n, kept, rows, columns, values, 1, NULL,
+                  FILE_TOLERANCE, text, sizeof text);
   if (error) {
-    fprintf(stderr, "sprung-solve: the factorization failed: %s (PARDISO error %lld)\n",
-            pardiso_error(error), error);
+    fprintf(stderr, "sprung-solve: %s\n", text);
     exit(1);
   }
+  if (text[0]) fprintf(stderr, "sprung-solve: %s\n", text);
   x = allocate(sizeof *x * (size_t)n);
-  error = call(&s, 33, 1, b, x);
-  if (error) {
-    fprintf(stderr, "sprung-solve: the solve failed: %s (PARDISO error %lld)\n",
-            pardiso_error(error), error);
-    exit(1);
-  }
+  error = solve(&s, 1, b, x, text, sizeof text);
+  if (text[0]) fprintf(stderr, "sprung-solve: %s\n", text);
+  if (error) exit(1);
   for (i = 0; i < n; i++) printf("%.17g\n", x[i]);
   release(&s);
 }
 
-/* A small indefinite system with a known answer: PARDISO loads and runs on
-   this processor. */
-static int works(void) {
+/* A small symmetric system with a known answer, solved by `method`:
+   indefinite for PARDISO, positive definite (a chain of springs) for CG.
+   The method loads and runs on this processor. */
+static int works(uint32_t method) {
+  enum { N = 40 };
   struct system s;
-  long long rows[] = {0, 2, 4, 5}, columns[] = {0, 1, 1, 2, 2};
-  double values[] = {4, 1, -3, 1, 2}, b[3], x[3] = {1, 2, 3}, y[3];
-  long long *r = allocate(sizeof rows), *c = allocate(sizeof columns);
-  double *v = allocate(sizeof values);
-  int i, ok;
-  memcpy(r, rows, sizeof rows);
-  memcpy(c, columns, sizeof columns);
-  memcpy(v, values, sizeof values);
-  b[0] = 4 * x[0] + x[1];
-  b[1] = x[0] - 3 * x[1] + x[2];
-  b[2] = x[1] + 2 * x[2];
+  long long *rows = allocate(sizeof *rows * (N + 1)),
+            *columns = allocate(sizeof *columns * 2 * N);
+  double *values = allocate(sizeof *values * 2 * N), b[N], x[N], y[N];
+  char text[512];
+  int i, k = 0, ok;
+  for (i = 0; i < N; i++) x[i] = 1 + i % 7;
+  for (i = 0; i < N; i++) {
+    double diagonal = method == SPRUNG_SOLVE_PARDISO && i % 3 == 1 ? -3 : 4;
+    rows[i] = k;
+    columns[k] = i;
+    values[k++] = diagonal;
+    if (i + 1 < N) {
+      columns[k] = i + 1;
+      values[k++] = -1;
+    }
+    b[i] = diagonal * x[i] - (i > 0 ? x[i - 1] : 0) - (i + 1 < N ? x[i + 1] : 0);
+  }
+  rows[N] = k;
   memset(&s, 0, sizeof s);
-  if (factor(&s, SPRUNG_SOLVE_SYMMETRIC, 3, 5, r, c, v)) return 0;
-  ok = !call(&s, 33, 1, b, y);
-  for (i = 0; i < 3; i++) ok = ok && y[i] > x[i] - 1e-9 && y[i] < x[i] + 1e-9;
+  if (prepare(&s, SPRUNG_SOLVE_SYMMETRIC, method, N, k, rows, columns, values,
+              1, NULL, FILE_TOLERANCE, text, sizeof text))
+    return 0;
+  ok = !solve(&s, 1, b, y, text, sizeof text) && s.amg == (method != SPRUNG_SOLVE_PARDISO);
+  for (i = 0; i < N; i++) ok = ok && y[i] > x[i] - 1e-9 && y[i] < x[i] + 1e-9;
   release(&s);
   return ok;
 }
 
 int main(int argc, char **argv) {
-  if (argc == 2 && !strcmp(argv[1], "--serve")) {
-#ifdef _WIN32
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
+  uint32_t method = SPRUNG_SOLVE_PARDISO;
+#ifdef SPRUNG_SOLVE_HYPRE
+  HYPRE_Initialize();
+#ifdef HYPRE_USING_GPU
+  HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE);
+  HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE);
+  /* hypre's own sparse products: cuSPARSE's took up to three times the
+     memory (6.5 GB against 2 GB at 546,000 equations) and were slower. A
+     small memory pool, grown as needed, rather than 4 GiB up front, which
+     an 8 GB card cannot grow beside. */
+  HYPRE_SetSpGemmUseVendor(0);
+  HYPRE_SetUmpireDevicePoolSize((size_t)256 << 20);
 #endif
-    setvbuf(stdin, NULL, _IOFBF, 1 << 20);
-    setvbuf(stdout, NULL, _IOFBF, 1 << 20);
+#endif
+  if (argc == 2 && !strcmp(argv[1], "--serve")) {
     serve();
     return 0;
   }
   if (argc == 2 && !strcmp(argv[1], "--version")) {
-    if (!works()) {
+    if (!works(SPRUNG_SOLVE_PARDISO)) {
       printf("sprung-solve %d: PARDISO does not work here\n", SPRUNG_SOLVE_VERSION);
       return 1;
     }
     printf("sprung-solve %d: %s\n", SPRUNG_SOLVE_VERSION, describe());
+#ifdef SPRUNG_SOLVE_HYPRE
+    /* A second method, offered when it works. */
+    if (works(SPRUNG_SOLVE_CG_AMG)) printf("amg: %s\n", describe_amg());
+#endif
     return 0;
+  }
+  if (argc >= 2 && !strcmp(argv[1], "--amg")) {
+    method = SPRUNG_SOLVE_CG_AMG;
+    argv++;
+    argc--;
   }
   if ((argc == 2 || argc == 3) && argv[1][0] != '-') {
-    solve_files(argv[1], argc == 3 ? argv[2] : NULL);
+    solve_files(argv[1], argc == 3 ? argv[2] : NULL, method);
     return 0;
   }
-  fprintf(stderr, "Usage: sprung-solve --serve | --version | A.mtx [b.mtx]\n");
+  fprintf(stderr, "Usage: sprung-solve --serve | --version | [--amg] A.mtx [b.mtx]\n");
   return 2;
 }

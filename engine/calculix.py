@@ -6,9 +6,12 @@ from pathlib import Path
 from cad import threads, emit
 
 # Linear equation solvers a study can choose. `direct` is the fastest exact
-# solver of the CalculiX in use (direct_solver); studies saved before there
-# was a choice of direct solver name SPOOLES.
+# solver of the CalculiX in use (direct_solver), `iterative-amg` conjugate
+# gradients with algebraic multigrid where sprung-solve has it
+# (amg_solver); studies saved before there was a choice of direct solver
+# name SPOOLES.
 SOLVERS={'direct':None,
+         'iterative-amg':None,
          'iterative-scaling':('ITERATIVE SCALING','iterative, diagonal scaling'),
          'iterative-cholesky':('ITERATIVE CHOLESKY','iterative, incomplete Cholesky')}
 ALIASES={'spooles':'direct'}
@@ -24,7 +27,19 @@ def solver_of(study):
 
 def solver(study):
     """(deck keyword, description) of the study's equation solver."""
-    return SOLVERS[solver_of(study)] or direct_solver()
+    name=solver_of(study)
+    if name=='iterative-amg': return amg_solver()
+    return SOLVERS[name] or direct_solver()
+
+
+def amg_solver():
+    """(deck keyword, description) of conjugate gradients preconditioned by
+    hypre's BoomerAMG: CalculiX's PARDISO calls, which sprung-solve answers
+    with CG instead when run() asks it to (SPRUNG_FEA_SOLVE_METHOD)."""
+    amg=capabilities().get('amg')
+    if not amg:
+        raise ValueError('This CalculiX has no algebraic multigrid solver (hypre, which sprung-solve carries on Linux and Windows). Choose another solver.')
+    return 'PARDISO',f'iterative, {amg}'
 
 
 # CalculiX's direct solvers by the name SPRUNG_FEA_DIRECT_SOLVER takes,
@@ -56,18 +71,24 @@ def direct_solver():
 
 def capabilities(ccx=None):
     """What the CalculiX executable can do here (built_capabilities), with
-    PARDISO only where it works: on Linux and Windows, where sprung-solve
-    runs it, only when that starts and solves on this computer."""
+    PARDISO, and CG with BoomerAMG ('amg': its description), only where they
+    work: on Linux and Windows, where sprung-solve runs them, only when
+    sprung-solve solves with them on this computer."""
     ccx=ccx or find_ccx()
     found=dict(built_capabilities(ccx))
-    if found.pop('pardisoHelper',None) and not find_helper(ccx): found.pop('pardiso',None)
+    found.pop('amg',None)
+    if found.pop('pardisoHelper',None):
+        helper=_helper(ccx)
+        if not helper: found.pop('pardiso',None)
+        elif helper['amg']: found['amg']=helper['amg']
     return found
 
 
 def built_capabilities(ccx=None):
     """What the CalculiX executable was built with: {'pardiso': backend name;
     'pardisoHelper': sprung-solve, which runs PARDISO, relative to the
-    executable's folder; 'threadSafeSpooles': whether SPOOLES may run
+    executable's folder; 'amg': the hypre in sprung-solve, for conjugate
+    gradients with BoomerAMG; 'threadSafeSpooles': whether SPOOLES may run
     threaded}, each absent when not so. SPOOLES 2.2 as released loses
     updates between threads and returns wrong answers, often on Apple
     silicon and occasionally elsewhere, so it is threaded only in builds
@@ -82,21 +103,35 @@ def find_helper(ccx=None):
     Intel oneMKL on Linux and Windows (native/sprung-solve), when it starts
     and solves here; None otherwise (CalculiX then has SPOOLES only).
     SPRUNG_FEA_SOLVE names another; CalculiX is told which (run)."""
+    helper=_helper(ccx)
+    return helper['path'] if helper else None
+
+
+def _helper(ccx=None):
     path=Path(ccx or find_ccx()).resolve()
     relative=built_capabilities(path).get('pardisoHelper')
     given=os.environ.get('SPRUNG_FEA_SOLVE')
     return _working_helper(given or (str(path.parent/relative) if relative else None))
 
 
+# What `sprung-solve --version` starts with: the protocol version that
+# CalculiX's client (native/calculix/pardiso_client.c) speaks.
+HELPER_BANNER='sprung-solve 2: '
+
+
 @functools.lru_cache(maxsize=None)
 def _working_helper(path):
-    # --version solves a small system: MKL loads and runs on this processor.
+    """{'path', 'amg': the description of CG with BoomerAMG, or None} of a
+    sprung-solve that works here. --version solves a small system with each
+    method: MKL (and hypre) load and run on this processor."""
     if not path or not Path(path).is_file(): return None
     try:
         check=subprocess.run([path,'--version'],capture_output=True,text=True,timeout=120)
     except (OSError,subprocess.TimeoutExpired):
         return None
-    return path if check.returncode==0 and check.stdout.startswith('sprung-solve 1: ') else None
+    if check.returncode or not check.stdout.startswith(HELPER_BANNER): return None
+    amg=re.search(r'^amg: (.+)$',check.stdout,re.M)
+    return {'path':path,'amg':amg[1].strip() if amg else None}
 
 
 @functools.lru_cache(maxsize=None)
@@ -123,24 +158,32 @@ def find_ccx():
 
 def read_log(path):
     """Errors, the last lines, and the final conjugate-gradient residual of a
-    CalculiX log. Read line by line: iterative solves log every iteration."""
-    error=False;tail=deque(maxlen=40);last=None
+    CalculiX log: CalculiX's own iterative solvers', or sprung-solve's CG
+    with BoomerAMG ('fallback': whether CG stalled and PARDISO solved
+    instead). Read line by line: iterative solves log every iteration."""
+    error=False;tail=deque(maxlen=40);last=None;fallback=False
     pattern=re.compile(r'iteration=\s*(\d+), error=\s*(\S+), limit=\s*(\S+)')
+    amg=re.compile(r'CG with BoomerAMG( stalled)?: (\d+) iterations, relative residual (\S+), limit (\S+),')
     with open(path) as log:
         for line in log:
             error|='*ERROR' in line
             tail.append(line)
             match=pattern.match(line.strip())
-            if match: last=match
+            if match: last=match.groups()
+            match=amg.search(line)
+            if match:
+                last=match.groups()[1:]
+                fallback|=bool(match[1])
     iterative=None
     if last:
-        iterative={'iterations':int(last[1]),'error':float(last[2]),'limit':float(last[3])}
+        iterative={'iterations':int(last[0]),'error':float(last[1]),'limit':float(last[2]),'fallback':fallback}
     return error,''.join(tail),iterative
 
 
-def run(folder, name='analysis'):
-    """Runs CalculiX on folder/name.inp. Returns the iterative-solver summary,
-    or None for direct solves; raises with the log tail on failure."""
+def run(folder, name='analysis', solver='direct'):
+    """Runs CalculiX on folder/name.inp, whose equations are solved by
+    `solver` (a SOLVERS name). Returns the iterative-solver summary, or None
+    for direct solves; raises with the log tail on failure."""
     # CalculiX threads stiffness assembly, the direct solver and stress
     # recovery itself; NUMBER_OF_CPUS caps all three, and at 1 left every
     # stage serial. Assembly and stress recovery give the same answer to
@@ -154,8 +197,11 @@ def run(folder, name='analysis'):
     env.update(OMP_NUM_THREADS='1',NUMBER_OF_CPUS=n,OPENBLAS_NUM_THREADS='1',VECLIB_MAXIMUM_THREADS=n,MKL_NUM_THREADS=n,
                GFORTRAN_UNBUFFERED_PRECONNECTED='1',
                CCX_NPROC_RESULTS=n,CCX_NPROC_STIFFNESS=n,CCX_NPROC_EQUATION_SOLVER=equations)
-    env.pop('SPRUNG_FEA_SOLVE',None)
+    for k in ('SPRUNG_FEA_SOLVE','SPRUNG_FEA_SOLVE_METHOD'): env.pop(k,None)
     if find_helper(): env['SPRUNG_FEA_SOLVE']=find_helper()
+    # sprung-solve answers CalculiX's PARDISO calls with CG and BoomerAMG,
+    # on MKL_NUM_THREADS threads, to SPRUNG_FEA_SOLVE_TOLERANCE if set.
+    if solver=='iterative-amg': env['SPRUNG_FEA_SOLVE_METHOD']='amg'
     # No time limit: large models can solve for a long time, and the user can
     # cancel the job.
     log_path=folder/'solver.log'
@@ -206,12 +252,13 @@ def run(folder, name='analysis'):
             if process.poll() is None:
                 process.terminate();process.wait()
     error,tail,iterative=read_log(log_path)
-    if process.returncode != 0 or error or not (folder/f'{name}.frd').exists():
-        raise ValueError(failure(tail)+stopped(process.returncode,error)+'\n'+tail[-2500:])
     # CalculiX returns its last iterate without an error when conjugate
     # gradients stop short of the tolerance, so check the final residual.
-    if iterative and not iterative['error']<=iterative['limit']:
+    # Where sprung-solve's CG stalls, PARDISO solves instead.
+    if iterative and not iterative['fallback'] and not iterative['error']<=iterative['limit']:
         raise ValueError(f"The iterative solver did not converge: residual {iterative['error']:.3g} is above the limit {iterative['limit']:.3g} after {iterative['iterations']} iterations. Use the direct solver, or check that the supports hold the part.\n"+tail[-2500:])
+    if process.returncode != 0 or error or not (folder/f'{name}.frd').exists():
+        raise ValueError(failure(tail)+stopped(process.returncode,error)+'\n'+tail[-2500:])
     return iterative
 
 
@@ -225,6 +272,13 @@ def stopped(code, error):
         except ValueError: how=f'signal {-code}'
     else: how=f'exit code {code:#x}' if code>0xffff else f'exit code {code}'
     return f' CalculiX stopped unexpectedly ({how}).'
+
+
+def solver_note(description, iterative):
+    """The description of the solver a run used, noting where PARDISO took
+    over from a stalled CG (read_log)."""
+    if iterative and iterative.get('fallback'): return description+', with PARDISO where CG stalled'
+    return description
 
 
 def failure(tail):

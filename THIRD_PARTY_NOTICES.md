@@ -6,7 +6,7 @@ The distribution contains separate programs that communicate only through files,
 
 - **The Sprung FEA application** (Electron interface, local service and Python engine): GPL-3.0-or-later.
 - **CalculiX CrunchiX (`ccx`)**: GPL-2.0-only, as CalculiX itself is (below). The engine writes a CalculiX input file, runs `ccx` on it, and reads its result files. Only libraries whose licenses are compatible with GPL-2.0 are linked into `ccx`.
-- **`sprung-solve`** (Linux and Windows): MIT source, linked statically with Intel oneMKL. It solves sparse linear systems sent to it through a pipe, by the documented protocol in `docs/solver-protocol.md`, and it can also be run on its own. `ccx` sends its PARDISO solves there and falls back to its built-in SPOOLES solver when `sprung-solve` is absent. Neither MKL nor `sprung-solve` is linked into `ccx` or into the Sprung FEA application. Packaged builds keep it in its own folder (`runtime/solver/sprung-solve`), with its MIT license, Intel's license, and Intel's third-party notices.
+- **`sprung-solve`** (Linux and Windows): MIT source, linked statically with Intel oneMKL and hypre (MIT, as distributed here). It solves sparse linear systems sent to it through a pipe, by the documented protocol in `docs/solver-protocol.md`, and it can also be run on its own. `ccx` sends its PARDISO solves there and falls back to its built-in SPOOLES solver when `sprung-solve` is absent. Neither MKL, hypre nor `sprung-solve` is linked into `ccx` or into the Sprung FEA application. Packaged builds keep it in its own folder (`runtime/solver/sprung-solve`), with its MIT license, Intel's license, Intel's third-party notices, and hypre's license and notices.
 
 No SolidWorks code, assets, or proprietary UI components are used. Official SolidWorks documentation informed the workflow research recorded in `docs/interaction-design.md`.
 
@@ -32,6 +32,7 @@ No SolidWorks code, assets, or proprietary UI components are used. Official Soli
 | Apple Accelerate | Sparse direct solver behind CalculiX's PARDISO interface on macOS | macOS system library (GPL-2.0's system library exception), not redistributed | https://developer.apple.com/documentation/accelerate/sparse_solvers |
 | sprung-solve | Separate program that runs CalculiX's PARDISO solves on Linux and Windows | MIT (`licenses/sprung-solve.txt`) | `native/sprung-solve` in this repository |
 | Intel oneMKL 2026 | PARDISO sparse direct solver, linked statically into `sprung-solve` only (Linux and Windows builds) | Intel Simplified Software License (October 2022), `licenses/Intel-oneMKL.txt`; proprietary, binary only; its third-party notices are in `licenses/Intel-oneMKL-third-party-programs.txt` | https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html (conda-forge `mkl-static`) |
+| hypre 3.2.0 | Conjugate gradients with BoomerAMG algebraic multigrid, linked statically into `sprung-solve` only (Linux and Windows builds) | Apache-2.0 OR MIT, distributed under MIT; its copy of the reference BLAS and LAPACK routines is BSD-3-Clause (University of Tennessee); `licenses/hypre.txt` | https://github.com/hypre-space/hypre |
 | ARPACK-NG | CalculiX linear algebra dependency | BSD-3-Clause | https://github.com/opencollab/arpack-ng |
 | OpenBLAS | Linear algebra | BSD-3-Clause | https://github.com/OpenMathLib/OpenBLAS |
 | GCC runtime | Fortran, OpenMP, quadmath | GPL-3.0 with GCC Runtime Library Exception where applicable; LGPL for quadmath | https://gcc.gnu.org/ |
@@ -44,12 +45,12 @@ The solver is built on every platform by `scripts/build-solver.py` from the Calc
 - the SPOOLES patches in `native/calculix/spooles-patches`;
 - two small compile fixes: a void function's return value (also fixed in Homebrew's `costerwi/homebrew-calculix` formula), and a Windows-only call outside any function that only affected the old msvcrt;
 - `native/calculix/accelerate_pardiso.c`, which answers CalculiX's PARDISO calls with Apple Accelerate on macOS;
-- `native/calculix/pardiso_client.c`, which hands them to `sprung-solve` on Linux and Windows;
+- `native/calculix/pardiso_client.c`, which hands them to `sprung-solve` on Linux and Windows, and one call that build-solver.py adds to `mastruct.c`, telling it the direction of each equation once CalculiX has numbered them (for algebraic multigrid);
 - `native/calculix/mkl_service.h`, which stands in for MKL's header so that CalculiX compiles without MKL.
 
 These additions are GPL-2.0-or-later. CalculiX's PaStiX interface is not built. `ccx` links the unmodified conda-forge ARPACK, OpenBLAS and GCC (or, on macOS, LLVM OpenMP) runtime libraries.
 
-`sprung-solve` is built by the same script from `native/sprung-solve` and the unmodified static libraries of Intel oneMKL (conda-forge `mkl-static`), with GCC and GNU OpenMP on Linux, and on Windows with Microsoft's C compiler and LLVM OpenMP. Intel's license permits redistributing MKL without modification, provided its copyright notice and terms are reproduced; they ship beside `sprung-solve` and in `licenses/`.
+`sprung-solve` is built by the same script from `native/sprung-solve`, the unmodified static libraries of Intel oneMKL (conda-forge `mkl-static`), and hypre 3.2.0, compiled unmodified from its source archive (SHA-256 `5273205a310fb6aa3ae506ce216760fb67b30e02024874f3cdb8b811e4801de7`) without MPI. It is built with GCC and GNU OpenMP on Linux, and on Windows with Microsoft's C compiler and LLVM OpenMP (hypre runs on one thread there). Intel's license permits redistributing MKL without modification, provided its copyright notice and terms are reproduced; they ship beside `sprung-solve` and in `licenses/`.
 
 Bundling changes only the libraries' search paths (Linux) or install names (macOS), to each program's own folder. Windows builds also include the MinGW-w64 winpthreads runtime (MIT-style license, https://www.mingw-w64.org/), and Microsoft's Visual C++ runtime library `vcruntime140.dll`, which conda-forge's OpenBLAS and `sprung-solve` need, under Microsoft's terms for redistributable Visual C++ runtime files. The Gmsh wheel includes its upstream CAD/mesher implementation unchanged.
 

@@ -11,3 +11,5 @@ dependencies:
   - patchelf
   - mkl-static 2026.*
   - mkl-include 2026.*
+  # hypre's build, for sprung-solve's CG with BoomerAMG.
+  - cmake

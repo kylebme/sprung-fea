@@ -4,7 +4,8 @@ Threads must not change answers beyond round-off, and every direct solver
 the solver build has (PARDISO: Apple Accelerate, or Intel oneMKL's in
 sprung-solve; SPOOLES) must agree. SPOOLES 2.2 as released loses updates
 between threads on Apple silicon and returns wrong answers, so a threaded
-SPOOLES solve is compared too."""
+SPOOLES solve is compared too. So must sprung-solve's conjugate gradients
+with BoomerAMG (hypre), where the build has it."""
 import unittest, sys, os, tempfile, shutil, subprocess
 from pathlib import Path
 from unittest import mock
@@ -116,6 +117,22 @@ class DirectSolvers(unittest.TestCase):
                 self.assertTrue(all(f<1 for f in found['frequencies'][:6]),found['frequencies'])
                 np.testing.assert_allclose(found['frequencies'][6:],reference['frequencies'][6:],rtol=1e-4)
 
+    def test_cg_with_algebraic_multigrid_matches_spooles(self):
+        if not calculix.capabilities().get('amg'): self.skipTest('This CalculiX build has no hypre.')
+        result=solve(self.folder,study(solver='iterative-amg'),8)
+        self.assertIn('BoomerAMG',result['solver'])
+        self.assertIn('SOLVER=PARDISO',(self.folder/'analysis.inp').read_text())
+        log=(self.folder/'solver.log').read_text()
+        # Each direction coarsened apart: CalculiX told the client its numbering.
+        self.assertIn('3 unknowns a node',log)
+        self.assertGreater(result['iterations'],0)
+        # Converged to 1e-8, CG gives the direct answer to the .frd's digits.
+        self.assertSameAnswer(result,self.serial)
+        self.assertLess(result['summary']['forceBalanceError'],1e-5)
+        # Other analyses factor shifted, indefinite matrices: always direct.
+        frequency=solve(self.folder,study(solver='iterative-amg',analysis='frequency',modes=2,loads=[]),8)
+        self.assertNotIn('BoomerAMG',frequency['solver'])
+
     def test_without_a_working_sprung_solve_spooles_solves(self):
         if not calculix.built_capabilities().get('pardisoHelper'):
             self.skipTest('PARDISO is not in sprung-solve here.')
@@ -124,6 +141,42 @@ class DirectSolvers(unittest.TestCase):
             result=solve(self.folder,study(),8)
         self.assertIn('SPOOLES',result['solver'])
         self.assertSameAnswer(result,self.serial)
+
+
+class AlgebraicMultigrid(unittest.TestCase):
+    """CG with BoomerAMG on systems less tidy than the beam's, and its
+    failure, through real CalculiX solves."""
+    def setUp(self):
+        if not calculix.capabilities().get('amg'): self.skipTest('This CalculiX build has no hypre.')
+
+    def test_pinned_holes_solve_as_with_the_direct_solver(self):
+        # Holes pinned in a cylindrical frame: *EQUATION constraints remove
+        # one or two directions of a node, so equations no longer come in
+        # threes, and the bracket is held only just enough.
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp);shutil.copy(ROOT/'samples/bracket.step',folder/'part.step')
+            geo=worker.import_part(folder)
+            s={'material':MATERIAL,'supports':[{'faces':[6,7],'axes':[True,False,True],'frame':'cylinder'}],
+               'loads':[{'kind':'force','faces':[10],'vector':[0,0,-100]}],'masses':[],'meshSize':geo['recommendedSize']}
+            worker.mesh_part(folder,s)
+            direct=solve(folder,s,8)
+            self.assertIn('*EQUATION',(folder/'analysis.inp').read_text())
+            result=solve(folder,{**s,'solver':'iterative-amg'},8)
+            self.assertIn('BoomerAMG',result['solver'])
+            DirectSolvers.assertSameAnswer(self,result,direct)
+
+    def test_pardiso_takes_over_where_cg_stalls(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp);shutil.copy(ROOT/'samples/beam.step',folder/'part.step')
+            worker.import_part(folder);s=study(meshSize=8)
+            worker.mesh_part(folder,s)
+            direct=solve(folder,s,8)
+            # A residual no solve reaches.
+            with mock.patch.dict(os.environ,{'SPRUNG_FEA_SOLVE_TOLERANCE':'1e-30'}):
+                result=solve(folder,{**s,'solver':'iterative-amg'},8)
+            self.assertIn('with PARDISO where CG stalled',result['solver'])
+            self.assertIn('CG with BoomerAMG stalled: 500 iterations',(folder/'solver.log').read_text())
+            DirectSolvers.assertSameAnswer(self,result,direct)
 
 
 class SprungSolve(unittest.TestCase):
@@ -149,6 +202,27 @@ class SprungSolve(unittest.TestCase):
                     out=subprocess.run([helper,str(folder/'A.mtx'),str(folder/'b.mtx')],capture_output=True,text=True,check=True).stdout
                     np.testing.assert_allclose(np.array(out.split(),float),np.linalg.solve(matrix,b),rtol=0,atol=1e-9*np.abs(np.linalg.solve(matrix,b)).max())
 
+    def test_it_solves_positive_definite_matrix_market_systems_with_amg(self):
+        if not calculix.capabilities().get('amg'): self.skipTest('This sprung-solve has no hypre.')
+        # A 3D grid Laplacian with a shift: positive definite.
+        m=12;n=m**3;index=np.arange(n).reshape(m,m,m)
+        rows=[np.arange(n)];columns=[np.arange(n)];values=[np.full(n,6.5)]
+        for axis in range(3):
+            a=np.take(index,range(1,m),axis=axis).ravel();c=np.take(index,range(m-1),axis=axis).ravel()
+            rows.append(a);columns.append(c);values.append(np.full(len(a),-1.))
+        rows,columns,values=map(np.concatenate,(rows,columns,values))
+        matrix=np.zeros((n,n));matrix[rows,columns]=values;matrix[columns,rows]=values
+        b=np.random.default_rng(2).standard_normal(n)
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)
+            (folder/'A.mtx').write_text(f'%%MatrixMarket matrix coordinate real symmetric\n{n} {n} {len(rows)}\n'
+                                        +''.join(f'{r+1} {c+1} {v!r}\n' for r,c,v in zip(rows.tolist(),columns.tolist(),values.tolist())))
+            (folder/'b.mtx').write_text(f'%%MatrixMarket matrix array real general\n{n} 1\n'+''.join(f'{v!r}\n' for v in b.tolist()))
+            done=subprocess.run([calculix.find_helper(),'--amg',str(folder/'A.mtx'),str(folder/'b.mtx')],capture_output=True,text=True,check=True)
+        self.assertIn('CG with BoomerAMG:',done.stderr)
+        expected=np.linalg.solve(matrix,b)
+        np.testing.assert_allclose(np.array(done.stdout.split(),float),expected,rtol=0,atol=1e-9*np.abs(expected).max())
+
 
 class NonlinearContact(unittest.TestCase):
     """A nonlinear, nonsymmetric system: the bolted lap joint tightened, then
@@ -161,17 +235,23 @@ class NonlinearContact(unittest.TestCase):
         import test_contact as joint
         names=list(calculix.direct_solvers())
         if len(names)<2: self.skipTest('This CalculiX build has only SPOOLES.')
+        amg=bool(calculix.capabilities().get('amg'))
         with tempfile.TemporaryDirectory() as temp:
             folder=Path(temp);shutil.copy(ROOT/'samples/bolted-joint.step',folder/'part.step')
             worker.import_part(folder)
             s=joint.study([{'kind':'force','faces':[joint.LOADED],'vector':[3000,0,0]}])
             worker.mesh_part(folder,s)
             results={n:solve(folder,s,8,n) for n in names}
+            if amg:
+                # Friction makes the systems nonsymmetric, which CG cannot
+                # take: sprung-solve factors them with PARDISO.
+                results['amg']=solve(folder,{**s,'solver':'iterative-amg'},8)
+                self.assertIn('CG needs a symmetric matrix',(folder/'solver.log').read_text())
         reference=results.pop('spooles')
         scale=np.abs(reference['displacements']).max()
         for name,result in results.items():
             with self.subTest(solver=name):
-                self.assertIn(calculix.direct_solvers()[name],result['solver'])
+                if name!='amg': self.assertIn(calculix.direct_solvers()[name],result['solver'])
                 # Within the nonlinear iterations' own tolerance.
                 np.testing.assert_allclose(result['displacements'],reference['displacements'],rtol=0,atol=1e-3*scale)
                 for bolt,expected in zip(result['summary']['bolts'],reference['summary']['bolts']):

@@ -126,6 +126,10 @@ class Analysis:
         """(deck keyword, description) of the equation solver this analysis uses."""
         return calculix.solver(study) if self.study_solver else calculix.direct_solver()
 
+    def solver_name(self, study):
+        """The calculix.SOLVERS name of the equation solver this analysis uses."""
+        return calculix.solver_of(study) if self.study_solver else 'direct'
+
     def validate(self, study, mesh):
         calculix.solver_of(study)
         return validate(study, mesh)
@@ -647,7 +651,7 @@ def solve(folder, study):
     context=analysis.deck(folder,study,mesh)
     emit('solving','Solving with CalculiX')
     start=time.monotonic()
-    iterative=calculix.run(folder)
+    iterative=calculix.run(folder,solver=analysis.solver_name(study))
     emit('reading','Reading results')
     frames=calculix.parse_frd(folder/'analysis.frd')
     if not frames:
@@ -659,7 +663,7 @@ def solve(folder, study):
     result['keys']=analysis.key_results(result)
     eigen=result.pop('solverNote',None)=='eigen'
     result.update({'version':SCHEMA,'analysis':analysis.id,
-                   'solver':'CalculiX, '+analysis.solver(study)[1]+(' with ARPACK eigenvalues' if eigen else ''),
+                   'solver':'CalculiX, '+calculix.solver_note(analysis.solver(study)[1],iterative)+(' with ARPACK eigenvalues' if eigen else ''),
                    'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
                    'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']})
     (folder/'result.json').write_text(json.dumps(result))

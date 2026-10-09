@@ -196,7 +196,7 @@ def submodel(folder, study, region):
 
     emit('solving','Solving the region with CalculiX')
     start=time.monotonic()
-    iterative=calculix.run(target)
+    iterative=calculix.run(target,solver=calculix.solver_of(study))
     emit('reading','Reading results')
     frame=calculix.parse_frd(target/'analysis.frd')[-1]
     ids=model.ids
@@ -239,7 +239,7 @@ def submodel(folder, study, region):
                       {'label':'Cut-face stress difference (95th percentile), share of peak','values':[difference*100],'unit':'%'},
                       {'label':'Region faces: cut, original','values':[len(cut_faces),len(faces)-len(cut_faces)],'unit':'','digits':0}],
             'keys':[{'id':'maxStress','label':'Peak stress','unit':'MPa','value':peak,'peak':True}],
-            'solver':'CalculiX, '+calculix.solver(study)[1],
+            'solver':'CalculiX, '+calculix.solver_note(calculix.solver(study)[1],iterative),
             'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
             'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount'],
             'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
