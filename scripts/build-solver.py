@@ -203,23 +203,39 @@ def build_spooles(tc):
     return source,library
 
 
-def msvc_environment():
+# The newest Microsoft compiler toolset CUDA 12.9's nvcc takes: Visual
+# Studio 2022's (14.4x); 2026's (14.5x) it refuses.
+CUDA_MSVC_BELOW=(14,50)
+
+
+def msvc_environment(below=None):
     """Visual Studio's 64-bit C build environment (its vcvars64.bat), for
     sprung-solve on Windows: Intel oneMKL's static libraries are made for
-    Microsoft's compiler."""
+    Microsoft's compiler. The newest compiler toolset installed, or with
+    `below` (a version), the newest older than that, from any Visual Studio
+    installed: one installation can hold several (GitHub's runners do). None
+    when no toolset is old enough."""
     vswhere=Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Microsoft Visual Studio'/'Installer'/'vswhere.exe'
-    found=subprocess.run([str(vswhere),'-latest','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-                          '-find','VC\\Auxiliary\\Build\\vcvars64.bat'],capture_output=True,text=True).stdout.split('\n')[0].strip() if vswhere.is_file() else ''
-    if not found: sys.exit("Visual Studio's C++ build tools were not found; sprung-solve needs them (or pass --without-mkl).")
+    installs=subprocess.run([str(vswhere),'-all','-sort','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                             '-property','installationPath'],capture_output=True,text=True).stdout.splitlines() if vswhere.is_file() else []
+    def version(name):
+        return tuple(int(part) for part in name.split('.') if part.isdigit())
+    toolsets=[(version(tools.name),Path(install),tools.name) for install in filter(None,map(str.strip,installs))
+              for tools in (Path(install)/'VC'/'Tools'/'MSVC').glob('*') if (tools/'bin'/'Hostx64'/'x64'/'cl.exe').is_file()]
+    toolsets=[t for t in toolsets if below is None or t[0]<below]
+    if not toolsets:
+        if below: return None
+        sys.exit("Visual Studio's C++ build tools were not found; sprung-solve needs them (or pass --without-mkl).")
+    _,install,name=max(toolsets)
     # A batch file of its own: cmd's quoting of a command line is unreliable.
     script=work/'msvc-environment.bat'
-    script.write_text(f'@call "{found}" >nul\r\n@set\r\n')
+    script.write_text(f'@call "{install/"VC"/"Auxiliary"/"Build"/"vcvars64.bat"}" -vcvars_ver={name} >nul\r\n@set\r\n')
     listing=subprocess.check_output(['cmd','/d','/c',str(script)],text=True)
     # Upper case, as os.environ has them on Windows: no name twice.
     return {k.upper():v for k,v in (line.split('=',1) for line in listing.splitlines() if '=' in line[1:])}
 
 
-def build_hypre(tc, env, cuda=None):
+def build_hypre(tc, env, cuda=None, unsupported=False):
     """hypre's static library for one process: no MPI, its own BLAS and
     LAPACK (BoomerAMG uses them only on the coarsest level), 32-bit
     indices. Built with sprung-solve's compiler and threaded with OpenMP on
@@ -241,12 +257,12 @@ def build_hypre(tc, env, cuda=None):
         # /openmp:llvm: OpenMP on LLVM's runtime, MKL's, rather than vcomp.
         options+=[*generator,'-DCMAKE_C_COMPILER=cl','-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL','-DOpenMP_RUNTIME_MSVC=llvm']
     else: options+=[f'-DCMAKE_C_COMPILER={tc.cc}']
-    if cuda: options+=gpu_options(tc,cuda)
+    if cuda: options+=gpu_options(tc,cuda,unsupported)
     cached=None
     if hypre_cache:
         # The options name the compilers too, so a cache made with others is
         # not taken.
-        key=hashlib.sha256('\n'.join([sys.platform,*options]).encode()).hexdigest()[:16]
+        key=hashlib.sha256('\n'.join([sys.platform,(env or {}).get('VCTOOLSVERSION',''),*options]).encode()).hexdigest()[:16]
         cached=Path(hypre_cache).resolve()/f'hypre-{HYPRE_VERSION}-{"cuda" if cuda else "cpu"}-{key}'
         if (cached/'include'/'HYPRE.h').is_file():
             print(f'Using hypre {HYPRE_VERSION} built before, in {cached}',flush=True)
@@ -263,7 +279,7 @@ def build_hypre(tc, env, cuda=None):
     return cached
 
 
-def gpu_options(tc, cuda):
+def gpu_options(tc, cuda, unsupported=False):
     """hypre's CMake options for NVIDIA GPUs of the architectures `cuda`.
     Device memory comes from CUDA's own stream-ordered pool
     (cudaMallocAsync), which hypre keeps from returning memory to the
@@ -279,6 +295,8 @@ def gpu_options(tc, cuda):
     options=['-DHYPRE_ENABLE_OPENMP=OFF','-DHYPRE_ENABLE_CUDA=ON',f'-DCMAKE_CUDA_ARCHITECTURES={cuda}',
              f'-DCMAKE_CUDA_COMPILER={tc.tool("nvcc")}','-DHYPRE_ENABLE_UMPIRE=OFF','-DHYPRE_ENABLE_DEVICE_MALLOC_ASYNC=ON',
              '-DHYPRE_ENABLE_CUBLAS=OFF','-DHYPRE_ENABLE_CUSOLVER=OFF']
+    # nvcc refuses a host compiler newer than it knows unless told.
+    if unsupported: options.append('-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler')
     if WINDOWS: return options+['-DCMAKE_CXX_COMPILER=cl',f'-DCUDAToolkit_ROOT={tc.prefix/"Library"}']
     return options+[f'-DCMAKE_CXX_COMPILER={tc.cxx}',f'-DCMAKE_CUDA_HOST_COMPILER={tc.cxx}',f'-DCUDAToolkit_ROOT={tc.prefix}']
 
@@ -296,10 +314,14 @@ def build_helper(tc, cuda=None):
     if not (tc.include/'mkl.h').is_file():
         sys.exit(f'Intel oneMKL was not found in {tc.prefix}: create the environment from native/calculix/solver-env-*.yml, or pass --without-mkl.')
     if WINDOWS:
-        env=msvc_environment()
+        # A compiler nvcc takes, for a GPU build, where one is installed.
+        env=msvc_environment(CUDA_MSVC_BELOW) if cuda else None
+        unsupported=bool(cuda) and env is None
+        if unsupported: print(f'No Visual Studio C++ toolset older than {".".join(map(str,CUDA_MSVC_BELOW))} was found, which CUDA 12.9 needs: building with the newest anyway (-allow-unsupported-compiler).',flush=True)
+        env=env or msvc_environment()
         cl=shutil.which('cl',path=env.get('PATH'))
         if not cl: sys.exit("Visual Studio's C compiler (cl) was not found.")
-        hypre=build_hypre(tc,{**env,'PATH':os.pathsep.join([str(tc.prefix/'Library'/'bin'),env.get('PATH','')])},cuda)
+        hypre=build_hypre(tc,{**env,'PATH':os.pathsep.join([str(tc.prefix/'Library'/'bin'),env.get('PATH','')])},cuda,unsupported)
         exe=out/'sprung-solve.exe'
         gpu=['cusparse.lib','curand.lib','cudart_static.lib'] if cuda else []
         # hypre's threads (build_hypre), on CPUs: /openmp:llvm asks for
