@@ -306,9 +306,15 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
   await expect(
     solvers.getByRole("button", { name: /^Direct\b/ }),
   ).toHaveAttribute("aria-pressed", "true");
-  await solvers
-    .getByRole("button", { name: /^Iterative, incomplete Cholesky/ })
-    .click();
+  // The panel names the solver each choice gives on this computer.
+  const summary = page.locator(".solver-summary");
+  await expect(summary).toContainText(/PARDISO|SPOOLES/);
+  await solvers.getByRole("button", { name: /^Iterative\b/ }).click();
+  await expect(summary).toContainText(/BoomerAMG|incomplete Cholesky/);
+  const hardware = page.getByRole("group", { name: "Hardware" });
+  if (await hardware.isVisible())
+    await hardware.getByRole("button", { name: /^CPU\b/ }).click();
+  const solverName = (await summary.locator("b").textContent()) ?? "";
   await page
     .getByRole("group", { name: "Threads" })
     .getByRole("button", { name: "1", exact: true })
@@ -329,7 +335,7 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
   await expect(inspector(page).locator(".big")).toContainText("0.288");
   await page.getByRole("button", { name: "Checks", exact: true }).click();
   await expect(page.locator(".console")).toContainText(
-    "CalculiX, iterative, incomplete Cholesky",
+    "CalculiX, iterative, " + solverName,
   );
   await expect(
     page.locator(".check-row").filter({ hasText: "Solver iterations" }),
@@ -347,7 +353,7 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
   await expect(
     page
       .getByRole("group", { name: "Solver" })
-      .getByRole("button", { name: /^Iterative, incomplete Cholesky/ }),
+      .getByRole("button", { name: /^Iterative\b/ }),
   ).toHaveAttribute("aria-pressed", "true");
   // The thread count is a machine preference, kept across reloads.
   await expect(
@@ -359,6 +365,54 @@ test("iterative solver: choose, solve, report iterations, and keep the choice", 
     .getByRole("group", { name: "Threads" })
     .getByRole("button", { name: /^Auto/ })
     .click();
+  expect(errors).toEqual([]);
+});
+
+test("GPU: the iterative solver runs on the graphics card where there is one", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const solvers = await (
+    await page.request.get("http://127.0.0.1:5173/api/solvers")
+  ).json();
+  test.skip(!solvers.gpu, "This computer's engine has no working GPU solver.");
+  await page.goto("http://127.0.0.1:5173");
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
+  await page.getByRole("button", { name: "Use example setup" }).click();
+  const hardware = page.getByRole("group", { name: "Hardware" });
+  const gpu = hardware.getByRole("button", { name: /^GPU\b/ });
+  // The direct solver runs on the CPU: the GPU waits for the iterative one.
+  await expect(gpu).toBeDisabled();
+  await page
+    .getByRole("group", { name: "Solver" })
+    .getByRole("button", { name: /^Iterative\b/ })
+    .click();
+  await gpu.click();
+  await expect(gpu).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".solver-summary")).toContainText("on the GPU");
+  await inspector(page)
+    .getByRole("button", { name: "Solve", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "von Mises stress" }),
+  ).toBeVisible({ timeout: 60000 });
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
+  await expect(inspector(page).locator(".big")).toContainText("0.288");
+  await page.getByRole("button", { name: "Checks", exact: true }).click();
+  await expect(page.locator(".console")).toContainText(
+    "CalculiX, iterative, " + solvers.gpu,
+  );
+  // The hardware is a machine preference, kept across reloads.
+  await page.reload();
+  await page.getByRole("button", { name: /^Cantilever beam.*Open$/ }).click();
+  await page.getByRole("button", { name: "Use example setup" }).click();
+  await page
+    .getByRole("group", { name: "Solver" })
+    .getByRole("button", { name: /^Iterative\b/ })
+    .click();
+  await expect(gpu).toHaveAttribute("aria-pressed", "true");
+  await hardware.getByRole("button", { name: /^CPU\b/ }).click();
   expect(errors).toEqual([]);
 });
 test("invalid STEP reports an actionable import error", async ({ page }) => {

@@ -132,6 +132,24 @@ test("STEP → portable project → reopen → real solve → export", async () 
       },
     );
     assert.equal(tooMany.status, 400);
+    // The solvers a study can choose here: the best direct and iterative
+    // ones, and the GPU's where there is one; a solve runs on the CPU or GPU.
+    const solvers = await request(base, "/api/solvers");
+    assert.match(solvers.direct, /PARDISO|SPOOLES/);
+    assert.match(solvers.iterative, /BoomerAMG|incomplete Cholesky/);
+    assert.equal(
+      solvers.iterativeThreaded,
+      /BoomerAMG/.test(solvers.iterative),
+    );
+    const nowhere = await fetch(
+      `${base}/api/documents/${opened.id}/solve?device=tpu`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(study),
+      },
+    );
+    assert.equal(nowhere.status, 400);
     const solving = await request(
       base,
       "/api/documents/" + opened.id + "/solve?threads=" + cpus.logical,

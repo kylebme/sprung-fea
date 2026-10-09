@@ -44,6 +44,10 @@ Find the latest release here: [Releases](https://github.com/kylebme/sprung-fea/r
 | macOS, Apple Silicon | `Sprung-FEA-x.x.x-arm64.dmg` | Open the DMG and drag Sprung FEA to Applications. |
 | Windows, x64 | `Sprung-FEA-Setup-x.x.x.exe` | Run the installer; it installs for your user without administrator rights. |
 | Linux, x64 | `Sprung-FEA-x.x.x-x86_64.AppImage` | Make it executable with `chmod +x Sprung-FEA-0.2.1-x86_64.AppImage`, then run it. |
+| Windows, x64, with an NVIDIA GPU | `Sprung-FEA-Setup-x.x.x-NVIDIA.exe` | As above. |
+| Linux, x64, with an NVIDIA GPU | `Sprung-FEA-x.x.x-x86_64-NVIDIA.AppImage` | As above. |
+
+The **NVIDIA** builds can also run the iterative solver on an NVIDIA graphics card (GeForce GTX 16 or RTX 20 series, or any newer NVIDIA GPU), which is fastest on large meshes. They need NVIDIA's driver, and are larger downloads. Without a card they work exactly as the other builds do, so either is a safe choice.
 
 These builds are unsigned (macOS is ad-hoc signed, without notarization). On macOS, use **System Settings → Privacy & Security → Open Anyway** after the first launch is blocked. On Windows, use **More info → Run anyway** if SmartScreen appears.
 
@@ -66,7 +70,7 @@ The **Examples** on the start screen (a cantilever beam, the mounting bracket fr
    - **Bearing** presses a pin or shaft against the loaded half of a hole.
    - **Rotation** spins the part about an axis (rpm).
 6. **Add masses** (optional). A point mass stands in for something you are not modeling, such as a motor: give its mass, where its center of mass is, and the faces it is bolted to.
-7. **Solve.** Click **Solve** or press ⌘↵ (Ctrl+Enter). The part is meshed automatically. **Medium** mesh is a sensible start; **Preview mesh** shows the elements before you commit.
+7. **Solve.** Click **Solve** or press ⌘↵ (Ctrl+Enter). The part is meshed automatically. **Medium** mesh is a sensible start; **Preview mesh** shows the elements before you commit. Under **Mesh + Solver**, the **Direct** solver suits any study; **Iterative** uses a fraction of the memory and is faster on large meshes. Each uses the fastest solver of its kind on your computer, named below the choice.
 
 Any change to the study clears the old results, so what you see always matches the setup.
 
@@ -113,6 +117,7 @@ The Sprung FEA source code is GPL-3.0-or-later (see [LICENSE](LICENSE)), except 
 
 The prebuilt downloads include separately licensed third-party components, each under its own license:
 - CalculiX, the solver, is GPL-2.0-only and runs as a separate program.
+- The NVIDIA builds also include NVIDIA's CUDA runtime, under NVIDIA's CUDA license, in a second copy of `sprung-solve` that runs on the GPU.
 - The Windows and Linux builds include Intel oneMKL, a proprietary library under the Intel Simplified Software License. It sits inside `sprung-solve`, a separate program that runs the fast PARDISO solver for CalculiX. `sprung-solve` also contains hypre (MIT), for its algebraic multigrid solver.
 
 All components, their licenses and how they fit together are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the license texts ship with the app.

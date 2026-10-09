@@ -16,5 +16,7 @@ dependencies:
   # LLVM's OpenMP, as libiomp5md: MKL's threads in sprung-solve (what
   # conda-forge's Windows MKL runs on).
   - llvm-openmp
-  # hypre's build, for sprung-solve's CG with BoomerAMG.
+  # hypre's build, for sprung-solve's CG with BoomerAMG (Ninja builds it
+  # in parallel).
   - cmake
+  - ninja

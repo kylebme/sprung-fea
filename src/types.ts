@@ -169,9 +169,25 @@ export type Bolt = {
 /** Conditions applied to faces, edited through drafts. */
 export type ConditionKind = "support" | "load" | "mass" | "thermal" | "bolt";
 export type Condition = Support | Load | PointMass | ThermalCondition | Bolt;
-/** CalculiX equation solver: the fastest direct solver the bundled
- * CalculiX has, or preconditioned conjugate gradients. */
-export type Solver = "direct" | "iterative-scaling" | "iterative-cholesky";
+/** Equation solver, each the best of its kind on the computer that solves:
+ * the fastest direct solver the bundled CalculiX has, or preconditioned
+ * conjugate gradients (algebraic multigrid where sprung-solve has it). */
+export type Solver = "direct" | "iterative";
+/**
+ * Where the iterative solver runs, a per-machine preference outside the
+ * study. The GPU is offered where the engine has a GPU build that works.
+ */
+export type Device = "cpu" | "gpu";
+/** What each solver choice gives on this computer (GET /api/solvers). */
+export type SolverOptions = {
+  direct: string;
+  iterative: string;
+  /** Whether the iterative solver threads (multigrid does). */
+  iterativeThreaded: boolean;
+  /** Iterative solver on the GPU, or null without one that works. */
+  gpu: string | null;
+  gpuName: string | null;
+};
 /**
  * Threads for meshing and solving, a per-machine preference outside the
  * study: Auto uses performance cores, All every logical core.

@@ -33,23 +33,20 @@ export const DETAIL_NAMES: Record<Study["detail"], string> = {
   fine: "Fine",
   custom: "Custom",
 };
-export const SOLVERS: { id: Solver; name: string; note: string }[] = [
-  {
-    id: "direct",
-    name: "Direct",
-    note: "Exact factorization on all threads. Most robust; memory grows quickly with mesh size.",
-  },
-  {
-    id: "iterative-cholesky",
-    name: "Iterative, incomplete Cholesky",
-    note: "Conjugate gradients with a strong preconditioner. Much less memory for large meshes.",
-  },
-  {
-    id: "iterative-scaling",
-    name: "Iterative, diagonal scaling",
-    note: "Conjugate gradients with the least memory. Needs more iterations.",
-  },
+export const SOLVERS: { id: Solver; name: string; tagline: string }[] = [
+  { id: "direct", name: "Direct", tagline: "Exact, robust" },
+  { id: "iterative", name: "Iterative", tagline: "Less memory" },
 ];
+/** What the chosen solver does, by the method that answers it here. */
+export const SOLVER_NOTES = {
+  direct:
+    "Factors the stiffness matrix exactly. The safe choice for any study; memory grows quickly with mesh size.",
+  multigrid:
+    "Conjugate gradients with algebraic multigrid, to the direct solver's answer. A fraction of the memory, and faster on large meshes.",
+  cholesky:
+    "Conjugate gradients with incomplete Cholesky, on one thread. Much less memory; answers agree with the direct solver to about 0.1%.",
+  gpu: "Multigrid setup and iterations run on the graphics card; the rest of the solve stays on the CPU. Fastest on large meshes.",
+};
 export const PLOTS: Record<
   Plot,
   { name: string; unit: string; digits: number }

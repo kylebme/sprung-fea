@@ -1,18 +1,20 @@
-# Toolchain and libraries for scripts/build-solver.py --cuda on Linux x64,
+# Toolchain and libraries for scripts/build-solver.py --cuda on Windows x64,
 # which also builds a sprung-solve whose hypre runs on NVIDIA GPUs:
-#   micromamba create -n sprung-solver-cuda -f native/calculix/solver-env-linux-cuda.yml
-# As solver-env-linux.yml, with CUDA 12.9, whose nvcc takes GCC 14 at most.
+#   micromamba create -n sprung-solver-cuda -f native/calculix/solver-env-windows-cuda.yml
+# As solver-env-windows.yml, with CUDA 12.9. nvcc compiles hypre's host
+# code with Visual Studio's C++ compiler, as sprung-solve is built.
 channels: [conda-forge]
 dependencies:
-  - gcc_linux-64 14.*
-  - gxx_linux-64 14.*
-  - gfortran_linux-64 14.*
+  - gcc_win-64
+  - gfortran_win-64
   - arpack 3.9.*
   - libblas=*=*openblas
-  - patchelf
+  - openblas
   - mkl-static 2026.*
   - mkl-include 2026.*
+  - llvm-openmp
   - cmake
+  - ninja
   - cuda-version 12.9.*
   - cuda-nvcc
   - cuda-cudart-dev

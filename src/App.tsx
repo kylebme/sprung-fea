@@ -104,6 +104,8 @@ import {
   type RegionResult,
   type Threads,
   type Cpus,
+  type Device,
+  type SolverOptions,
 } from "./types";
 import {
   atFrame,
@@ -240,6 +242,27 @@ export default function App() {
     } catch {}
     setThreads(next);
   };
+  // Where the iterative solver runs: like threads, a machine preference.
+  const [device, setDevice] = useState<Device>(() =>
+    readStorage("sprung-fea-device") === "gpu" ? "gpu" : "cpu",
+  );
+  const [solvers, setSolvers] = useState<SolverOptions | null>(null);
+  const chooseDevice = (next: Device) => {
+    try {
+      localStorage.setItem("sprung-fea-device", next);
+    } catch {}
+    setDevice(next);
+  };
+  /** Threads and device for a solve of `solved`, as the service takes them. */
+  const machineQuery = (solved: Study) => {
+    const query = new URLSearchParams();
+    const count =
+      threads === "single" ? 1 : threads === "all" && cpus ? cpus.logical : 0;
+    if (count) query.set("threads", String(count));
+    if (device === "gpu" && solvers?.gpu && solved.solver === "iterative")
+      query.set("device", "gpu");
+    return query;
+  };
   const chooseProjection = (next: Projection) => {
     try {
       localStorage.setItem("sprung-fea-projection", next);
@@ -280,6 +303,9 @@ export default function App() {
   useEffect(() => {
     api("/health")
       .then((h) => setCpus(h.cpus))
+      .catch(() => {});
+    api("/solvers")
+      .then(setSolvers)
       .catch(() => {});
   }, []);
   useEffect(() => {
@@ -670,10 +696,7 @@ export default function App() {
       update(next);
     }
     try {
-      const count =
-        threads === "single" ? 1 : threads === "all" && cpus ? cpus.logical : 0;
-      const query = new URLSearchParams();
-      if (count) query.set("threads", String(count));
+      const query = machineQuery(next);
       if (action === "converge") {
         query.set("runs", String(convergeOptions.runs));
         query.set("tolerance", String(convergeOptions.tolerance));
@@ -1007,10 +1030,9 @@ export default function App() {
     const operation = ++sequence.current;
     setError(null);
     try {
-      const count =
-        threads === "single" ? 1 : threads === "all" && cpus ? cpus.logical : 0;
+      const query = machineQuery(study);
       const j = await post(
-        `/documents/${part.id}/submodel${count ? "?threads=" + count : ""}`,
+        `/documents/${part.id}/submodel${query.size ? "?" + query : ""}`,
         { study, region: regionDraft },
       );
       const data = await poll(j.job, "solve");
@@ -1248,6 +1270,9 @@ export default function App() {
             threads={threads}
             cpus={cpus}
             onThreads={chooseThreads}
+            device={device}
+            solvers={solvers}
+            onDevice={chooseDevice}
             onPreview={() => run("mesh")}
             onSolve={() => solveStudy("solve")}
           />

@@ -225,6 +225,8 @@ static double now(void) {
    CalculiX's increments release and remake their handle, and their systems
    are alike. */
 static int stalled;
+/* hypre is set up and can run here: a GPU build needs a GPU (main). */
+static int amg_ready = 1;
 /* solve_amg: CG did not reach the tolerance. */
 #define STALLED 1
 
@@ -317,6 +319,18 @@ static int amg_fits(long long n, long long nnz, char *text, size_t size) {
   {
     size_t available = 0, total = 0;
     double need = 64.0 * (double)full + (double)(512 << 20);
+#ifdef HYPRE_USING_DEVICE_MALLOC_ASYNC
+    /* CUDA's stream-ordered pool (the Windows build's) keeps what earlier
+       systems freed, which the free memory does not count: return it. */
+    {
+      int device = 0;
+      cudaMemPool_t pool;
+      cudaDeviceSynchronize();
+      if (cudaGetDevice(&device) == cudaSuccess &&
+          cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess)
+        cudaMemPoolTrimTo(pool, 0);
+    }
+#endif
     if (cudaMemGetInfo(&available, &total) != cudaSuccess || need > (double)available) {
       snprintf(text, size, "the system needs about %.1f GB on the GPU, which "
                "has %.1f GB free", need / 1e9, (double)available / 1e9);
@@ -545,7 +559,21 @@ static long long upper_triangle(struct system *s, long long **rows_out,
 }
 
 static const char *describe_amg(void) {
-#ifdef HYPRE_USING_GPU
+#if defined(HYPRE_USING_CUDA)
+  /* With the GPU's name, as its driver gives it. */
+  static char name[320];
+  struct cudaDeviceProp properties;
+  int device = 0;
+  if (cudaGetDevice(&device) == cudaSuccess &&
+      cudaGetDeviceProperties(&properties, device) == cudaSuccess)
+    snprintf(name, sizeof name,
+             "hypre " HYPRE_RELEASE_VERSION " CG with BoomerAMG, on the GPU (%s)",
+             properties.name);
+  else
+    snprintf(name, sizeof name,
+             "hypre " HYPRE_RELEASE_VERSION " CG with BoomerAMG, on the GPU");
+  return name;
+#elif defined(HYPRE_USING_GPU)
   return "hypre " HYPRE_RELEASE_VERSION " CG with BoomerAMG, on the GPU";
 #else
   return "hypre " HYPRE_RELEASE_VERSION " CG with BoomerAMG";
@@ -576,7 +604,7 @@ static long long prepare(struct system *s, uint32_t kind, uint32_t method,
   text[0] = 0;
 #ifdef SPRUNG_SOLVE_HYPRE
   if (method == SPRUNG_SOLVE_CG_AMG && kind == SPRUNG_SOLVE_SYMMETRIC &&
-      !stalled && amg_fits(n, nnz, unfit, sizeof unfit)) {
+      amg_ready && !stalled && amg_fits(n, nnz, unfit, sizeof unfit)) {
     release(s);
     s->kind = kind;
     s->n = n;
@@ -595,6 +623,7 @@ static long long prepare(struct system *s, uint32_t kind, uint32_t method,
     /* Why PARDISO, when CG was asked for; unfit says more. */
     const char *note = method != SPRUNG_SOLVE_CG_AMG ? ""
 #ifdef SPRUNG_SOLVE_HYPRE
+                       : !amg_ready ? "; CG needs an NVIDIA GPU, and there is none here"
                        : stalled ? "; CG stalled on an earlier system"
                        : unfit[0] ? "; CG was not used: "
                        : "; CG needs a symmetric matrix";
@@ -783,7 +812,7 @@ static void serve(void) {
       }
       version = asked;
 #ifdef SPRUNG_SOLVE_HYPRE
-      if (version >= 2) {
+      if (version >= 2 && amg_ready) {
         snprintf(text, sizeof text, "%s; %s", describe(), describe_amg());
         reply(0, text);
         break;
@@ -1060,17 +1089,27 @@ static int works(uint32_t method) {
 int main(int argc, char **argv) {
   uint32_t method = SPRUNG_SOLVE_PARDISO;
 #ifdef SPRUNG_SOLVE_HYPRE
-  HYPRE_Initialize();
-#ifdef HYPRE_USING_GPU
-  HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE);
-  HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE);
-  /* hypre's own sparse products: cuSPARSE's took up to three times the
-     memory (6.5 GB against 2 GB at 546,000 equations) and were slower. A
-     small memory pool, grown as needed, rather than 4 GiB up front, which
-     an 8 GB card cannot grow beside. */
-  HYPRE_SetSpGemmUseVendor(0);
-  HYPRE_SetUmpireDevicePoolSize((size_t)256 << 20);
+#ifdef HYPRE_USING_CUDA
+  /* Without an NVIDIA GPU and its driver, a GPU build still runs PARDISO,
+     and offers no CG (amg_ready). */
+  {
+    int devices = 0;
+    if (cudaGetDeviceCount(&devices) != cudaSuccess || devices < 1) amg_ready = 0;
+  }
 #endif
+  if (amg_ready) {
+    HYPRE_Initialize();
+#ifdef HYPRE_USING_GPU
+    HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE);
+    HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE);
+    /* hypre's own sparse products (a build without cuSPARSE has no
+       other): cuSPARSE's took up to three times the memory (6.5 GB against
+       2 GB at 546,000 equations) and were slower. Device memory comes from
+       CUDA's stream-ordered pool, which starts empty and grows, and keeps
+       what is freed (build-solver.py). */
+    HYPRE_SetSpGemmUseVendor(0);
+#endif
+  }
 #endif
   if (argc == 2 && !strcmp(argv[1], "--serve")) {
     serve();
@@ -1084,7 +1123,7 @@ int main(int argc, char **argv) {
     printf("sprung-solve %d: %s\n", SPRUNG_SOLVE_VERSION, describe());
 #ifdef SPRUNG_SOLVE_HYPRE
     /* A second method, offered when it works. */
-    if (works(SPRUNG_SOLVE_CG_AMG)) printf("amg: %s\n", describe_amg());
+    if (amg_ready && works(SPRUNG_SOLVE_CG_AMG)) printf("amg: %s\n", describe_amg());
 #endif
     return 0;
   }

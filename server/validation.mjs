@@ -1,4 +1,14 @@
-export const SOLVERS = ["direct", "iterative-scaling", "iterative-cholesky"];
+/** Equation solvers: `direct` and `iterative` are the fastest of each kind
+ * the engine has here; the others name one iterative solver. */
+export const SOLVERS = [
+  "direct",
+  "iterative",
+  "iterative-amg",
+  "iterative-scaling",
+  "iterative-cholesky",
+];
+/** Where the iterative solver runs, a machine preference. */
+export const DEVICES = ["cpu", "gpu"];
 /** Load kinds; body loads act on the whole part rather than faces. */
 export const LOADS = [
   "force",

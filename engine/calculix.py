@@ -6,11 +6,14 @@ from pathlib import Path
 from cad import threads, emit
 
 # Linear equation solvers a study can choose. `direct` is the fastest exact
-# solver of the CalculiX in use (direct_solver), `iterative-amg` conjugate
-# gradients with algebraic multigrid where sprung-solve has it
-# (amg_solver); studies saved before there was a choice of direct solver
-# name SPOOLES.
+# solver of the CalculiX in use (direct_solver), and `iterative` the best
+# iterative one (iterative_solver): `iterative-amg`, conjugate gradients
+# with algebraic multigrid where sprung-solve has it (amg_solver), else
+# CalculiX's own conjugate gradients with incomplete Cholesky. The others
+# name one iterative solver; studies saved before there was a choice of
+# direct solver name SPOOLES.
 SOLVERS={'direct':None,
+         'iterative':None,
          'iterative-amg':None,
          'iterative-scaling':('ITERATIVE SCALING','iterative, diagonal scaling'),
          'iterative-cholesky':('ITERATIVE CHOLESKY','iterative, incomplete Cholesky')}
@@ -18,11 +21,20 @@ ALIASES={'spooles':'direct'}
 
 
 def solver_of(study):
+    """The SOLVERS name of the study's equation solver, `iterative` resolved
+    to the solver it stands for here."""
     name=study.get('solver') or 'direct'
     name=ALIASES.get(name,name)
     if name not in SOLVERS:
         raise ValueError('Choose the direct solver or one of the iterative solvers.')
-    return name
+    return iterative_solver() if name=='iterative' else name
+
+
+def iterative_solver():
+    """The best iterative solver here: CG with BoomerAMG where sprung-solve
+    has it, which threads and converges in a near-constant number of
+    iterations, else CalculiX's incomplete Cholesky."""
+    return 'iterative-amg' if capabilities().get('amg') else 'iterative-cholesky'
 
 
 def solver(study):
@@ -32,14 +44,38 @@ def solver(study):
     return SOLVERS[name] or direct_solver()
 
 
+def device():
+    """Where CG with BoomerAMG runs: 'gpu' when the service asks for it
+    (SPRUNG_FEA_DEVICE, a per-machine preference) and sprung-solve has a GPU
+    build that works here, else 'cpu'. Other solvers run on the CPU."""
+    asked=os.environ.get('SPRUNG_FEA_DEVICE')=='gpu'
+    return 'gpu' if asked and gpu_amg() else 'cpu'
+
+
 def amg_solver():
     """(deck keyword, description) of conjugate gradients preconditioned by
-    hypre's BoomerAMG: CalculiX's PARDISO calls, which sprung-solve answers
-    with CG instead when run() asks it to (SPRUNG_FEA_SOLVE_METHOD)."""
-    amg=capabilities().get('amg')
+    hypre's BoomerAMG, on the device() it runs on: CalculiX's PARDISO calls,
+    which sprung-solve answers with CG instead when run() asks it to
+    (SPRUNG_FEA_SOLVE_METHOD)."""
+    amg=gpu_amg() if device()=='gpu' else capabilities().get('amg')
     if not amg:
         raise ValueError('This CalculiX has no algebraic multigrid solver (hypre, which sprung-solve carries on Linux and Windows). Choose another solver.')
     return 'PARDISO',f'iterative, {amg}'
+
+
+def solver_options():
+    """What a study's solver choice gives here, for the interface: the
+    direct and the iterative solver's descriptions, whether the iterative
+    one threads, and the description of CG with BoomerAMG on the GPU, or
+    None without a GPU build of sprung-solve that works here."""
+    amg=iterative_solver()=='iterative-amg'
+    gpu=gpu_amg() if amg else None
+    # sprung-solve names the GPU in parentheses.
+    named=re.search(r'on the GPU \((.+)\)$',gpu or '')
+    return {'direct':direct_solver()[1],
+            'iterative':capabilities()['amg'] if amg else 'CalculiX conjugate gradients with incomplete Cholesky',
+            'iterativeThreaded':amg,
+            'gpu':gpu,'gpuName':named[1] if named else None}
 
 
 # CalculiX's direct solvers by the name SPRUNG_FEA_DIRECT_SOLVER takes,
@@ -73,10 +109,11 @@ def capabilities(ccx=None):
     """What the CalculiX executable can do here (built_capabilities), with
     PARDISO, and CG with BoomerAMG ('amg': its description), only where they
     work: on Linux and Windows, where sprung-solve runs them, only when
-    sprung-solve solves with them on this computer."""
+    sprung-solve solves with them on this computer. The GPU build is
+    checked apart (gpu_amg), as starting CUDA takes a while."""
     ccx=ccx or find_ccx()
     found=dict(built_capabilities(ccx))
-    found.pop('amg',None)
+    for key in ('amg','amgGpu','amgGpuHelper'): found.pop(key,None)
     if found.pop('pardisoHelper',None):
         helper=_helper(ccx)
         if not helper: found.pop('pardiso',None)
@@ -84,11 +121,29 @@ def capabilities(ccx=None):
     return found
 
 
+def find_gpu_helper(ccx=None):
+    """The GPU build of sprung-solve (build-solver.py --cuda), when it starts
+    and solves with CG and BoomerAMG here: it needs NVIDIA's driver and a GPU
+    even to start. None otherwise."""
+    path=Path(ccx or find_ccx()).resolve()
+    relative=built_capabilities(path).get('amgGpuHelper')
+    helper=_working_helper(str(path.parent/relative)) if relative else None
+    return helper['path'] if helper and helper['amg'] else None
+
+
+def gpu_amg(ccx=None):
+    """The description of CG with BoomerAMG on the GPU, where it works here."""
+    helper=find_gpu_helper(ccx)
+    return _working_helper(helper)['amg'] if helper else None
+
+
 def built_capabilities(ccx=None):
     """What the CalculiX executable was built with: {'pardiso': backend name;
     'pardisoHelper': sprung-solve, which runs PARDISO, relative to the
     executable's folder; 'amg': the hypre in sprung-solve, for conjugate
-    gradients with BoomerAMG; 'threadSafeSpooles': whether SPOOLES may run
+    gradients with BoomerAMG; 'amgGpuHelper' and 'amgGpu': a second
+    sprung-solve whose hypre runs on NVIDIA GPUs, and that hypre;
+    'threadSafeSpooles': whether SPOOLES may run
     threaded}, each absent when not so. SPOOLES 2.2 as released loses
     updates between threads and returns wrong answers, often on Apple
     silicon and occasionally elsewhere, so it is threaded only in builds
@@ -189,8 +244,9 @@ def run(folder, name='analysis', solver='direct'):
     # stage serial. Assembly and stress recovery give the same answer to
     # round-off at any thread count. SPOOLES is threaded only where it is
     # safe (capabilities). Accelerate follows VECLIB_MAXIMUM_THREADS, and MKL
-    # (in sprung-solve) MKL_NUM_THREADS. OpenMP stays at one thread.
-    # CalculiX's iterative solvers iterate on one thread regardless.
+    # (in sprung-solve) MKL_NUM_THREADS, as does hypre there. OpenMP stays at
+    # one thread in CalculiX. CalculiX's own iterative solvers iterate on one
+    # thread regardless.
     n=str(threads())
     equations=n if capabilities().get('threadSafeSpooles') else '1'
     env={k:v for k,v in os.environ.items() if not k.startswith('CCX_NPROC')}
@@ -200,8 +256,11 @@ def run(folder, name='analysis', solver='direct'):
     for k in ('SPRUNG_FEA_SOLVE','SPRUNG_FEA_SOLVE_METHOD'): env.pop(k,None)
     if find_helper(): env['SPRUNG_FEA_SOLVE']=find_helper()
     # sprung-solve answers CalculiX's PARDISO calls with CG and BoomerAMG,
-    # on MKL_NUM_THREADS threads, to SPRUNG_FEA_SOLVE_TOLERANCE if set.
-    if solver=='iterative-amg': env['SPRUNG_FEA_SOLVE_METHOD']='amg'
+    # on MKL_NUM_THREADS threads, to SPRUNG_FEA_SOLVE_TOLERANCE if set; its
+    # GPU build, on the GPU, when that is asked for (device).
+    if solver=='iterative-amg':
+        env['SPRUNG_FEA_SOLVE_METHOD']='amg'
+        if device()=='gpu': env['SPRUNG_FEA_SOLVE']=find_gpu_helper()
     # No time limit: large models can solve for a long time, and the user can
     # cancel the job.
     log_path=folder/'solver.log'

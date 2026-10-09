@@ -1,5 +1,10 @@
 import express from "express";
-import { validateRegion, validateStudy, RequestError } from "./validation.mjs";
+import {
+  validateRegion,
+  validateStudy,
+  RequestError,
+  DEVICES,
+} from "./validation.mjs";
 import multer from "multer";
 import { execFileSync, spawn } from "node:child_process";
 import os from "node:os";
@@ -124,7 +129,12 @@ export async function createServer({
   };
   const recoveryDir = path.join(dataDir, "recovery");
   const cpus = cores();
-  const run = (cmd, dir, study = {}, threads = cpus.performance) => {
+  const run = (
+    cmd,
+    dir,
+    study = {},
+    { threads = cpus.performance, device = "cpu" } = {},
+  ) => {
     const id = randomUUID();
     const job = {
       id,
@@ -146,6 +156,7 @@ export async function createServer({
         env: {
           ...process.env,
           SPRUNG_FEA_THREADS: String(threads),
+          SPRUNG_FEA_DEVICE: device,
           ...(workerExecutable
             ? {
                 SPRUNG_FEA_CCX: path.join(
@@ -245,6 +256,25 @@ export async function createServer({
     job.status = "cancelled";
     terminate(job.child);
   };
+  // The equation solvers a study can choose on this computer, from the
+  // engine: asked once (it starts the solver helpers, CUDA's included), and
+  // again only after a failure.
+  let solvers = null;
+  const solverOptions = () =>
+    (solvers ??= new Promise((resolve, reject) => {
+      const job = jobs.get(run("solvers", dataDir));
+      const finish = () => {
+        jobs.delete(job.id);
+        if (job.status === "done") return resolve(job.data);
+        solvers = null;
+        reject(
+          new Error(job.error || "The engine did not report its solvers."),
+        );
+      };
+      job.child.on("close", finish);
+      job.child.on("error", finish);
+    }));
+  app.get("/api/solvers", async (_, res) => res.json(await solverOptions()));
   app.get("/api/health", (_, res) =>
     res.json({
       ok: true,
@@ -387,8 +417,8 @@ export async function createServer({
         .json({ error: "A job is already running for this part." });
     validateStudy(action === "submodel" ? req.body?.study : req.body);
     if (action === "submodel") validateRegion(req.body.region);
-    // Threads are a machine preference, not part of the study: CalculiX
-    // gives identical results with any count.
+    // Threads and the device are machine preferences, not part of the
+    // study: results agree to round-off (or the iterative tolerance) on any.
     let threads = cpus.performance;
     if (req.query.threads !== undefined) {
       threads = Number(req.query.threads);
@@ -397,6 +427,9 @@ export async function createServer({
           `Threads must be a whole number from 1 to ${cpus.logical}.`,
         );
     }
+    const device = req.query.device ?? "cpu";
+    if (!DEVICES.includes(device))
+      throw new RequestError("The device must be the CPU or the GPU.");
     let payload = req.body;
     if (action === "converge") {
       // A convergence study solves on 2–6 successively finer meshes until
@@ -411,7 +444,7 @@ export async function createServer({
         );
       payload = { study: req.body, options: { runs, tolerance } };
     }
-    const job = run(action, dir, payload, threads);
+    const job = run(action, dir, payload, { threads, device });
     jobs.get(job).document = id;
     res.json({ job });
   });
