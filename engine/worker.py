@@ -10,7 +10,7 @@ from cad import (emit, threads, initialize, surface_data, write_view, mesh_view,
                  mesh_info, import_part, mesh_part, TET10_ORDER)
 from model import (QUAD, triangle_weights, triangle_vector_weights, tetra_weights,
                    finite, Model)
-from calculix import SOLVERS, solver_of, find_ccx, read_log, parse_frd
+from calculix import SOLVERS, solver_of, solver_options, find_ccx, read_log, parse_frd
 from analyses import ANALYSES, analysis_of, write_deck, solve
 from convergence import converge
 from submodel import submodel
@@ -39,6 +39,8 @@ def main():
     payload=json.loads(sys.stdin.read() or '{}')
     try:
         if command=='import': result=import_part(folder)
+        # The equation solvers a study can choose here (the folder is unused).
+        elif command=='solvers': result=solver_options()
         elif command=='mesh': result=mesh_info(mesh_part(folder,payload))
         elif command=='solve':
             mesh=mesh_info(mesh_part(folder,payload))

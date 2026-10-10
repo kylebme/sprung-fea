@@ -1339,6 +1339,81 @@ svg {
 .icon-button.delete:hover {
   color: var(--danger);
 }
+/* Two choices side by side, each a tile with an icon, a name and what it
+   means (the solver, and the hardware it runs on). */
+.choice {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.choice + .choice {
+  margin-top: 6px;
+}
+.choice button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 7px;
+  row-gap: 1px;
+  padding: 7px 8px;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--input);
+  text-align: left;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
+}
+.choice button:not(:disabled):hover {
+  border-color: var(--line3);
+  background: var(--hover);
+}
+.choice button svg {
+  grid-row: span 2;
+  color: var(--muted);
+}
+.choice button > span {
+  font-size: 12px;
+  font-weight: 500;
+}
+.choice button small {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.choice button.on,
+.choice button.on:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.choice button.on svg {
+  color: var(--accent);
+}
+/* What the choice gives on this computer. */
+.solver-summary {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--raised);
+  box-shadow: inset 2px 0 var(--accent);
+}
+.solver-summary > span {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.solver-summary b {
+  font: 500 11px var(--mono);
+  overflow-wrap: anywhere;
+}
+.solver-summary p {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
 .presets {
   display: grid;
   gap: 2px;

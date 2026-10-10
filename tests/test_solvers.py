@@ -117,6 +117,23 @@ class DirectSolvers(unittest.TestCase):
                 self.assertTrue(all(f<1 for f in found['frequencies'][:6]),found['frequencies'])
                 np.testing.assert_allclose(found['frequencies'][6:],reference['frequencies'][6:],rtol=1e-4)
 
+    def test_iterative_is_the_best_iterative_solver_here(self):
+        # A study chooses direct or iterative, and gets the best of each this
+        # computer has: CG with BoomerAMG where sprung-solve carries hypre,
+        # else CalculiX's incomplete Cholesky.
+        options=calculix.solver_options()
+        amg=options['iterativeThreaded']
+        self.assertEqual(amg,bool(calculix.capabilities().get('amg')))
+        self.assertEqual(options['direct'],calculix.direct_solver()[1])
+        result=solve(self.folder,study(solver='iterative'),8)
+        self.assertIn(options['iterative'] if amg else 'incomplete Cholesky',result['solver'])
+        self.assertGreater(result['iterations'],0)
+        if amg: self.assertSameAnswer(result,self.serial)
+        # The GPU applies to multigrid alone; asked for elsewhere, the CPU solves.
+        with mock.patch.dict(os.environ,{'SPRUNG_FEA_DEVICE':'gpu'}):
+            direct=solve(self.folder,study(),8)
+        self.assertNotIn('GPU',direct['solver'])
+
     def test_cg_with_algebraic_multigrid_matches_spooles(self):
         if not calculix.capabilities().get('amg'): self.skipTest('This CalculiX build has no hypre.')
         result=solve(self.folder,study(solver='iterative-amg'),8)
@@ -177,6 +194,61 @@ class AlgebraicMultigrid(unittest.TestCase):
             self.assertIn('with PARDISO where CG stalled',result['solver'])
             self.assertIn('CG with BoomerAMG stalled: 500 iterations',(folder/'solver.log').read_text())
             DirectSolvers.assertSameAnswer(self,result,direct)
+
+
+class GraphicsCard(unittest.TestCase):
+    """CG with BoomerAMG on an NVIDIA GPU, from the second sprung-solve that
+    build-solver.py --cuda builds, where it works."""
+    def setUp(self):
+        self.gpu=calculix.gpu_amg()
+        if not self.gpu: self.skipTest('No GPU build of sprung-solve works here.')
+
+    def test_the_gpu_gives_the_cpus_answer(self):
+        self.assertIn('on the GPU',calculix.solver_options()['gpu'])
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp);shutil.copy(ROOT/'samples/beam.step',folder/'part.step')
+            worker.import_part(folder);s={**study(meshSize=4),'solver':'iterative'}
+            worker.mesh_part(folder,s)
+            cpu=solve(folder,s,8)
+            self.assertNotIn('GPU',cpu['solver'])
+            with mock.patch.dict(os.environ,{'SPRUNG_FEA_DEVICE':'gpu'}):
+                gpu=solve(folder,s,8)
+            self.assertEqual(gpu['solver'],'CalculiX, iterative, '+self.gpu)
+            log=(folder/'solver.log').read_text()
+            self.assertIn('on the GPU',log)
+            self.assertIn('3 unknowns a node',log)
+            DirectSolvers.assertSameAnswer(self,gpu,cpu)
+
+
+class WithoutAGraphicsCard(unittest.TestCase):
+    """The NVIDIA builds on a computer with no NVIDIA GPU (none visible to
+    CUDA): the GPU sprung-solve starts and runs PARDISO alone, and the
+    iterative solver is BoomerAMG on the CPU, even when the GPU is asked
+    for."""
+    def setUp(self):
+        if not calculix.built_capabilities().get('amgGpuHelper'):
+            self.skipTest('This solver has no GPU build of sprung-solve.')
+        hidden=mock.patch.dict(os.environ,{'CUDA_VISIBLE_DEVICES':'-1'})
+        hidden.start();self.addCleanup(hidden.stop)
+        # What was found with the GPU visible no longer holds.
+        calculix._working_helper.cache_clear();self.addCleanup(calculix._working_helper.cache_clear)
+
+    def test_boomeramg_runs_on_the_cpu(self):
+        path=Path(calculix.find_ccx()).resolve().parent/calculix.built_capabilities()['amgGpuHelper']
+        version=subprocess.run([str(path),'--version'],capture_output=True,text=True,check=True).stdout
+        self.assertTrue(version.startswith(calculix.HELPER_BANNER),version)
+        self.assertNotIn('amg:',version)
+        options=calculix.solver_options()
+        self.assertIsNone(options['gpu'])
+        self.assertIn('BoomerAMG',options['iterative'])
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp);shutil.copy(ROOT/'samples/beam.step',folder/'part.step')
+            worker.import_part(folder);s={**study(meshSize=4),'solver':'iterative'}
+            worker.mesh_part(folder,s)
+            with mock.patch.dict(os.environ,{'SPRUNG_FEA_DEVICE':'gpu'}):
+                result=solve(folder,s,8)
+        self.assertEqual(result['solver'],'CalculiX, iterative, '+options['iterative'])
+        self.assertGreater(result['iterations'],0)
 
 
 class SprungSolve(unittest.TestCase):

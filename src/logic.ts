@@ -31,11 +31,14 @@ export function normalizeStudy(study: Study): Study {
     ...study,
     analysis: study.analysis ?? "static",
     // The direct solver was named after SPOOLES before it had a choice of
-    // backends.
+    // backends; studies saved before the choice was direct or iterative
+    // named one iterative solver.
     solver:
       !study.solver || (study.solver as string) === "spooles"
         ? "direct"
-        : study.solver,
+        : study.solver.startsWith("iterative")
+          ? "iterative"
+          : study.solver,
     masses: study.masses ?? [],
     thermal: study.thermal ?? [],
   };

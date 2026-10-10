@@ -38,6 +38,25 @@ jobs:
             solver: linux
             package: package:linux
             artifact: release/*.AppImage
+          # The NVIDIA builds also carry a sprung-solve whose hypre runs on
+          # NVIDIA GPUs, used where one works; the runners have none, so
+          # their tests solve as the other builds do. CUDA code for Turing
+          # (with PTX, which newer GPUs compile when they first load it),
+          # Ampere, Ada and Blackwell.
+          - name: Windows (x64, NVIDIA)
+            os: windows-latest
+            solver: windows-cuda
+            cuda: 75;86-real;89-real;120-real
+            package: package:win:nvidia
+            artifact: release/*.exe
+            variant: -nvidia
+          - name: Linux (x64, NVIDIA)
+            os: ubuntu-22.04
+            solver: linux-cuda
+            cuda: 75;86-real;89-real;120-real
+            package: package:linux:nvidia
+            artifact: release/*.AppImage
+            variant: -nvidia
     env:
       # Unsigned builds: no certificate lookup, no publishing.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -68,10 +87,32 @@ jobs:
           init-shell: none
           cache-environment: true
 
+      # hypre for CUDA takes hours to compile on a runner: keep it between
+      # runs, saved as soon as it is built. build-solver.py names each build
+      # by its options, so a cache made with other options is not used.
+      - name: Restore hypre for CUDA
+        if: matrix.cuda
+        uses: actions/cache/restore@v4
+        with:
+          path: .sprung-fea/hypre-cache
+          key: hypre-${{ matrix.solver }}-${{ hashFiles(format('native/calculix/solver-env-{0}.yml', matrix.solver)) }}-${{ github.sha }}
+          restore-keys: hypre-${{ matrix.solver }}-${{ hashFiles(format('native/calculix/solver-env-{0}.yml', matrix.solver)) }}-
+
       - name: Build CalculiX
+        env:
+          CUDA_ARCHITECTURES: ${{ matrix.cuda }}
         run: |
           if [ "$RUNNER_OS" = Windows ]; then python -m pip install pefile; fi
-          python scripts/build-solver.py --prefix "$MAMBA_ROOT_PREFIX/envs/sprung-solver"
+          gpu=()
+          if [ -n "$CUDA_ARCHITECTURES" ]; then gpu=(--cuda "$CUDA_ARCHITECTURES" --hypre-cache .sprung-fea/hypre-cache); fi
+          python scripts/build-solver.py --prefix "$MAMBA_ROOT_PREFIX/envs/sprung-solver" "${gpu[@]}"
+
+      - name: Save hypre for CUDA
+        if: matrix.cuda && always()
+        uses: actions/cache/save@v4
+        with:
+          path: .sprung-fea/hypre-cache
+          key: hypre-${{ matrix.solver }}-${{ hashFiles(format('native/calculix/solver-env-{0}.yml', matrix.solver)) }}-${{ github.sha }}
 
       - name: Install Linux build tools
         if: runner.os == 'Linux'
@@ -103,6 +144,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sprung-fea-${{ runner.os }}
+          name: sprung-fea-${{ runner.os }}${{ matrix.variant }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error

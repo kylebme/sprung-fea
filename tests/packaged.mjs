@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { createServer } from "../server/index.mjs";
 const resources = path.resolve(
   {
@@ -88,11 +89,12 @@ try {
     detail: "medium",
     solver: "direct",
   };
-  const solve = async (s) =>
+  const solve = async (s, query = "") =>
     (
       await wait(
         base,
-        (await request(base, `/api/documents/${imported.id}/solve`, s)).job,
+        (await request(base, `/api/documents/${imported.id}/solve${query}`, s))
+          .job,
       )
     ).result;
   const static_ = await solve(study);
@@ -113,6 +115,30 @@ try {
   assert.equal(modal.analysis, "frequency");
   assert.match(modal.solver, /PARDISO/, modal.solver);
   console.log(`Frequency solve: ok (${modal.solver})`);
+  // The iterative solver: CG with BoomerAMG in sprung-solve on Windows and
+  // Linux, on the CPU. The NVIDIA build also carries a GPU sprung-solve,
+  // used where an NVIDIA GPU works; elsewhere (CI's runners) a GPU solve
+  // runs BoomerAMG on the CPU.
+  const solvers = await request(base, "/api/solvers");
+  const nvidia = existsSync(
+    path.join(resources, "runtime", "solver", "sprung-solve-gpu"),
+  );
+  if (process.platform !== "darwin")
+    assert.match(solvers.iterative, /BoomerAMG/, solvers.iterative);
+  const iterative = await solve(
+    { ...study, solver: "iterative" },
+    nvidia ? "?device=gpu" : "",
+  );
+  assert.ok(
+    Math.abs(iterative.summary.maxMovement / movement - 1) < 1e-4,
+    `Iterative movement ${iterative.summary.maxMovement} mm`,
+  );
+  if (nvidia && solvers.gpu)
+    assert.match(iterative.solver, /on the GPU/, iterative.solver);
+  else assert.doesNotMatch(iterative.solver, /GPU/, iterative.solver);
+  console.log(
+    `Iterative solve${nvidia ? ", asked for on the GPU" : ""}: ${iterative.iterations} iterations (${iterative.solver})`,
+  );
 } finally {
   await service.close();
   await fs.rm(dir, { recursive: true, force: true });

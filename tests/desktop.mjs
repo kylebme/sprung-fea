@@ -1,13 +1,23 @@
 import { _electron as electron, expect } from "@playwright/test";
 import path from "node:path";
 import { configureComplexPart } from "./complex-workflow.mjs";
+// The packaged app (npm run package:mac, package:win or package:linux), with
+// only the operating system's own programs on PATH.
 const executable = path.resolve(
-  "release/mac-arm64/Sprung FEA.app/Contents/MacOS/Sprung FEA",
+  {
+    darwin: "release/mac-arm64/Sprung FEA.app/Contents/MacOS/Sprung FEA",
+    win32: "release/win-unpacked/Sprung FEA.exe",
+    linux: "release/linux-unpacked/sprung-fea",
+  }[process.platform],
 );
+const system =
+  process.platform === "win32"
+    ? `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}`
+    : "/usr/bin:/bin";
 const app = await electron.launch({
   executablePath: executable,
   timeout: 60000,
-  env: { ...process.env, PATH: "/usr/bin:/bin" },
+  env: { ...process.env, PATH: system },
 });
 try {
   const page = await app.firstWindow();
@@ -24,7 +34,7 @@ try {
   await expect(
     page.getByRole("heading", { name: "von Mises stress" }),
   ).toBeVisible({ timeout: 60000 });
-  await page.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.getByRole("radio", { name: "Displacement", exact: true }).click();
   await expect(inspector.locator(".big")).toContainText("0.288");
   await page.getByRole("button", { name: "Show in view" }).click();
   await expect(page.locator(".probe-card")).toContainText("Node");

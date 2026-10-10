@@ -16,6 +16,8 @@
     "dist:mac": "npm run package:mac && electron-builder --prepackaged 'release/mac-arm64/Sprung FEA.app' --mac dmg --publish never",
     "package:win": "npm run build && npm run bundle:engine:win && electron-builder --win nsis --publish never",
     "package:linux": "npm run build && npm run bundle:engine && electron-builder --linux AppImage --publish never",
+    "package:win:nvidia": "npm run build && npm run bundle:engine:win -- --gpu && electron-builder --win nsis --publish never -c.nsis.artifactName=Sprung-FEA-Setup-${version}-NVIDIA.${ext}",
+    "package:linux:nvidia": "npm run build && npm run bundle:engine -- --gpu && electron-builder --linux AppImage --publish never -c.linux.artifactName=Sprung-FEA-\\${version}-\\${arch}-NVIDIA.\\${ext}",
     "build:solver": "python3 scripts/build-solver.py",
     "bundle:engine": ".venv/bin/python scripts/bundle-runtime.py",
     "bundle:engine:win": ".venv\\Scripts\\python.exe scripts/bundle-runtime.py",

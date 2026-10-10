@@ -28,9 +28,11 @@ sprung-solve also links hypre (Apache-2.0 or MIT), built from source here
 without MPI, for an iterative solver on Linux and Windows: conjugate
 gradients preconditioned by BoomerAMG algebraic multigrid, which CalculiX
 reaches through the same PARDISO calls (SPRUNG_FEA_SOLVE_METHOD=amg).
---cuda (Linux, experimental) builds hypre for NVIDIA GPUs instead, from
-native/calculix/solver-env-linux-cuda.yml: sprung-solve then needs NVIDIA's
-driver and GPU to start at all, so it is for development, not shipping."""
+--cuda also builds a second sprung-solve, whose hypre runs on NVIDIA GPUs,
+into solver/sprung-solve-gpu/, from native/calculix/solver-env-linux-cuda.yml
+or solver-env-windows-cuda.yml, for the app's NVIDIA builds. Without an
+NVIDIA GPU it runs PARDISO alone, and the engine offers the GPU only where
+it solves with it."""
 import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tarfile, urllib.request
 from pathlib import Path
 
@@ -68,6 +70,8 @@ MAC,WINDOWS=sys.platform=='darwin',sys.platform=='win32'
 # on.
 LENIENT=[f'-Wno-error={w}' for w in ('implicit-function-declaration','implicit-int','int-conversion','incompatible-pointer-types')]
 jobs=os.cpu_count() or 4
+# --hypre-cache: where built hypres are kept and found again (build_hypre).
+hypre_cache=None
 
 
 def fetch(name):
@@ -199,50 +203,102 @@ def build_spooles(tc):
     return source,library
 
 
-def msvc_environment():
+# The newest Microsoft compiler toolset CUDA 12.9's nvcc takes: Visual
+# Studio 2022's (14.4x); 2026's (14.5x) it refuses.
+CUDA_MSVC_BELOW=(14,50)
+
+
+def msvc_environment(below=None):
     """Visual Studio's 64-bit C build environment (its vcvars64.bat), for
     sprung-solve on Windows: Intel oneMKL's static libraries are made for
-    Microsoft's compiler."""
+    Microsoft's compiler. The newest compiler toolset installed, or with
+    `below` (a version), the newest older than that, from any Visual Studio
+    installed: one installation can hold several (GitHub's runners do). None
+    when no toolset is old enough."""
     vswhere=Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Microsoft Visual Studio'/'Installer'/'vswhere.exe'
-    found=subprocess.run([str(vswhere),'-latest','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-                          '-find','VC\\Auxiliary\\Build\\vcvars64.bat'],capture_output=True,text=True).stdout.split('\n')[0].strip() if vswhere.is_file() else ''
-    if not found: sys.exit("Visual Studio's C++ build tools were not found; sprung-solve needs them (or pass --without-mkl).")
+    installs=subprocess.run([str(vswhere),'-all','-sort','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                             '-property','installationPath'],capture_output=True,text=True).stdout.splitlines() if vswhere.is_file() else []
+    def version(name):
+        return tuple(int(part) for part in name.split('.') if part.isdigit())
+    toolsets=[(version(tools.name),Path(install),tools.name) for install in filter(None,map(str.strip,installs))
+              for tools in (Path(install)/'VC'/'Tools'/'MSVC').glob('*') if (tools/'bin'/'Hostx64'/'x64'/'cl.exe').is_file()]
+    toolsets=[t for t in toolsets if below is None or t[0]<below]
+    if not toolsets:
+        if below: return None
+        sys.exit("Visual Studio's C++ build tools were not found; sprung-solve needs them (or pass --without-mkl).")
+    _,install,name=max(toolsets)
     # A batch file of its own: cmd's quoting of a command line is unreliable.
     script=work/'msvc-environment.bat'
-    script.write_text(f'@call "{found}" >nul\r\n@set\r\n')
+    script.write_text(f'@call "{install/"VC"/"Auxiliary"/"Build"/"vcvars64.bat"}" -vcvars_ver={name} >nul\r\n@set\r\n')
     listing=subprocess.check_output(['cmd','/d','/c',str(script)],text=True)
     # Upper case, as os.environ has them on Windows: no name twice.
     return {k.upper():v for k,v in (line.split('=',1) for line in listing.splitlines() if '=' in line[1:])}
 
 
-def build_hypre(tc, env, cuda=None):
+def build_hypre(tc, env, cuda=None, unsupported=False):
     """hypre's static library for one process: no MPI, its own BLAS and
     LAPACK (BoomerAMG uses them only on the coarsest level), 32-bit
-    indices. Built with sprung-solve's compiler: GCC on Linux, threaded with
-    OpenMP on GNU's runtime, which MKL's threads use too; Microsoft's on
-    Windows (in `env`), on one thread, as MKL threads there on LLVM's
-    runtime, which Microsoft's /openmp code does not call. With `cuda` (GPU
-    architectures, as CMake takes them), for NVIDIA GPUs, with LLNL's Umpire
-    memory pool (MIT), which hypre's build downloads. Returns the folder it
-    is installed in, with include/ and lib/."""
-    source=work/'hypre';source.mkdir()
+    indices. Built with sprung-solve's compiler and threaded with OpenMP on
+    the runtime MKL's threads use: GCC and GNU's runtime on Linux;
+    Microsoft's compiler on Windows (in `env`) with /openmp:llvm, whose code
+    calls LLVM's runtime (libiomp5md), where plain /openmp's would call
+    Microsoft's own (vcomp). With `cuda` (GPU architectures, as CMake takes
+    them), for NVIDIA GPUs (gpu_options). Returns the folder it is installed
+    in, with include/ and lib/: under --hypre-cache, a build made before
+    with the same options when there is one."""
+    found=os.pathsep.join([str(tc.bin),str(tc.prefix/'Library'/'bin')])
+    cmake=shutil.which('cmake',path=found)
+    if not cmake: sys.exit(f'cmake was not found in {tc.prefix}: create the environment from native/calculix/solver-env-*.yml.')
+    options=['-DCMAKE_BUILD_TYPE=Release','-DBUILD_SHARED_LIBS=OFF','-DHYPRE_ENABLE_MPI=OFF','-DHYPRE_ENABLE_OPENMP=ON']
+    if WINDOWS:
+        # Ninja builds in parallel; NMake, one file at a time.
+        ninja=shutil.which('ninja',path=found)
+        generator=['-G','Ninja',f'-DCMAKE_MAKE_PROGRAM={ninja}'] if ninja else ['-G','NMake Makefiles']
+        # /openmp:llvm: OpenMP on LLVM's runtime, MKL's, rather than vcomp.
+        options+=[*generator,'-DCMAKE_C_COMPILER=cl','-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL','-DOpenMP_RUNTIME_MSVC=llvm']
+    else: options+=[f'-DCMAKE_C_COMPILER={tc.cc}']
+    if cuda: options+=gpu_options(tc,cuda,unsupported)
+    cached=None
+    if hypre_cache:
+        # The options name the compilers too, so a cache made with others is
+        # not taken.
+        key=hashlib.sha256('\n'.join([sys.platform,(env or {}).get('VCTOOLSVERSION',''),*options]).encode()).hexdigest()[:16]
+        cached=Path(hypre_cache).resolve()/f'hypre-{HYPRE_VERSION}-{"cuda" if cuda else "cpu"}-{key}'
+        if (cached/'include'/'HYPRE.h').is_file():
+            print(f'Using hypre {HYPRE_VERSION} built before, in {cached}',flush=True)
+            return cached
+    source=work/('hypre-cuda' if cuda else 'hypre');source.mkdir()
     extract(fetch('hypre'),source)
     build,install=source/'build',source/'install'
-    cmake=shutil.which('cmake',path=os.pathsep.join([str(tc.bin),str(tc.prefix/'Library'/'bin')]))
-    if not cmake: sys.exit(f'cmake was not found in {tc.prefix}: create the environment from native/calculix/solver-env-*.yml.')
-    options=['-DCMAKE_BUILD_TYPE=Release','-DBUILD_SHARED_LIBS=OFF','-DHYPRE_ENABLE_MPI=OFF',
-             f'-DHYPRE_ENABLE_OPENMP={"OFF" if WINDOWS else "ON"}',f'-DCMAKE_INSTALL_PREFIX={install}']
-    if WINDOWS: options+=['-G','NMake Makefiles','-DCMAKE_C_COMPILER=cl','-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL']
-    else: options+=[f'-DCMAKE_C_COMPILER={tc.cc}']
-    if cuda:
-        options+=['-DHYPRE_ENABLE_OPENMP=OFF','-DHYPRE_ENABLE_CUDA=ON','-DHYPRE_BUILD_UMPIRE=ON','-DHYPRE_ENABLE_UMPIRE_DEVICE=ON',
-                  f'-DCMAKE_CUDA_ARCHITECTURES={cuda}',f'-DCMAKE_CXX_COMPILER={tc.cxx}',f'-DCMAKE_CUDA_COMPILER={tc.tool("nvcc")}',
-                  f'-DCMAKE_CUDA_HOST_COMPILER={tc.cxx}',f'-DCUDAToolkit_ROOT={tc.prefix}']
     print(f'Building hypre {HYPRE_VERSION}'+(f' for CUDA ({cuda})' if cuda else ''),flush=True)
-    run(cmake,'-S',source/f'hypre-{HYPRE_VERSION}'/'src','-B',build,*options,env=env,quiet=True)
+    run(cmake,'-S',source/f'hypre-{HYPRE_VERSION}'/'src','-B',build,*options,f'-DCMAKE_INSTALL_PREFIX={install}',env=env,quiet=True)
     run(cmake,'--build',build,'--parallel',str(jobs),env=env,quiet=True)
     run(cmake,'--install',build,env=env,quiet=True)
-    return install
+    if not cached: return install
+    shutil.rmtree(cached,ignore_errors=True);shutil.copytree(install,cached)
+    return cached
+
+
+def gpu_options(tc, cuda, unsupported=False):
+    """hypre's CMake options for NVIDIA GPUs of the architectures `cuda`.
+    Device memory comes from CUDA's own stream-ordered pool
+    (cudaMallocAsync), which hypre keeps from returning memory to the
+    device: it starts empty and grows, and needs no other library. (LLNL's
+    Umpire, which hypre would otherwise download in whatever version is
+    newest, does not build with Microsoft's compiler.) hypre's own kernels
+    stand in for cuBLAS (vector operations) and cuSOLVER (the coarsest
+    level, a few dozen unknowns), which BoomerAMG with l1 Jacobi does not
+    need and which would add 1 GB beside sprung-solve. hypre 3.2.0 does
+    not build for CUDA without cuSPARSE or cuRAND, so they stay, with the
+    JIT linker cuSPARSE loads (nvJitLink). CUDA's runtime is linked
+    statically."""
+    options=['-DHYPRE_ENABLE_OPENMP=OFF','-DHYPRE_ENABLE_CUDA=ON',f'-DCMAKE_CUDA_ARCHITECTURES={cuda}',
+             f'-DCMAKE_CUDA_COMPILER={tc.tool("nvcc")}','-DHYPRE_ENABLE_UMPIRE=OFF','-DHYPRE_ENABLE_DEVICE_MALLOC_ASYNC=ON',
+             '-DHYPRE_ENABLE_CUBLAS=OFF','-DHYPRE_ENABLE_CUSOLVER=OFF']
+    # nvcc refuses a host compiler newer than it knows unless told.
+    if unsupported: options.append('-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler')
+    if WINDOWS: return options+['-DCMAKE_CXX_COMPILER=cl',f'-DCUDAToolkit_ROOT={tc.prefix/"Library"}']
+    return options+[f'-DCMAKE_CXX_COMPILER={tc.cxx}',f'-DCMAKE_CUDA_HOST_COMPILER={tc.cxx}',f'-DCUDAToolkit_ROOT={tc.prefix}']
 
 
 def build_helper(tc, cuda=None):
@@ -250,32 +306,40 @@ def build_helper(tc, cuda=None):
     calls go to on Linux and Windows, with Intel oneMKL's PARDISO and hypre
     linked statically: one file that holds what they use, and the OpenMP
     runtime beside it (GNU's on Linux, LLVM's libiomp5md on Windows). With
-    `cuda`, hypre runs on the GPU (build_hypre), with CUDA's libraries
-    beside it. Returns the executable and the folders of its libraries."""
+    `cuda`, hypre runs on the GPU (gpu_options), with CUDA's runtime linked
+    in and cuSPARSE beside it. Returns the executable and the folders of its
+    libraries."""
     source=root/'native'/'sprung-solve'/'sprung_solve.c'
-    out=work/'sprung-solve';out.mkdir()
+    out=work/('sprung-solve-gpu' if cuda else 'sprung-solve');out.mkdir()
     if not (tc.include/'mkl.h').is_file():
         sys.exit(f'Intel oneMKL was not found in {tc.prefix}: create the environment from native/calculix/solver-env-*.yml, or pass --without-mkl.')
     if WINDOWS:
-        env=msvc_environment()
+        # A compiler nvcc takes, for a GPU build, where one is installed.
+        env=msvc_environment(CUDA_MSVC_BELOW) if cuda else None
+        unsupported=bool(cuda) and env is None
+        if unsupported: print(f'No Visual Studio C++ toolset older than {".".join(map(str,CUDA_MSVC_BELOW))} was found, which CUDA 12.9 needs: building with the newest anyway (-allow-unsupported-compiler).',flush=True)
+        env=env or msvc_environment()
         cl=shutil.which('cl',path=env.get('PATH'))
         if not cl: sys.exit("Visual Studio's C compiler (cl) was not found.")
-        hypre=build_hypre(tc,{**env,'PATH':os.pathsep.join([str(tc.prefix/'Library'/'bin'),env.get('PATH','')])})
+        hypre=build_hypre(tc,{**env,'PATH':os.pathsep.join([str(tc.prefix/'Library'/'bin'),env.get('PATH','')])},cuda,unsupported)
         exe=out/'sprung-solve.exe'
-        run(cl,'/nologo','/O2','/MD','/W3','/DSPRUNG_SOLVE_HYPRE',f'/I{tc.include}',f'/I{hypre/"include"}',source,
-            f'/Fe{exe}',f'/Fo{out}\\','/link',f'/LIBPATH:{tc.lib}',hypre/'lib'/'HYPRE.lib',
-            'mkl_intel_lp64.lib','mkl_intel_thread.lib','mkl_core.lib','libiomp5md.lib',cwd=out,env=env)
+        gpu=['cusparse.lib','curand.lib','cudart_static.lib'] if cuda else []
+        # hypre's threads (build_hypre), on CPUs: /openmp:llvm asks for
+        # LIBOMP, which is the environment's libiomp5md here, as for MKL.
+        openmp=[] if cuda else ['/openmp:llvm']
+        run(cl,'/nologo','/O2','/MD','/W3','/DSPRUNG_SOLVE_HYPRE',*openmp,f'/I{tc.include}',f'/I{hypre/"include"}',source,
+            f'/Fe{exe}',f'/Fo{out}\\','/link',f'/LIBPATH:{tc.lib}',hypre/'lib'/'HYPRE.lib',*gpu,
+            'mkl_intel_lp64.lib','mkl_intel_thread.lib','mkl_core.lib','/NODEFAULTLIB:libomp.lib','libiomp5md.lib',cwd=out,env=env)
         return exe,[tc.bin,tc.prefix]
     hypre=build_hypre(tc,tc.env,cuda)
     exe=out/'sprung-solve'
     lib=tc.lib
     gpu=[]
     if cuda:
-        # Umpire and what it uses; CUDA's libraries; hypre's C++ runtime.
+        # cuSPARSE; CUDA's runtime, statically; hypre's C++ runtime (the link
+        # is g++'s).
         cudalib=tc.prefix/'targets'/'x86_64-linux'
-        gpu=[*(hypre/'lib'/f'lib{n}.a' for n in ('umpire','camp','fmt') if (hypre/'lib'/f'lib{n}.a').is_file()),
-             f'-I{cudalib/"include"}',f'-L{cudalib/"lib"}',f'-L{lib}','-lcusparse','-lcublas','-lcublasLt','-lcurand','-lcusolver','-lcudart',
-             f'-Wl,-rpath,{cudalib/"lib"}']
+        gpu=[f'-I{cudalib/"include"}',f'-L{cudalib/"lib"}','-lcusparse','-lcurand','-lcudart_static','-lrt',f'-Wl,-rpath,{cudalib/"lib"}']
     run(tc.cxx if cuda else tc.cc,'-O2','-DSPRUNG_SOLVE_HYPRE',*([] if cuda else ['-Wall']),f'-I{tc.include}',f'-I{hypre/"include"}',
         *(['-x','c',source,'-x','none'] if cuda else [source]),'-o',exe,
         hypre/'lib'/'libHYPRE.a',*gpu,'-Wl,--start-group',lib/'libmkl_intel_lp64.a',lib/'libmkl_gnu_thread.a',lib/'libmkl_core.a','-Wl,--end-group',
@@ -384,13 +448,17 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--prefix',help='the conda-forge build environment (default: CONDA_PREFIX)')
     parser.add_argument('--without-mkl',action='store_true',help='do not build sprung-solve: no PARDISO on Linux and Windows')
+    parser.add_argument('--hypre-cache',metavar='DIR',
+                        help='keep each hypre built in DIR, and use it again while its options are the same (for CI)')
     parser.add_argument('--cuda',nargs='?',const='native',metavar='ARCH',
-                        help='Linux, experimental: hypre on NVIDIA GPUs of these CUDA architectures (default: this computer\'s); needs native/calculix/solver-env-linux-cuda.yml')
+                        help='Linux and Windows, experimental: also a sprung-solve whose hypre runs on NVIDIA GPUs of these CUDA architectures (default: this computer\'s); needs native/calculix/solver-env-<platform>-cuda.yml')
     args=parser.parse_args()
+    global hypre_cache
+    hypre_cache=args.hypre_cache
     if not (MAC and os.uname().machine=='arm64' or WINDOWS or sys.platform.startswith('linux')):
         sys.exit('build-solver.py builds for Apple silicon, Linux x64 and Windows x64.')
-    if args.cuda and (MAC or WINDOWS or args.without_mkl):
-        sys.exit('--cuda builds sprung-solve on Linux.')
+    if args.cuda and (MAC or args.without_mkl):
+        sys.exit('--cuda builds sprung-solve, on Linux and Windows.')
     prefix=args.prefix or os.environ.get('CONDA_PREFIX')
     if not prefix: sys.exit('Pass --prefix with the build environment, created from native/calculix/solver-env-*.yml.')
     tc=Toolchain(Path(prefix).resolve())
@@ -404,15 +472,26 @@ def main():
     from solverlibs import relocate
     exe=relocate(executable,target,folders)
     if not MAC and not args.without_mkl:
-        helper,helper_folders=build_helper(tc,args.cuda)
-        # A folder of its own, with its licenses: MIT, and Intel's for MKL.
-        place=target/'sprung-solve'
-        relocate(helper,place,helper_folders,check=('--version',HELPER_BANNER))
-        for name in ('sprung-solve.txt','Intel-oneMKL.txt','Intel-oneMKL-third-party-programs.txt','hypre.txt'):
-            shutil.copy2(root/'licenses'/name,place/name)
+        # sprung-solve on the CPU, and with --cuda a second one beside it
+        # whose hypre runs on the GPU: the engine chooses between them per
+        # solve, and offers the GPU only where that one solves with it. The
+        # GPU one runs PARDISO alone without an NVIDIA GPU, so it starts here
+        # whether or not there is one.
+        for cuda,folder in [(None,'sprung-solve'),*([(args.cuda,'sprung-solve-gpu')] if args.cuda else [])]:
+            helper,helper_folders=build_helper(tc,cuda)
+            # A folder of its own, with its licenses: MIT, Intel's for MKL,
+            # and NVIDIA's for the CUDA runtime linked into the GPU one.
+            place=target/folder
+            relocate(helper,place,helper_folders,check=('--version',HELPER_BANNER))
+            for name in ('sprung-solve.txt','Intel-oneMKL.txt','Intel-oneMKL-third-party-programs.txt','hypre.txt',
+                         *(['NVIDIA-CUDA.txt'] if cuda else [])):
+                shutil.copy2(root/'licenses'/name,place/name)
         capabilities['pardiso']='Intel oneMKL'
         capabilities['pardisoHelper']=f'sprung-solve/{helper.name}'
-        capabilities['amg']=f'hypre {HYPRE_VERSION}'+(' (CUDA)' if args.cuda else '')
+        capabilities['amg']=f'hypre {HYPRE_VERSION}'
+        if args.cuda:
+            capabilities['amgGpuHelper']=f'sprung-solve-gpu/{helper.name}'
+            capabilities['amgGpu']=f'hypre {HYPRE_VERSION} (CUDA)'
     (target/'ccx.json').write_text(json.dumps(capabilities,indent=1)+'\n')
     print('Solver:',exe,json.dumps(capabilities))
     print('With:',', '.join(sorted(p.name for p in target.rglob('*') if p!=exe and p.is_file())))

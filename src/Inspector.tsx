@@ -2,13 +2,17 @@ import { useState } from "react";
 import {
   Check,
   ChevronRight,
+  Cpu,
   Grid3X3,
   Layers,
   Play,
   Plus,
+  Repeat,
   Search,
+  Target,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import { editMaterial, fmt, sig, type Draft } from "./logic";
 import {
@@ -33,6 +37,7 @@ import {
   isBodyLoad,
   PLOTS,
   SOLVERS,
+  SOLVER_NOTES,
   facesLabel,
   loadValue,
   stripExt,
@@ -84,6 +89,8 @@ import {
   type Study,
   type Support,
   type Threads,
+  type Device,
+  type SolverOptions,
   type Cpus,
   type Transient,
 } from "./types";
@@ -1657,6 +1664,10 @@ function LoadFields({
   );
 }
 
+/** A GPU's name without its maker's brand names: "RTX 3070". */
+const shortGpu = (name: string | null) =>
+  name ? name.replace(/^(NVIDIA\s+)?(GeForce\s+)?/i, "") : "Available";
+
 export function MeshPanel({
   part,
   study,
@@ -1666,8 +1677,11 @@ export function MeshPanel({
   busy,
   threads,
   cpus,
+  device,
+  solvers,
   onChange,
   onThreads,
+  onDevice,
   onPreview,
   onSolve,
 }: {
@@ -1679,11 +1693,40 @@ export function MeshPanel({
   busy: boolean;
   threads: Threads;
   cpus: Cpus | null;
+  device: Device;
+  solvers: SolverOptions | null;
   onChange: (study: Study) => void;
   onThreads: (threads: Threads) => void;
+  onDevice: (device: Device) => void;
   onPreview: () => void;
   onSolve: () => void;
 }) {
+  const eigen = ANALYSES[study.analysis].eigen;
+  // What the choice gives here: eigenvalue analyses always factor, and the
+  // GPU runs only the iterative solver.
+  const method = eigen ? "direct" : study.solver;
+  const gpu = method === "iterative" && device === "gpu" && !!solvers?.gpu;
+  const count =
+    threads === "single"
+      ? 1
+      : threads === "all"
+        ? cpus?.logical
+        : cpus?.performance;
+  const solves = !solvers
+    ? null
+    : method === "direct"
+      ? solvers.direct
+      : gpu
+        ? solvers.gpu
+        : solvers.iterative;
+  const note =
+    method === "direct"
+      ? SOLVER_NOTES.direct
+      : gpu
+        ? SOLVER_NOTES.gpu
+        : solvers && !solvers.iterativeThreaded
+          ? SOLVER_NOTES.cholesky
+          : SOLVER_NOTES.multigrid;
   return (
     <>
       <Head small="Mesh + Solver" title={DETAIL_NAMES[study.detail]} />
@@ -1722,28 +1765,65 @@ export function MeshPanel({
       </div>
       <div className="sec">
         <h4>Solver</h4>
-        {ANALYSES[study.analysis].eigen && (
+        {eigen && (
           <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>
             {ANALYSES[study.analysis].name} always use the direct solver; this
             choice applies to static studies.
           </p>
         )}
-        <div className="presets" role="group" aria-label="Solver">
-          {SOLVERS.map((s) => (
-            <button
-              key={s.id}
-              disabled={ANALYSES[study.analysis].eigen}
-              aria-pressed={study.solver === s.id}
-              className={study.solver === s.id ? "on" : ""}
-              onClick={() => onChange({ ...study, solver: s.id })}
-            >
-              <span>
-                {s.name}
-                <small>{s.note}</small>
-              </span>
-              {study.solver === s.id && <Check size={14} />}
-            </button>
-          ))}
+        <div className="choice" role="group" aria-label="Solver">
+          {SOLVERS.map((s) => {
+            const Icon = s.id === "direct" ? Target : Repeat;
+            return (
+              <button
+                key={s.id}
+                disabled={eigen}
+                aria-pressed={method === s.id}
+                className={method === s.id ? "on" : ""}
+                onClick={() => onChange({ ...study, solver: s.id })}
+              >
+                <Icon size={15} />
+                <span>{s.name}</span>
+                <small>{s.tagline}</small>
+              </button>
+            );
+          })}
+        </div>
+        {solvers?.gpu && (
+          <div className="field" style={{ marginTop: 10, marginBottom: 0 }}>
+            <span>Runs on</span>
+            <div className="choice" role="group" aria-label="Hardware">
+              <button
+                disabled={eigen}
+                aria-pressed={!gpu}
+                className={!gpu ? "on" : ""}
+                onClick={() => onDevice("cpu")}
+              >
+                <Cpu size={15} />
+                <span>CPU</span>
+                <small>{count ? `${count} threads` : "Threads below"}</small>
+              </button>
+              <button
+                disabled={method !== "iterative"}
+                aria-pressed={gpu}
+                className={gpu ? "on" : ""}
+                onClick={() => onDevice("gpu")}
+              >
+                <Zap size={15} />
+                <span>GPU</span>
+                <small>
+                  {method === "iterative"
+                    ? shortGpu(solvers.gpuName)
+                    : "Iterative only"}
+                </small>
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="solver-summary" aria-label="Solves with">
+          <span>Solves with</span>
+          <b>{solves ?? "Checking this computer’s solvers…"}</b>
+          <p>{note}</p>
         </div>
         <div className="field" style={{ marginTop: 10 }}>
           <span>Threads</span>
@@ -1769,9 +1849,12 @@ export function MeshPanel({
         </div>
         <p className="note">
           Auto uses the performance cores. Threads speed up meshing, assembly,
-          the direct solver and stress recovery; results agree to round-off.
-          Iterative solvers iterate on one thread. Saved on this computer, not
-          in the study.
+          the solvers and stress recovery; results agree to round-off.
+          {solvers && !solvers.iterativeThreaded
+            ? " The iterative solver iterates on one thread."
+            : ""}{" "}
+          Threads{solvers?.gpu ? " and the hardware" : ""} are saved on this
+          computer, not in the study.
         </p>
       </div>
       {mesh && (
