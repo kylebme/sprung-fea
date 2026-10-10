@@ -43,7 +43,7 @@ Find the latest release here: [Releases](https://github.com/kylebme/sprung-fea/r
 | --- | --- | --- |
 | macOS, Apple Silicon | `Sprung-FEA-x.x.x-arm64.dmg` | Open the DMG and drag Sprung FEA to Applications. |
 | Windows, x64 | `Sprung-FEA-Setup-x.x.x.exe` | Run the installer; it installs for your user without administrator rights. |
-| Linux, x64 | `Sprung-FEA-x.x.x-x86_64.AppImage` | Make it executable with `chmod +x Sprung-FEA-0.2.1-x86_64.AppImage`, then run it. |
+| Linux, x64 | `Sprung-FEA-x.x.x-x86_64.AppImage` | Make it executable with `chmod +x Sprung-FEA-0.2.2-x86_64.AppImage`, then run it. |
 | Windows, x64, with an NVIDIA GPU | `Sprung-FEA-Setup-x.x.x-NVIDIA.exe` | As above. |
 | Linux, x64, with an NVIDIA GPU | `Sprung-FEA-x.x.x-x86_64-NVIDIA.AppImage` | As above. |
 

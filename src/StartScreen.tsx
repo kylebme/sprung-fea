@@ -31,7 +31,7 @@ export function StartScreen({
             </div>
             <div>
               <h1>Sprung FEA</h1>
-              <span>0.2.1</span>
+              <span>0.2.2</span>
             </div>
           </div>
           <button className="act" onClick={onImport} disabled={busy}>

@@ -23,6 +23,8 @@ Implemented analysis inputs are:
 
 Results include von Mises stress, maximum and minimum principal stress, maximum shear stress (Tresca, (σ1 − σ3)/2), equivalent and principal strain, displacement magnitude, yield margin, support reactions, force balance, interpolated and nodal probes, section planes with the force and moment they carry, iso-surfaces, thresholds, and a finer-mesh comparison. All numerical results come from the actual solver pipeline.
 
+The GitHub **Build** workflow runs on pull request updates and manual requests only. Branch and tag pushes do not start builds. To build a release, request the workflow with the release tag as its ref (for example, `gh workflow run build.yml --ref v0.2.2`).
+
 ## 2. Architecture and source ownership
 
 ```mermaid

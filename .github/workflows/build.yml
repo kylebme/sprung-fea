@@ -1,9 +1,6 @@
 name: Build
 
 on:
-  push:
-    branches: [workbench-ui, main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
