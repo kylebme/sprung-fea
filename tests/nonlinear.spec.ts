@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { fillVector, inspector, openBeam, solve, watchErrors } from "./helpers";
+import {
+  fillVector,
+  inspector,
+  numbers,
+  openBeam,
+  solve,
+  watchErrors,
+} from "./helpers";
 
 test("large deformation: a heavily loaded cantilever, load steps and the load path", async ({
   page,
@@ -33,5 +40,20 @@ test("large deformation: a heavily loaded cantilever, load steps and the load pa
   await page.screenshot({ path: "output/playwright/large-deformation.png" });
   await page.getByLabel("Result frame").fill("0");
   await expect(page.locator(".vlabel")).toContainText("Load 10%");
+  // One color scale for every load step: the first step's colors then
+  // compare with full load's.
+  const legendTop = async () =>
+    numbers(await page.locator(".legend span").first().innerText())[0];
+  expect(await legendTop()).toBeLessThan(tip / 2);
+  await page.getByRole("switch", { name: "Same scale for every frame" }).click();
+  expect(await legendTop()).toBeCloseTo(tip, 0);
+  // A region is solved as linear elastic, so it cannot refine this solve.
+  await page.getByRole("button", { name: /^Refined region/ }).click();
+  await expect(inspector(page)).toContainText(
+    "cannot follow yielding or large deformation",
+  );
+  await expect(
+    inspector(page).getByRole("button", { name: "Refine a region" }),
+  ).toHaveCount(0);
   expect(errors).toEqual([]);
 });

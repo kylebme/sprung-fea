@@ -57,6 +57,8 @@ import {
   lowIsCritical,
   probeValue,
   sectionLoads,
+  type ColorScale,
+  type Pin,
   type Probe,
   type SectionCut,
 } from "./viewData";
@@ -1900,8 +1902,25 @@ export type Comparison = { before: Result; after: Result };
 /** Peak, minimum and color-scale range of the displayed plot. */
 export type PlotStats = {
   peak: { value: number; node: number };
+  /** Lowest and highest value of the displayed frame. */
   min: number;
-  scale: { min: number; max: number };
+  max: number;
+  scale: {
+    min: number;
+    max: number;
+    /** The ends without the user's limits. */
+    auto: { min: number; max: number };
+    /** Which ends the user set. */
+    fixed: { min: boolean; max: boolean };
+  };
+};
+/** The engine's yield margin of one body (summary.bodyMargins). */
+type BodyMargin = {
+  body: string;
+  material: string;
+  yield: number | null;
+  maxStress: number;
+  margin: number | null;
 };
 
 export type RegionState = {
@@ -1937,11 +1956,27 @@ export function ResultsPanel({
   onDeform,
   onWire,
   onProbe,
+  colorScale,
+  onColorScale,
+  pins,
+  pinProbes,
+  onPins,
+  onShowPin,
+  onExportProbes,
 }: {
   result: Result;
   study: Study;
   plot: Plot;
   stats: PlotStats;
+  colorScale: ColorScale;
+  onColorScale: (c: ColorScale) => void;
+  /** Saved probes, and their values on the displayed frame (null where the
+   * shown mesh lacks the point). */
+  pins: Pin[];
+  pinProbes: (Probe | null)[];
+  onPins: (pins: Pin[]) => void;
+  onShowPin: (probe: Probe) => void;
+  onExportProbes: () => void;
   frame: number;
   onFrame: (k: number) => void;
   deform: "off" | "true" | "auto";
@@ -1961,6 +1996,7 @@ export function ResultsPanel({
   const u = useUnits();
   const s = result.summary;
   const yieldStrength = study.material?.yield || null;
+  const bodyMargins = s.bodyMargins as BodyMargin[] | undefined;
   const low = lowIsCritical(plot);
   const info = plotInfo(plot, result.analysis);
   const digits =
@@ -2000,11 +2036,11 @@ export function ResultsPanel({
             <Row label={peak.label}>node {peak.node}</Row>
           </>
         )}
-        {plot === "safety" ? (
+        {plot === "safety" && !bodyMargins ? (
           <Row label="Yield strength">
             <Qty value={yieldStrength || 0} unit="MPa" />
           </Row>
-        ) : (
+        ) : plot === "safety" ? null : (
           <Row label="Minimum">
             <Qty value={stats.min} unit={info.unit} digits={info.digits} />
           </Row>
@@ -2073,6 +2109,26 @@ export function ResultsPanel({
         </div>
         <p className="note">Click the model to read values at a point.</p>
       </div>
+      {bodyMargins && <BodyMargins rows={bodyMargins} />}
+      <ColorScaleControls
+        plot={plot}
+        unitOf={info.unit}
+        digits={info.digits}
+        scale={stats.scale}
+        colorScale={colorScale}
+        frames={result.frames.length}
+        onChange={onColorScale}
+      />
+      <SavedProbes
+        plot={plot}
+        result={result}
+        yieldStrength={yieldStrength}
+        pins={pins}
+        probes={pinProbes}
+        onPins={onPins}
+        onShow={onShowPin}
+        onExport={onExportProbes}
+      />
       {plot === "contact" && (
         <p className="foot note" style={{ marginTop: 0 }}>
           Contact faces lie inside the assembly, where the bodies meet. Cut a
@@ -2160,16 +2216,293 @@ export function ResultsPanel({
   );
 }
 
+/** Each body's yield margin against its own material. */
+function BodyMargins({ rows }: { rows: BodyMargin[] }) {
+  const u = useUnits();
+  return (
+    <div className="sec">
+      <h4>
+        Yield margin by body<span className="mono">{u.label("MPa")}</span>
+      </h4>
+      <table className="result-table" aria-label="Yield margin by body">
+        <thead>
+          <tr>
+            <th>Body</th>
+            <th>Yield</th>
+            <th>Peak stress</th>
+            <th>Margin</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr
+              key={r.body}
+              className={r.margin !== null && r.margin < 1 ? "warn" : ""}
+            >
+              <td title={r.material}>{r.body}</td>
+              <td>{r.yield ? u.show(r.yield, "MPa", 0) : "—"}</td>
+              <td>{u.show(r.maxStress, "MPa", 1)}</td>
+              <td>{r.margin === null ? "—" : fmt(r.margin, 2) + "×"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="note">
+        Each body is judged against its own material’s yield strength. Below
+        1× it yields.
+      </p>
+    </div>
+  );
+}
+
+const BANDS = [0, 6, 10] as const;
+
+/** Ends, steps and colors of the plot's color scale. */
+function ColorScaleControls({
+  plot,
+  unitOf,
+  digits,
+  scale,
+  colorScale,
+  frames,
+  onChange,
+}: {
+  plot: Plot;
+  unitOf: string;
+  digits: number;
+  scale: PlotStats["scale"];
+  colorScale: ColorScale;
+  frames: number;
+  onChange: (c: ColorScale) => void;
+}) {
+  const u = useUnits();
+  const limits = colorScale.limits[plot] ?? { min: null, max: null };
+  const setEnd = (end: "min" | "max", v: number) =>
+    onChange({
+      ...colorScale,
+      limits: {
+        ...colorScale.limits,
+        [plot]: { ...limits, [end]: Number.isFinite(v) ? v : null },
+      },
+    });
+  const custom = limits.min !== null || limits.max !== null;
+  const ignored =
+    custom && !scale.fixed.min && !scale.fixed.max
+      ? "The lowest value must be below the highest: the automatic range applies."
+      : null;
+  return (
+    <div className="sec">
+      <h4>Color scale</h4>
+      <div className="field">
+        <span>Range</span>
+        <span className="range-ends">
+          <NumberCell
+            label="Lowest color value"
+            value={limits.min ?? NaN}
+            unit={unitOf}
+            placeholder={u.show(scale.auto.min, unitOf, digits)}
+            onChange={(v) => setEnd("min", v)}
+          />
+          <span>to</span>
+          <NumberCell
+            label="Highest color value"
+            value={limits.max ?? NaN}
+            unit={unitOf}
+            placeholder={u.show(scale.auto.max, unitOf, digits)}
+            onChange={(v) => setEnd("max", v)}
+          />
+          <em>{u.label(unitOf)}</em>
+        </span>
+      </div>
+      {custom && (
+        <div className="kv scale-note">
+          <span>{ignored ? "" : "Values beyond the range take its end colors."}</span>
+          <button
+            className="link"
+            onClick={() => {
+              const { [plot]: _, ...rest } = colorScale.limits;
+              onChange({ ...colorScale, limits: rest });
+            }}
+          >
+            Automatic
+          </button>
+        </div>
+      )}
+      {ignored && <p className="note warn">{ignored}</p>}
+      {frames > 1 && plot !== "safety" && (
+        <div className="switch-row">
+          <span>Same scale for every frame</span>
+          <button
+            className={"switch" + (colorScale.allFrames ? " on" : "")}
+            role="switch"
+            aria-checked={colorScale.allFrames}
+            aria-label="Same scale for every frame"
+            onClick={() =>
+              onChange({ ...colorScale, allFrames: !colorScale.allFrames })
+            }
+          />
+        </div>
+      )}
+      <div className="field">
+        <span>Steps</span>
+        <div className="seg" role="group" aria-label="Color steps">
+          {BANDS.map((n) => (
+            <button
+              key={n}
+              className={colorScale.bands === n ? "on" : ""}
+              aria-pressed={colorScale.bands === n}
+              onClick={() => onChange({ ...colorScale, bands: n })}
+            >
+              {n ? n + " bands" : "Smooth"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <span>Colors</span>
+        <div className="seg" role="group" aria-label="Color palette">
+          {(
+            [
+              ["standard", "Standard"],
+              ["viridis", "Colorblind-safe"],
+            ] as const
+          ).map(([id, name]) => (
+            <button
+              key={id}
+              className={colorScale.palette === id ? "on" : ""}
+              aria-pressed={colorScale.palette === id}
+              onClick={() => onChange({ ...colorScale, palette: id })}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Probes saved at points of the part, read on the displayed frame. */
+function SavedProbes({
+  plot,
+  result,
+  yieldStrength,
+  pins,
+  probes,
+  onPins,
+  onShow,
+  onExport,
+}: {
+  plot: Plot;
+  result: Result;
+  yieldStrength: number | null;
+  pins: Pin[];
+  probes: (Probe | null)[];
+  onPins: (pins: Pin[]) => void;
+  onShow: (probe: Probe) => void;
+  onExport: () => void;
+}) {
+  const u = useUnits();
+  const info = plotInfo(plot, result.analysis);
+  const ratio = info.unit.includes("×");
+  return (
+    <div className="sec">
+      <h4>
+        Saved probes
+        {pins.length > 0 && (
+          <span className="mono">
+            {info.name}
+            {ratio ? "" : ", " + u.label(info.unit)}
+          </span>
+        )}
+      </h4>
+      {pins.length ? (
+        <>
+          <table className="result-table probes" aria-label="Saved probes">
+            <tbody>
+              {pins.map((pin, i) => {
+                const probe = probes[i];
+                const value = probe && probeValue(probe, plot, yieldStrength);
+                return (
+                  <tr key={pin.id}>
+                    <td>
+                      <input
+                        aria-label="Probe name"
+                        value={pin.name}
+                        onChange={(e) =>
+                          onPins(
+                            pins.map((p) =>
+                              p.id === pin.id ? { ...p, name: e.target.value } : p,
+                            ),
+                          )
+                        }
+                      />
+                    </td>
+                    <td className="mono">
+                      {value === null || !Number.isFinite(value)
+                        ? "—"
+                        : ratio
+                          ? (value >= 1000 ? "> 1000" : fmt(value, info.digits)) + "×"
+                          : u.show(value, info.unit, info.digits)}
+                    </td>
+                    <td className="actions">
+                      <button
+                        className="link"
+                        disabled={!probe}
+                        onClick={() => probe && onShow(probe)}
+                      >
+                        Show
+                      </button>
+                      <button
+                        className="icon-button delete"
+                        aria-label={"Remove " + pin.name}
+                        title="Remove"
+                        onClick={() => onPins(pins.filter((p) => p.id !== pin.id))}
+                      >
+                        <X size={12} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="kv">
+            <span>
+              {result.frames.length > 1
+                ? `Every quantity, all ${result.frames.length} frames`
+                : "Every quantity"}
+            </span>
+            <button className="link" onClick={onExport}>
+              Export CSV
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="note">
+          Click the model, then Save probe in the probe card to keep a point. Saved
+          probes stay through new solves and are saved with the project.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Values at the probed point, shown over the view. */
 export function ProbeReadout({
   probe,
   result,
   yieldStrength,
+  saved,
+  onSave,
   onClear,
 }: {
   probe: Probe;
   result: Result;
   yieldStrength: number | null;
+  /** Whether a saved probe sits at this point already. */
+  saved: boolean;
+  onSave: () => void;
   onClear: () => void;
 }) {
   const u = useUnits();
@@ -2177,9 +2510,14 @@ export function ProbeReadout({
     <div className="probe-card" role="group" aria-label="Probe">
       <h4>
         Probe
-        <button className="link" onClick={onClear}>
-          Clear
-        </button>
+        <span>
+          <button className="link" disabled={saved} onClick={onSave}>
+            {saved ? "Probe saved" : "Save probe"}
+          </button>
+          <button className="link" onClick={onClear}>
+            Clear
+          </button>
+        </span>
       </h4>
       <Row label="At">
         {probe.node === null ? "Interpolated" : "Node " + probe.node}

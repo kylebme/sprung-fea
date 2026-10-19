@@ -85,4 +85,12 @@ class Submodel(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Remote forces'):
             submodel(self.folder,s,{'center':[90,10,5],'size':[20,30,20],'meshSize':2})
 
+    def test_nonlinear_parents_are_refused(self):
+        # The region is linear elastic: it cannot continue a solve that
+        # yielded or followed the deformed shape.
+        region={'center':[50,10,5],'size':[20,30,20],'meshSize':2}
+        for change in [{'plasticity':True},{'largeDeformation':True}]:
+            with self.subTest(change=change),self.assertRaisesRegex(ValueError,'linear whole-part solve'):
+                submodel(self.folder,{**self.study,**change},region)
+
 if __name__=='__main__':unittest.main()

@@ -26,7 +26,8 @@ import {
 } from "lucide-react";
 import {
   Viewer,
-  palette,
+  colorAt,
+  plotColors,
   type Projection,
   type ViewerHandle,
   type Theme,
@@ -44,6 +45,7 @@ import {
   normalizeResult,
   previewStudy,
   restoreResults,
+  sameValue,
   type Draft,
   type History,
   type HistoryAction,
@@ -110,19 +112,29 @@ import {
 import {
   atFrame,
   availablePlots,
+  colorRange,
   decodeView,
+  defaultColorScale,
   fromBase64,
   hasResults,
+  locate,
+  minMargin,
   movement,
   nodeProbe,
   peak,
-  plotRange,
   plotValues,
+  probeAt as interpolateAt,
   probeValue,
+  probesCsv,
+  PROBE_COLUMNS,
   range,
+  restoreDisplay,
   surfaceCsv,
   toBase64,
+  type ColorScale,
+  type Pin,
   type Probe,
+  type SavedDisplay,
   type SectionCut,
 } from "./viewData";
 
@@ -151,6 +163,17 @@ const defaultFilters = (geometry: Geometry): Filters => ({
   iso: { on: false, level: 0.5 },
   threshold: { on: false, level: 0.75 },
 });
+/** The legend bar: a smooth gradient, or flat bands as the view draws them. */
+function legendGradient(scale: ColorScale, plot: Plot) {
+  const stops = plotColors(scale.palette, plot);
+  const n = scale.bands;
+  if (!n) return `linear-gradient(to top,${stops.join(",")})`;
+  const bands = Array.from({ length: n }, (_, k) => {
+    const c = colorAt(stops, n > 1 ? k / (n - 1) : 0.5);
+    return `${c} ${(k / n) * 100}% ${((k + 1) / n) * 100}%`;
+  });
+  return `linear-gradient(to top,${bands.join(",")})`;
+}
 const fetchView = async (id: string, region = false) => {
   const response = await fetch(
     `/api/documents/${id}/view${region ? "?region=1" : ""}`,
@@ -198,6 +221,10 @@ export default function App() {
     [wire, setWire] = useState(false),
     [probe, setProbe] = useState<Probe | null>(null),
     [filters, setFilters] = useState<Filters | null>(null),
+    // How results are colored, and probes saved at points of the part.
+    // Both outlast re-solves of the same part and are saved in projects.
+    [colorScale, setColorScale] = useState<ColorScale>(defaultColorScale),
+    [pins, setPins] = useState<Pin[]>([]),
     [sectionCut, setSectionCut] = useState<SectionCut | null>(null),
     // Bodies hidden from the view, and a face's right-click menu.
     [hidden, setHidden] = useState<number[]>([]),
@@ -483,6 +510,7 @@ export default function App() {
     action: () => Promise<any>,
     title: string,
     saved?: unknown,
+    display?: unknown,
   ) => {
     const operation = ++sequence.current;
     setError(null);
@@ -499,6 +527,9 @@ export default function App() {
       setPart({ id: info.id, name: info.name, geometry, sample: info.sample });
       setHidden([]);
       setFilters(defaultFilters(geometry));
+      const shownBefore = restoreDisplay(display);
+      setColorScale(shownBefore.colorScale);
+      setPins(shownBefore.pins);
       setHist(history(hist, { type: "reset", study: nextStudy }));
       setMesh(null);
       setResult(null);
@@ -546,11 +577,12 @@ export default function App() {
     importPart(() => post("/sample/" + name, {}), "Could not open example");
   const openProject = async (file: File) => {
     try {
-      const { results, ...project } = JSON.parse(await file.text());
+      const { results, display, ...project } = JSON.parse(await file.text());
       await importPart(
         () => post("/open", project),
         "Could not open project",
         results,
+        display,
       );
     } catch (e) {
       fail("Could not open project", e);
@@ -576,6 +608,8 @@ export default function App() {
         name: part.name,
         study,
       });
+      if (pins.length || !sameValue(colorScale, defaultColorScale()))
+        data.display = { colorScale, pins } satisfies SavedDisplay;
       if (result?.view.buffer && mesh) {
         const { view: _mesh, ...meshInfo } = mesh;
         const { view, ...resultInfo } = result;
@@ -1077,19 +1111,70 @@ export default function App() {
   const info = plotInfo(activePlot, resultAnalysis);
   const stats = useMemo(() => {
     if (!shown || !plots.length) return null;
-    const stress = shown.fields.vonMises;
-    const minSafety =
-      yieldStrength && stress ? yieldStrength / (range(stress).max || 1) : null;
-    const marginMax = marginScale(minSafety);
+    // A user top above the automatic margin cap shows margins up to it.
+    const marginMax = Math.max(
+      marginScale(minMargin(shown, yieldStrength)),
+      colorScale.limits.safety?.max ?? 0,
+    );
     const values = plotValues(shown, activePlot, yieldStrength, marginMax);
     return {
       marginMax,
       maxMovement: shown.displacement ? range(movement(shown)).max : 0,
       peak: peak(shown, activePlot, yieldStrength),
-      min: range(values).min,
-      scale: plotRange(shown, activePlot, yieldStrength, marginMax),
+      ...range(values),
+      scale: colorRange(
+        shown,
+        activePlot,
+        yieldStrength,
+        marginMax,
+        colorScale,
+      ),
     };
-  }, [shown, activePlot, yieldStrength, plots.length]);
+  }, [shown, activePlot, yieldStrength, plots.length, colorScale]);
+  // Saved probes: located once per mesh, evaluated on the displayed frame.
+  const resultView = displayed?.view ?? null;
+  const pinLocations = useMemo(
+    () => (resultView ? pins.map((p) => locate(resultView, p.point)) : []),
+    [resultView, pins],
+  );
+  const pinProbes = useMemo(
+    () =>
+      shown
+        ? pins.map((p, i) =>
+            interpolateAt(shown, p.point, pinLocations[i] ?? null),
+          )
+        : [],
+    [shown, pins, pinLocations],
+  );
+  /** A picked point's values, interpolated as saved probes are. */
+  const pick = (p: Probe) =>
+    setProbe(
+      shown ? (interpolateAt(shown, p.point, locate(shown, p.point)) ?? p) : p,
+    );
+  const savePin = (p: Probe) =>
+    setPins((list) => {
+      const used = new Set(list.map((q) => q.name));
+      let k = list.length + 1;
+      while (used.has("P" + k)) k++;
+      return [...list, { id: crypto.randomUUID(), name: "P" + k, point: p.point }];
+    });
+  const exportProbes = async () => {
+    if (!displayed || !pins.length) return;
+    const columns = PROBE_COLUMNS.filter((c) => plots.includes(c.plot)).map(
+      (c) => ({ ...c, unit: plotInfo(c.plot, resultAnalysis).unit }),
+    );
+    await saveFile(
+      "sprung-fea-probes.csv",
+      probesCsv(
+        displayed.view,
+        pins,
+        displayed.frames,
+        columns,
+        yieldStrength,
+        units,
+      ),
+    );
+  };
   const marginMax = stats?.marginMax ?? 5;
   const autoScale =
     part && stats?.maxMovement
@@ -1307,6 +1392,13 @@ export default function App() {
               onProbe={(node) =>
                 setProbe(node === null ? null : nodeProbe(shown, node))
               }
+              colorScale={colorScale}
+              onColorScale={setColorScale}
+              pins={pins}
+              pinProbes={pinProbes}
+              onPins={setPins}
+              onShowPin={setProbe}
+              onExportProbes={exportProbes}
             />
           )
         );
@@ -1337,11 +1429,15 @@ export default function App() {
                 available:
                   !fromProject &&
                   result.analysis === "static" &&
-                  (part.geometry.bodies?.length ?? 1) <= 1,
+                  (part.geometry.bodies?.length ?? 1) <= 1 &&
+                  !study.plasticity &&
+                  !study.largeDeformation,
                 unavailable:
                   (part.geometry.bodies?.length ?? 1) > 1
                     ? "Region refinement works on single parts for now, not assemblies."
-                    : "Solve the whole part in this session to refine a region.",
+                    : study.plasticity || study.largeDeformation
+                      ? "Region refinement solves the region as linear elastic, so it cannot follow yielding or large deformation. Turn off Plasticity and Large deformation and solve again to refine a region."
+                      : "Solve the whole part in this session to refine a region.",
                 onStart: startRegion,
                 onDraft: setRegionDraft,
                 onSolve: solveRegion,
@@ -1629,7 +1725,7 @@ export default function App() {
                   hovered={hover}
                   onSelect={selectFace}
                   onHover={setHover}
-                  onProbe={setProbe}
+                  onProbe={pick}
                   onSection={setSectionCut}
                   filters={filters!}
                   deformation={deformation}
@@ -1642,6 +1738,22 @@ export default function App() {
                   draftKind={draft?.kind || null}
                   marginMax={marginMax}
                   yieldStrength={yieldStrength}
+                  scaleMin={stats?.scale.min ?? 0}
+                  scaleMax={stats?.scale.max ?? 1}
+                  bands={colorScale.bands}
+                  palette={colorScale.palette}
+                  pins={pins.flatMap((p, i) =>
+                    pinProbes[i]
+                      ? [
+                          {
+                            id: p.id,
+                            text: p.name,
+                            point: p.point,
+                            displacement: pinProbes[i]!.displacement,
+                          },
+                        ]
+                      : [],
+                  )}
                   hidden={regionShown ? [] : hidden}
                   inset={card ? CARD_INSET : 0}
                   onContext={(face, at) =>
@@ -1759,21 +1871,32 @@ export default function App() {
                     <div
                       className="bar"
                       style={{
-                        background: `linear-gradient(to top,${(activePlot === "safety" ? [...palette].reverse() : palette).join(",")})`,
+                        background: legendGradient(colorScale, activePlot),
                       }}
                     />
-                    {[1, 0.75, 0.5, 0.25, 0].map((f) => (
-                      <span key={f}>
-                        {activePlot === "safety" && f === 1
-                          ? marginMax + "+"
-                          : quantity(
-                              stats.scale.min +
-                                f * (stats.scale.max - stats.scale.min),
-                              info.unit,
-                              units,
-                            ).replace(/ \S+$/, "")}
-                      </span>
-                    ))}
+                    {[1, 0.75, 0.5, 0.25, 0].map((f) => {
+                      const text = quantity(
+                        stats.scale.min +
+                          f * (stats.scale.max - stats.scale.min),
+                        info.unit,
+                        units,
+                      ).replace(/ \S+$/, "");
+                      // Values beyond an end take its color: the end label
+                      // says they continue.
+                      return (
+                        <span key={f}>
+                          {f === 1 &&
+                          activePlot === "safety" &&
+                          !stats.scale.fixed.max
+                            ? marginMax + "+"
+                            : f === 1 && stats.max > stats.scale.max
+                              ? text.replace(/(\d)(\D*)$/, "$1+$2")
+                              : f === 0 && stats.min < stats.scale.min
+                                ? "≤ " + text
+                                : text}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
                 {showingResult && shown?.displacement && (
@@ -1805,6 +1928,8 @@ export default function App() {
                     probe={probe}
                     result={displayed}
                     yieldStrength={yieldStrength}
+                    saved={pins.some((p) => sameValue(p.point, probe.point))}
+                    onSave={() => savePin(probe)}
                     onClear={() => setProbe(null)}
                   />
                 )}

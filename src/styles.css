@@ -2108,3 +2108,75 @@ b.axis-z,
 .chart-dialog .chart figcaption {
   font-size: 11.5px;
 }
+
+/* Color scale ends and saved probes, in the results inspector. */
+.range-ends {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.range-ends .number-field,
+.range-ends input {
+  min-width: 0;
+  width: 100%;
+}
+.kv.scale-note {
+  margin: -4px 0 10px;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.range-ends em {
+  font-style: normal;
+}
+.range-ends input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.result-table tr.warn td {
+  color: var(--load);
+}
+.result-table.probes td:first-child input {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+.result-table.probes td:first-child input:hover,
+.result-table.probes td:first-child input:focus {
+  border-color: var(--line2);
+}
+.result-table.probes td.actions {
+  width: 1%;
+  white-space: nowrap;
+}
+.result-table.probes td.actions .link {
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.result-table.probes td.actions .icon-button {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  vertical-align: middle;
+}
+.probe-card h4 > span {
+  display: flex;
+  gap: 10px;
+}
+.probe-card h4 .link:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}
+.condition-label.probe {
+  border-color: var(--text);
+  font-family: var(--mono);
+}

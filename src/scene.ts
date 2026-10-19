@@ -8,7 +8,7 @@ import {
   lowIsCritical,
   margin,
   movement,
-  plotRange,
+  type ColorScale,
 } from "./viewData";
 import type { ConditionKind, Face, Filters, Plot, Study } from "./types";
 
@@ -32,8 +32,16 @@ export type SceneState = {
   projection: Projection;
   marginMax: number;
   yieldStrength: number | null;
+  /** Ends of the color scale, as the legend shows them. */
+  scaleMin: number;
+  scaleMax: number;
+  /** Flat color steps, or 0 for a smooth scale. */
+  bands: number;
+  palette: ColorScale["palette"];
   filters: Filters;
   probe: Probe | null;
+  /** Saved probes, labeled where they sit (displacement in mm, unscaled). */
+  pins: { id: string; text: string; point: number[]; displacement: number[] | null }[];
   /** Shows the part's origin and axes, for entering positions. */
   origin: boolean;
   /** Oscillates the deformation, for mode shapes. */
@@ -52,7 +60,7 @@ export type SceneState = {
 export type SceneLabel = {
   id: string;
   text: string;
-  kind: ConditionKind;
+  kind: ConditionKind | "probe";
   x: number;
   y: number;
 };
@@ -77,6 +85,21 @@ export const palette = [
   "#f1a04c",
   "#d65349",
 ];
+/** Color scales, low to high. Viridis stays readable with color blindness. */
+export const PALETTES: Record<ColorScale["palette"], string[]> = {
+  standard: palette,
+  viridis: ["#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"],
+};
+/** A plot's colors low to high: the yield margin is critical when low. */
+export const plotColors = (name: ColorScale["palette"], plot: Plot | null) =>
+  plot === "safety" ? [...PALETTES[name]].reverse() : PALETTES[name];
+/** The color a fraction (0–1) of the way along a scale of stops. */
+export function colorAt(stops: string[], t: number) {
+  const x = Math.min(1, Math.max(0, t)) * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(x));
+  const c = mix(rgb(stops[i]), rgb(stops[i + 1]), x - i);
+  return "#" + c.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
+}
 const COLORS = {
   dark: {
     base: "#8b959e",
@@ -534,7 +557,17 @@ export class Scene {
     if (model || changed("deformation")) this.deform();
     if (
       model ||
-      changed("plot", "marginMax", "yieldStrength", "theme", "wireframe")
+      changed(
+        "plot",
+        "marginMax",
+        "yieldStrength",
+        "theme",
+        "wireframe",
+        "scaleMin",
+        "scaleMax",
+        "bands",
+        "palette",
+      )
     )
       this.colorFields();
     if (
@@ -553,7 +586,15 @@ export class Scene {
     if (
       model ||
       shown ||
-      changed("filters", "plot", "marginMax", "theme", "deformation")
+      changed(
+        "filters",
+        "plot",
+        "marginMax",
+        "theme",
+        "deformation",
+        "scaleMin",
+        "scaleMax",
+      )
     )
       this.filter();
     if (model || changed("probe", "deformation")) this.placeMarker();
@@ -739,7 +780,7 @@ export class Scene {
   private scale() {
     const s = this.state!;
     if (!s.plot || !hasResults(s.view)) return { min: 0, max: 1 };
-    return plotRange(s.view, s.plot, s.yieldStrength, s.marginMax);
+    return { min: s.scaleMin, max: s.scaleMax };
   }
 
   private colorFields() {
@@ -753,17 +794,31 @@ export class Scene {
       .setColor(...rgb(s.plot ? colors.resultEdge : colors.edge));
     this.edgesActor.getProperty().setOpacity(s.plot ? 0.45 : 0.6);
     if (!s.plot || !hasResults(s.view)) return;
-    if (s.yieldStrength && s.view.fields.vonMises)
+    if ((s.yieldStrength || s.view.yieldStrength) && s.view.fields.vonMises)
       this.share(
         "Margin",
         this.array(margin(s.view, s.yieldStrength, s.marginMax), 1, "Margin"),
       );
     const { min, max } = this.scale();
-    const stops = s.plot === "safety" ? [...palette].reverse() : palette;
+    const stops = plotColors(s.palette, s.plot);
     this.lut.removeAllPoints();
-    stops.forEach((c, i) =>
-      this.lut.addRGBPoint(min + (i / 5) * (max - min), ...rgb(c)),
-    );
+    // Nodes without a value, such as a body with no yield strength.
+    this.lut.setNanColor(...rgb(COLORS[s.theme].base));
+    if (s.bands > 0) {
+      // Flat steps: each band's color held across it, switching at its end.
+      const width = (max - min) / s.bands;
+      for (let k = 0; k < s.bands; k++) {
+        const c = rgb(colorAt(stops, s.bands > 1 ? k / (s.bands - 1) : 0.5));
+        this.lut.addRGBPoint(min + k * width, ...c);
+        this.lut.addRGBPoint(min + (k + 1) * width - width * 1e-6, ...c);
+      }
+    } else
+      stops.forEach((c, i) =>
+        this.lut.addRGBPoint(
+          min + (i / (stops.length - 1)) * (max - min),
+          ...rgb(c),
+        ),
+      );
     const name = FIELD[s.plot];
     for (const data of [this.surface, this.grid])
       data.getPointData().setActiveScalars(name);
@@ -919,7 +974,18 @@ export class Scene {
    */
   private labels() {
     const s = this.state!;
-    if (s.plot) return [];
+    if (s.plot) {
+      // Results: saved probes, where they sit on the drawn shape.
+      const scale = s.view.displacement ? s.deformation : 0;
+      return s.pins.flatMap((pin) => {
+        const at = this.screen(
+          add(pin.point, pin.displacement || [0, 0, 0], scale),
+        );
+        return at
+          ? [{ id: pin.id, text: pin.text, kind: "probe" as const, ...at }]
+          : [];
+      });
+    }
     const faces = new Map(s.faces.map((f) => [f.id, f]));
     const hidden = new Set(s.hidden);
     const out: SceneLabel[] = [];

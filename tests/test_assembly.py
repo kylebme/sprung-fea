@@ -78,6 +78,46 @@ class Assembly(unittest.TestCase):
             self.assertAlmostEqual(mass,.027+.0785,places=6)
             self.assertIn('*ELSET, ELSET=BODIES2',(folder/'analysis.inp').read_text())
 
+    def test_yield_margin_uses_each_bodys_own_material(self):
+        # A cantilever: aluminum at the root carries the peak bending stress,
+        # but the weak steel half beyond x = 50 yields first. A margin from
+        # the part material alone would miss it.
+        temp,folder,geo=part('split-beam')
+        with temp:
+            weak={**STEEL,'name':'Weak steel','yield':10}
+            s=study([{'faces':[face_at(geo,0,0)],'axes':[True]*3}],[{'kind':'force','faces':[face_at(geo,0,100)],'vector':[0,0,-100]}],
+                    bodyMaterials={'2':weak})
+            mesh=worker.mesh_part(folder,s);result=worker.solve(folder,s)
+            summary=result['summary']
+            names={str(b['id']):b['name'] for b in geo['bodies']}
+            rows={r['body']:r for r in summary['bodyMargins']}
+            root,tip=rows[names['1']],rows[names['2']]
+            self.assertEqual((root['material'],root['yield']),('Aluminum',276))
+            self.assertEqual((tip['material'],tip['yield']),('Weak steel',10))
+            # The root peak is about M c / I = 100 N × 100 mm × 5 mm / I.
+            self.assertGreater(root['maxStress'],tip['maxStress'])
+            self.assertAlmostEqual(summary['minSafety'],10/tip['maxStress'])
+            self.assertLess(summary['minSafety'],1)
+            self.assertGreater(root['margin'],5)
+            over=[w for w in result['warnings'] if w.startswith('Stress exceeds')]
+            self.assertEqual(len(over),1)
+            self.assertIn(names['2'],over[0]);self.assertNotIn(names['1'],over[0])
+            # The lowest nodal margin lies on the steel half.
+            xyz=dict(zip(mesh['surface']['nodeIds'],np.asarray(mesh['surface']['positions']).reshape(-1,3)))
+            self.assertGreaterEqual(xyz[summary['safetyNode']][0],50-1e-6)
+            # The view carries each node's yield strength: the shared face
+            # takes the weaker material.
+            data=(folder/'view.bin').read_bytes()
+            length=int(np.frombuffer(data[8:12],'<u4')[0])
+            header=json.loads(data[12:12+length]);offset=12+length;arrays={}
+            for a in header['arrays']:
+                dtype={'float64':'<f8','int32':'<i4'}[a['type']];count=int(np.prod(a['shape']))
+                arrays[a['name']]=np.frombuffer(data,dtype,count,offset).reshape(a['shape'])
+                offset+=-(-count*np.dtype(dtype).itemsize//8)*8
+            x=arrays['points'][:,0];strength=arrays['yieldStrength']
+            self.assertTrue(np.all(strength[x<50-1e-6]==276))
+            self.assertTrue(np.all(strength[x>=50-1e-6]==10))
+
     def test_separate_bodies_each_need_supports(self):
         temp,folder,geo=part('gap-pair')
         with temp:

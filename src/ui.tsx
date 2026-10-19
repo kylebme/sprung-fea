@@ -231,11 +231,14 @@ export function NumberCell({
   label,
   value,
   unit,
+  placeholder,
   onChange,
 }: {
   label: string;
   value: number;
   unit?: string;
+  /** Shown while empty, such as the value used without one. */
+  placeholder?: string;
   onChange: (n: number) => void;
 }) {
   const text = useNumberText(value, unit);
@@ -244,6 +247,7 @@ export function NumberCell({
       <input
         type="number"
         aria-label={label}
+        placeholder={placeholder}
         value={text.value}
         onChange={(e) => text.change(e.target.value, onChange)}
         onBlur={text.blur}

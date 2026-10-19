@@ -12,7 +12,8 @@ import gmsh
 import calculix
 from cad import emit, threads, terminal_output, mesh_model, write_view, mesh_view
 from model import Model, finite, vector, fixed_dofs, build_loads, check_masses
-from analyses import SCHEMA, von_mises, nodal, mass_check, write_result_view, measures, STRESS_FIELDS
+from analyses import (SCHEMA, von_mises, nodal, mass_check, write_result_view, measures, STRESS_FIELDS,
+                      yield_margins, yield_warnings, margin_summary, plasticity, large_deformation)
 
 # Loads whose distribution depends on all of their faces. A region that
 # contains part of their faces cannot reproduce them.
@@ -155,6 +156,10 @@ def submodel(folder, study, region):
         raise ValueError('Region refinement is available for static studies.')
     if not (folder/'analysis.frd').exists() or not (folder/'result.json').exists():
         raise ValueError('Solve the whole part before refining a region.')
+    # The region is linear elastic, driven by the whole part's displacements:
+    # a yielded or large-deformation parent would be re-solved as if elastic.
+    if plasticity(study) or large_deformation(study):
+        raise ValueError('Region refinement needs a linear whole-part solve: the region is solved as linear elastic, so it cannot follow yielding or large deformation. Turn off Plasticity and Large deformation, solve again, then refine.')
     parent=json.loads((folder/'mesh.json').read_text())
     geometry=json.loads((folder/'geometry.json').read_text())
     if len(geometry.get('bodies') or [None])>1:
@@ -225,11 +230,10 @@ def submodel(folder, study, region):
         warnings.append('Stress on the region’s cut faces differs from the whole-part solution by more than 10% of the peak (95th percentile). The cut faces are too close to the stress concentration: make the region larger.')
     if peak>1.5*global_peak and global_peak>0:
         warnings.append('The refined peak is much higher than the whole-part peak. If it keeps rising with a finer region mesh, it is at a sharp corner or support edge with no finite stress.')
-    yield_strength=m.get('yield')
-    if yield_strength and peak>yield_strength:
-        warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation.')
+    margins=yield_margins(local,model,stress,{})
+    warnings+=yield_warnings(margins,'Stress','. The elastic model cannot predict permanent deformation.')
     summary={'seconds':time.monotonic()-start,'maxStress':peak,'maxMovement':float(movement.max()),
-             'minSafety':yield_strength/peak if yield_strength and peak else None,
+             **margin_summary(margins),
              'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))],
              'globalPeak':global_peak,'boundaryDifference':difference}
     result={'version':SCHEMA,'analysis':'static','region':{'lo':lo.tolist(),'hi':hi.tolist(),'cutFaces':cut_faces},
@@ -244,7 +248,7 @@ def submodel(folder, study, region):
             'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount'],
             'displacements':displacements.tolist(),'stress':stress.tolist(),'movement':movement.tolist()}
     (target/'result.json').write_text(json.dumps(result))
-    write_result_view(target,mesh,[{'displacement':displacements,**fields}])
+    write_result_view(target,mesh,[{'displacement':displacements,**fields}],local)
     coords=model.coords
     region_geometry={'bounds':[*coords.min(0).tolist(),*coords.max(0).tolist()],
                      'faces':[{**{k:v for k,v in f.items() if k!='indices'},'original':faces.get(f['id']),

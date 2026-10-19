@@ -8,7 +8,7 @@ amplitude and phase at each node."""
 import numpy as np
 import calculix
 from model import Model, finite, vector, validate, rbe3, build_loads
-from analyses import Analysis, nodal, von_mises, mass_check, modes_of
+from analyses import Analysis, nodal, von_mises, mass_check, modes_of, body_names, yield_margins
 
 PHASES=np.linspace(0,np.pi,13)[:-1]
 STORED=40
@@ -110,9 +110,12 @@ class Harmonic(Analysis):
         if base is not None: warnings.append('Displacements are relative to the shaking base.')
         if modes and max(modes)<1.5*high:
             warnings.append(f'The highest mode found ({max(modes):.4g} Hz) is below 1.5 × the top of the range. Find more modes in the Analysis settings for an accurate response near {high:.4g} Hz.')
-        yield_strength=(study.get('material') or {}).get('yield')
-        if yield_strength and max(peak_stress)>yield_strength:
-            warnings.append('The stress amplitude exceeds the yield strength at resonance: the part would yield, and fail by fatigue long before.')
+        # Each node's largest stress amplitude over the frequency range.
+        envelope=np.max([s['vonMises'] for s in shapes],axis=0)
+        margins=yield_margins(study,model,envelope,body_names(folder,model))
+        if margins['over']:
+            whose='' if len(margins['bodies'])==1 else ' of '+', '.join(margins['over'])
+            warnings.append(f'The stress amplitude exceeds the yield strength{whose} at resonance: the part would yield, and fail by fatigue long before.')
         summary={'frequencies':modes,'responseFrequencies':hz,'peakAmplitude':max(peak_amp),'peakFrequency':hz[top],
                  'peakStress':max(peak_stress),'maxMovement':max(peak_amp),'maxStress':max(peak_stress)}
         charts=[{'id':'response','title':'Displacement response','x':{'label':'Frequency','unit':'Hz','values':hz},

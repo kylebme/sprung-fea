@@ -115,6 +115,58 @@ def static_checks(frame, held, loading, extra=np.zeros(3), floor=0.):
     return checks,reactions,total,balance
 
 
+def body_names(folder, model):
+    """{body id: name} of the bodies of the mesh, from the imported geometry."""
+    path=folder/'geometry.json'
+    geometry=json.loads(path.read_text()) if path.exists() else {}
+    names={str(b['id']):b['name'] for b in geometry.get('bodies') or []}
+    return {b:names.get(b,f'Body {b}') for b in model.body_elements()}
+
+
+def yield_margins(study, model, stress, names):
+    """Yield margin of each body against its own material: yield strength
+    over the body's peak von Mises stress. Returns {minSafety, safetyNode
+    (the node of the lowest nodal margin), bodies (a row per body), over
+    (bodies whose stress exceeds their yield strength), missing (bodies
+    without a yield strength, when others have one)}."""
+    stress=np.asarray(stress,float)
+    rows=[]
+    for b,nodes in model.body_rows().items():
+        m=model.material_of(study,b) or {}
+        y=m.get('yield');peak=float(stress[nodes].max()) if len(nodes) else 0.
+        rows.append({'body':names.get(b,f'Body {b}'),'material':m.get('name',''),'yield':y,
+                     'maxStress':peak,'margin':y/peak if y and peak>0 else None})
+    strengths=model.node_yield(study)
+    with np.errstate(divide='ignore',invalid='ignore'):
+        nodal=np.where(np.isfinite(strengths)&(stress>0),strengths/stress,np.inf)
+    margins=[r['margin'] for r in rows if r['margin'] is not None]
+    rated=any(r['yield'] for r in rows)
+    return {'minSafety':min(margins) if margins else None,
+            'safetyNode':model.ids[int(np.argmin(nodal))] if np.isfinite(nodal).any() else None,
+            'bodies':rows,
+            'over':[r['body'] for r in rows if r['yield'] and r['maxStress']>r['yield']],
+            'missing':[r['body'] for r in rows if not r['yield']] if rated else []}
+
+
+def yield_warnings(margins, what, tail):
+    """Warnings for bodies stressed beyond their yield strength (`what`
+    names the stress) and for bodies whose margin cannot be shown."""
+    out=[]
+    if margins['over']:
+        whose='the material yield strength' if len(margins['bodies'])==1 else 'the yield strength of '+', '.join(margins['over'])
+        out.append(f'{what} exceeds {whose}{tail}')
+    if margins['missing']:
+        out.append(f"No yield strength for {', '.join(margins['missing'])}: the yield margin leaves {'it' if len(margins['missing'])==1 else 'them'} out.")
+    return out
+
+
+def margin_summary(margins):
+    """Summary entries of the yield margins; a row per body for assemblies."""
+    out={'minSafety':margins['minSafety'],'safetyNode':margins['safetyNode']}
+    if len(margins['bodies'])>1: out['bodyMargins']=margins['bodies']
+    return out
+
+
 class Analysis:
     id=''
     name=''
@@ -320,7 +372,7 @@ class Static(Analysis):
             checks=[c for c in checks if c['label']!='Force balance error']
         dims=np.ptp(model.coords,axis=0)
         max_stress=float(stress.max()); max_move=float(movement.max())
-        yield_strength=study['material'].get('yield')
+        margins=yield_margins(study,model,stress,body_names(folder,model))
         warnings=['Peak stress at sharp corners or support edges may increase with refinement. Check a finer mesh before relying on a result.']
         if plastic:
             peeq=max(float(v['peeq'].max()) for v in view)
@@ -331,8 +383,8 @@ class Static(Analysis):
             if peeq==0: warnings.append('The part does not yield under these loads: the elastic result applies.')
             breaking=[m for m in [study['material'],*(study.get('bodyMaterials') or {}).values()] if peeq>breaking_strain(m)]
             if breaking: warnings.append('Plastic strain exceeds the elongation at break somewhere: the material would tear there.')
-        elif yield_strength and max_stress>yield_strength:
-            warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation: turn on Plasticity in the Analysis settings.')
+        else:
+            warnings+=yield_warnings(margins,'Stress','. The elastic model cannot predict permanent deformation: turn on Plasticity in the Analysis settings.')
         if calculix.solver_of(study)!='direct' and balance>.005 and not follower:
             # CalculiX's incomplete-Cholesky solver occasionally stops early.
             warnings.append(f'The iterative solver stopped with a {balance*100:.2g}% force balance error. Use the direct solver for a tighter answer.')
@@ -341,8 +393,7 @@ class Static(Analysis):
             if follower: warnings.append('Pressure follows the deformed surface and rotation the deformed shape, so their resultant changes with deformation: force balance is not checked.')
         elif max_move>.05*min(dims):
             warnings.append('Movement is large relative to the smallest part dimension, so the small-deformation assumption may not hold. Turn on Large deformation in the Analysis settings.')
-        summary={'maxStress':max_stress,'maxMovement':max_move,
-                 'minSafety':yield_strength/max_stress if yield_strength and max_stress else None,'reactions':reactions.tolist(),
+        summary={'maxStress':max_stress,'maxMovement':max_move,**margin_summary(margins),'reactions':reactions.tolist(),
                  'appliedForce':total_load.tolist(),'forceBalanceError':balance,
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))]}
         if plastic:
@@ -605,9 +656,11 @@ class Buckling(Analysis):
         if first is None:
             warnings.append('No buckling under these loads was found, only under reversed loads. Check the load directions.')
         peak=float(stress.max())
-        yield_strength=study['material'].get('yield')
-        if first and yield_strength and peak*first>yield_strength:
-            warnings.append(f'At the first buckling load the stress would reach {peak*first:.3g} MPa, above the yield strength: the part yields before it buckles, so buckling does not limit it.')
+        if first:
+            over=yield_margins(study,model,stress*first,body_names(folder,model))['over']
+            if over:
+                whose='' if len(model.body_elements())==1 else ' of '+', '.join(over)
+                warnings.append(f'At the first buckling load the stress would reach {peak*first:.3g} MPa, above the yield strength{whose}: the part yields before it buckles, so buckling does not limit it.')
         summary={'factors':factors,'referenceStress':peak,'firstFactor':first}
         result={'frames':info,'fields':['displacement'],'summary':summary,'warnings':warnings,'charts':[],
                 'checks':[{'label':'Peak stress under the applied loads','values':[peak],'unit':'MPa'},
@@ -636,8 +689,14 @@ def write_deck(folder, study, mesh):
     return analysis_of(study).deck(folder, study, mesh)
 
 
-def write_result_view(folder, mesh, frames):
+def write_result_view(folder, mesh, frames, study=None):
+    """The mesh and every frame's nodal arrays; with a study whose results
+    have stress, each node's yield strength (`yieldStrength`, NaN without
+    one), so the viewer's yield margin uses each body's own material."""
     view=mesh_view(mesh)
+    if study and frames and 'vonMises' in frames[0]:
+        strengths=Model(mesh).node_yield(study)
+        if np.isfinite(strengths).any(): view['yieldStrength']=('f8',strengths)
     for k,frame in enumerate(frames):
         for name,data in frame.items():
             view[name if k==0 else f'{name}@{k}']=('f8',np.asarray(data))
@@ -667,5 +726,5 @@ def solve(folder, study):
                    'iterations':iterative['iterations'] if iterative else None,'threads':threads(),
                    'meshSize':mesh['size'],'nodeCount':mesh['nodeCount'],'elementCount':mesh['elementCount']})
     (folder/'result.json').write_text(json.dumps(result))
-    write_result_view(folder,mesh,view)
+    write_result_view(folder,mesh,view,study)
     return result

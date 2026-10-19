@@ -21,7 +21,13 @@ import {
   type ViewData,
 } from "./viewData";
 import type { ConditionKind, Filters, Geometry, Plot, Study } from "./types";
-export { palette, type Projection, type Theme } from "./scene";
+export {
+  colorAt,
+  palette,
+  plotColors,
+  type Projection,
+  type Theme,
+} from "./scene";
 
 export type ViewerHandle = {
   fit: () => void;
@@ -50,6 +56,12 @@ type Props = {
   draftKind: ConditionKind | null;
   marginMax: number;
   yieldStrength: number | null;
+  scaleMin: number;
+  scaleMax: number;
+  bands: number;
+  palette: SceneState["palette"];
+  /** Saved probes, labeled in the view while a result shows. */
+  pins: SceneState["pins"];
   filters: Filters;
   region: { lo: number[]; hi: number[] } | null;
   /** Show the coordinate origin, while a position is being entered. */
@@ -171,6 +183,11 @@ export const Viewer = forwardRef<ViewerHandle, Props>(function Viewer(p, ref) {
       projection: p.projection,
       marginMax: p.marginMax,
       yieldStrength: p.yieldStrength,
+      scaleMin: p.scaleMin,
+      scaleMax: p.scaleMax,
+      bands: p.bands,
+      palette: p.palette,
+      pins: p.pins,
       filters: p.filters,
       probe: p.probe,
       region: p.region,

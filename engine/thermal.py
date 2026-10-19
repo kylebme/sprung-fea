@@ -12,7 +12,8 @@ import calculix
 from model import (Model, finite, check_faces, check_table, fixed_dofs, rigid_motions, check_loads,
                    check_masses, build_loads, triangle_weights, triangle_shape,
                    QUAD, BODY_LOADS)
-from analyses import (Analysis, nodal, von_mises, mass_check, static_checks, measures, STRESS_FIELDS)
+from analyses import (Analysis, nodal, von_mises, mass_check, static_checks, measures, STRESS_FIELDS,
+                      body_names, yield_margins, yield_warnings, margin_summary)
 
 THERMAL_KINDS={'temperature','heat','convection','radiation','generation'}
 REFERENCE=20.
@@ -370,7 +371,7 @@ class ThermalStress(Analysis):
         stress=view[worst]['vonMises'];movement=np.linalg.norm(view[worst]['displacement'],axis=1)
         checks,reactions,total,force_error=static_checks(frame,context['held'],context['loading'])
         max_stress=float(stress.max());max_move=max(float(np.linalg.norm(v['displacement'],axis=1).max()) for v in view)
-        yield_strength=study['material'].get('yield')
+        margins=yield_margins(study,model,stress,body_names(folder,model))
         warnings=['Peak stress at sharp corners or support edges may increase with refinement. Check a finer mesh before relying on a result.']
         if timing:
             labels=time_frames(stored);times=[l['value'] for l in labels]
@@ -385,9 +386,8 @@ class ThermalStress(Analysis):
             labels=[{'label':'Steady state','value':None,'unit':''}];charts=[]
             balance=heat_balance(context['heat'],frame,model,final['temperature'])
             checks+=heat_checks(balance)
-        if yield_strength and max_stress>yield_strength:
-            warnings.append('Stress exceeds the material yield strength. The elastic model cannot predict permanent deformation.')
-        summary={'maxStress':max_stress,'maxMovement':max_move,'minSafety':yield_strength/max_stress if yield_strength and max_stress else None,
+        warnings+=yield_warnings(margins,'Stress','. The elastic model cannot predict permanent deformation.')
+        summary={'maxStress':max_stress,'maxMovement':max_move,**margin_summary(margins),
                  'reactions':reactions.tolist(),'appliedForce':total.tolist(),'forceBalanceError':force_error,
                  'stressNode':ids[int(np.argmax(stress))],'movementNode':ids[int(np.argmax(movement))],
                  'maxTemperature':max(float(v['temperature'].max()) for v in view),

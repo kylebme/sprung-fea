@@ -164,6 +164,27 @@ class Model:
             for e in elements: out[index[e]]=m['density']*1e-12
         return out
 
+    def material_of(self, study, body):
+        """The material of one body (id as a string)."""
+        return (study.get('bodyMaterials') or {}).get(body) or study.get('material')
+
+    def body_rows(self):
+        """{body id: rows (into coords) of the nodes of its elements}."""
+        rows={e:i for i,e in enumerate(self.mesh['elementIds'])}
+        nodes=self.index(self.mesh['elements'])
+        return {b:np.unique(nodes[[rows[e] for e in elements]]) for b,elements in self.body_elements().items()}
+
+    def node_yield(self, study):
+        """Yield strength (MPa) at each node, in coords order: that of the
+        body the node belongs to, the lowest where bonded bodies share it.
+        NaN where no body around the node has one."""
+        out=np.full(len(self.ids),np.inf)
+        for b,rows in self.body_rows().items():
+            y=(self.material_of(study,b) or {}).get('yield')
+            if y: np.minimum.at(out,rows,float(y))
+        out[np.isinf(out)]=np.nan
+        return out
+
     def body_number(self, body):
         return list(self.body_elements()).index(str(body))+1
 
